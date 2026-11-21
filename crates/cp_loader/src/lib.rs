@@ -16,6 +16,7 @@
 //! Journal : `<ressources REAPER>/cp_studio.log` (la session precedente dans
 //! `cp_studio.prev.log`).
 
+mod dark;
 pub(crate) mod places;
 mod selftest;
 pub(crate) mod views;
@@ -46,6 +47,7 @@ enum Owner {
     Status,
     TestLoop,
     TestFile,
+    Dark,
     Module,
 }
 
@@ -66,6 +68,8 @@ static ACTIONS: Mutex<Actions> = Mutex::new(Actions {
 static WINDOWS: Mutex<Vec<Hwnd>> = Mutex::new(Vec::new());
 static LAST_POLL: Mutex<Option<Instant>> = Mutex::new(None);
 static LAST_RELOAD: Mutex<Option<String>> = Mutex::new(None);
+/// Battements du chargeur depuis le demarrage.
+static TICKS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 /// Le moteur audio. Fil principal seulement ; pris en `try_lock` par ce que le
 /// module appelle, pour qu'une reentrance ne se bloque jamais sur elle-meme.
 static AUDIO: Mutex<Option<AudioHost>> = Mutex::new(None);
@@ -424,13 +428,17 @@ fn ask_module_key(h: Hwnd, ev: &KeyEvent) -> i32 {
     }
 }
 
-/// La coche d'une action du module.
+/// La coche d'une action du module (ou du mode sombre).
 fn toggle_state(cmd: i32) -> i32 {
-    let mine = lock(&ACTIONS)
+    let owner = lock(&ACTIONS)
         .by_cmd
         .iter()
-        .any(|&(c, o)| c == cmd && o == Owner::Module);
-    if !mine {
+        .find(|&&(c, _)| c == cmd)
+        .map(|e| e.1);
+    if owner == Some(Owner::Dark) {
+        return dark::is_on() as i32;
+    }
+    if owner != Some(Owner::Module) {
         return -1;
     }
     HOT.get()
@@ -541,8 +549,13 @@ fn on_timer() {
         reload(false);
     }
     audio((), |a| a.poll());
+    let ticks = TICKS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     if let Some(r) = REAPER.get() {
         places::guard(r);
+        // Le mode sombre garde, une fois REAPER construit.
+        if ticks == 20 {
+            dark::restore(r);
+        }
     }
     test_file_poll();
     selftest_tick();
@@ -638,6 +651,12 @@ fn on_command(cmd: i32) -> bool {
         }
         Some(Owner::TestFile) => {
             test_file_start();
+            true
+        }
+        Some(Owner::Dark) => {
+            if let Some(r) = REAPER.get() {
+                dark::set(r, !dark::is_on(), true);
+            }
             true
         }
         Some(Owner::Module) => {
@@ -922,6 +941,11 @@ fn on_load(instance: isize, r: Reaper) -> bool {
         "CP Studio: Play an audio file (engine test)",
         Owner::TestFile,
     );
+    register_action(
+        "CPSTUDIO_DARK",
+        "CP Studio: Dark title bars and menus (on/off)",
+        Owner::Dark,
+    );
     if !r.register_command_hook(on_command) {
         log(LOG_ERROR, "hookcommand2 refuse");
     }
@@ -954,6 +978,7 @@ fn on_unload() {
         r.unregister_toggle_state();
     }
     cp_sys::rui::remove_mouse_hook();
+    dark::shutdown();
     views::stop_clock();
     // REAPER retrouve son arrangement et son transport avant que nos
     // fenetres ne meurent.
