@@ -17,7 +17,7 @@
 //! `cp_studio.prev.log`).
 
 mod selftest;
-mod views;
+pub(crate) mod views;
 
 use std::ffi::{CStr, c_void};
 use std::fs::{self, File};
@@ -567,10 +567,32 @@ fn on_command(cmd: i32) -> bool {
 // Les sons de test
 // ---------------------------------------------------------------------------
 
+pub(crate) fn views_count() -> usize {
+    lock(&WINDOWS).len()
+}
+
+pub(crate) fn first_view() -> Option<Hwnd> {
+    lock(&WINDOWS).first().copied()
+}
+
 fn selftest_tick() {
     let mut g = lock(&SELFTEST);
     let Some(st) = g.as_mut() else { return };
-    if audio(false, |a| st.tick(a)) {
+    let done = if st.wants_audio() {
+        audio(false, |a| st.tick(a));
+        false
+    } else {
+        // Hors du verrou du moteur : l'interface appelle le module, qui
+        // appelle le moteur.
+        let mut taken = g.take();
+        drop(g);
+        let done = taken.as_mut().is_some_and(|s| s.tick_ui());
+        g = lock(&SELFTEST);
+        *g = taken;
+        done
+    };
+    let Some(st) = g.as_mut() else { return };
+    if done {
         let quit = st.quit_after();
         *g = None;
         drop(g);
@@ -773,18 +795,18 @@ fn on_load(instance: isize, r: Reaper) -> bool {
         log(LOG_ERROR, &e);
     }
     register_action(
-        "_CPSTUDIO_RELOAD",
+        "CPSTUDIO_RELOAD",
         "CP Studio: Reload module now",
         Owner::Reload,
     );
-    register_action("_CPSTUDIO_STATUS", "CP Studio: Show status", Owner::Status);
+    register_action("CPSTUDIO_STATUS", "CP Studio: Show status", Owner::Status);
     register_action(
-        "_CPSTUDIO_TEST_LOOP",
+        "CPSTUDIO_TEST_LOOP",
         "CP Studio: Play/stop the test loop",
         Owner::TestLoop,
     );
     register_action(
-        "_CPSTUDIO_TEST_FILE",
+        "CPSTUDIO_TEST_FILE",
         "CP Studio: Play an audio file (engine test)",
         Owner::TestFile,
     );

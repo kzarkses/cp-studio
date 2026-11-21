@@ -325,10 +325,10 @@ fn le_vrai_chargeur_dans_un_faux_reaper() {
         let f = FAKE.lock().unwrap();
         assert!(f.timer.is_some() && f.hook.is_some());
         let ids: Vec<&str> = f.actions.iter().map(|a| a.0.as_str()).collect();
-        assert!(ids.contains(&"_CPSTUDIO_RELOAD"));
-        assert!(ids.contains(&"_CPSTUDIO_STATUS"));
+        assert!(ids.contains(&"CPSTUDIO_RELOAD"));
+        assert!(ids.contains(&"CPSTUDIO_STATUS"));
         assert!(
-            ids.contains(&"_CPSTUDIO_BROWSER"),
+            ids.contains(&"CPSTUDIO_BROWSER"),
             "le module a enregistre son action"
         );
     }
@@ -354,7 +354,7 @@ fn le_vrai_chargeur_dans_un_faux_reaper() {
     for _ in 0..4 {
         assert!(audio_block(512).iter().all(|&x| x == 0.0));
     }
-    assert!(run_action(cmd_of("_CPSTUDIO_TEST_LOOP")));
+    assert!(run_action(cmd_of("CPSTUDIO_TEST_LOOP")));
     assert!(take_console().contains("test loop playing (44100 Hz)"));
     assert_eq!(
         FAKE.lock().unwrap().previews.len(),
@@ -376,7 +376,7 @@ fn le_vrai_chargeur_dans_un_faux_reaper() {
         assert_eq!(heard[i], heard[i + lp], "echantillon {i}");
     }
     // L'arret : un fondu de 20 ms, puis le silence ; l'apercu continue.
-    assert!(run_action(cmd_of("_CPSTUDIO_TEST_LOOP")));
+    assert!(run_action(cmd_of("CPSTUDIO_TEST_LOOP")));
     assert!(take_console().contains("test loop stopped"));
     let tail: Vec<f64> = (0..10).flat_map(|_| audio_block(512)).collect();
     assert!(
@@ -390,7 +390,7 @@ fn le_vrai_chargeur_dans_un_faux_reaper() {
     assert_eq!(FAKE.lock().unwrap().previews.len(), 1, "jamais arrete");
 
     // L'etat.
-    assert!(run_action(cmd_of("_CPSTUDIO_STATUS")));
+    assert!(run_action(cmd_of("CPSTUDIO_STATUS")));
     let c = take_console();
     assert!(
         c.contains("state: running") && c.contains("generation: 1"),
@@ -425,20 +425,20 @@ fn le_vrai_chargeur_dans_un_faux_reaper() {
     let delay = t0.elapsed();
     assert!(delay < Duration::from_millis(1500), "pris en {delay:?}");
     assert!(read_log(&res).contains("module pret : generation 2"));
-    let cmd_after = cmd_of("_CPSTUDIO_BROWSER");
+    let cmd_after = cmd_of("CPSTUDIO_BROWSER");
     assert_eq!(
         FAKE.lock()
             .unwrap()
             .actions
             .iter()
-            .filter(|a| a.0 == "_CPSTUDIO_BROWSER")
+            .filter(|a| a.0 == "CPSTUDIO_BROWSER")
             .count(),
         1,
         "l'action du module n'est enregistree qu'une fois ({cmd_after})"
     );
 
     // Le rechargement force par l'action.
-    assert!(run_action(cmd_of("_CPSTUDIO_RELOAD")));
+    assert!(run_action(cmd_of("CPSTUDIO_RELOAD")));
     assert!(take_console().contains("module reloaded (generation 3)"));
 
     // La fermeture de REAPER.

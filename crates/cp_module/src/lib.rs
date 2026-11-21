@@ -697,9 +697,9 @@ impl Module for App {
         }
         browser.looping = r.ext_get(SECTION, "browser_loop").as_deref() == Some("1");
         let cmd_browser =
-            host.register_action("_CPSTUDIO_BROWSER", "CP Studio: Browser (show/hide)");
+            host.register_action("CPSTUDIO_BROWSER", "CP Studio: Browser (show/hide)");
         let cmd_perf = host.register_action(
-            "_CPSTUDIO_PERF",
+            "CPSTUDIO_PERF",
             "CP Studio: Performance overlay (show/hide)",
         );
         let mut app = App {

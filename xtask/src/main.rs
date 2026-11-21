@@ -156,7 +156,15 @@ fn reaper_test() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+    let snap = dir.join("snap.txt");
+    let _ = fs::remove_file(&snap);
+    let mut snapped = false;
     while !result.exists() && t0.elapsed() < Duration::from_secs(90) {
+        if !snapped && snap.exists() {
+            snapped = true;
+            let hwnd = fs::read_to_string(&snap).unwrap_or_default();
+            capture(&run, hwnd.trim(), &dir);
+        }
         std::thread::sleep(Duration::from_millis(200));
     }
     // Laisser REAPER se fermer seul ; sinon (une autre extension peut bloquer
@@ -187,6 +195,52 @@ fn reaper_test() -> ExitCode {
             eprintln!("pas de verdict en 90 s (voir cp_studio.log)");
             ExitCode::FAILURE
         }
+    }
+}
+
+/// Photographie la fenetre du navigateur et la fenetre principale de REAPER
+/// (et rien d'autre de l'ecran) dans `dir`.
+fn capture(run: &Path, hwnd: &str, dir: &Path) {
+    let script = r#"param([string]$hwnd, [string]$out)
+Add-Type -AssemblyName System.Drawing
+Add-Type @"
+using System; using System.Runtime.InteropServices;
+public class W {
+  [DllImport("user32.dll")] public static extern bool SetProcessDPIAware();
+  [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr h, out RECT r);
+  public struct RECT { public int L, T, R, B; }
+}
+"@
+[W]::SetProcessDPIAware() | Out-Null
+function Shot([IntPtr]$h, [string]$file) {
+  $r = New-Object W+RECT
+  if (-not [W]::GetWindowRect($h, [ref]$r)) { return }
+  $w = $r.R - $r.L; $hh = $r.B - $r.T
+  if ($w -le 0 -or $hh -le 0) { return }
+  $bmp = New-Object System.Drawing.Bitmap $w, $hh
+  $g = [System.Drawing.Graphics]::FromImage($bmp)
+  $g.CopyFromScreen($r.L, $r.T, 0, 0, $bmp.Size)
+  $bmp.Save($file)
+  $g.Dispose(); $bmp.Dispose()
+}
+if ($hwnd -ne "0") { Shot ([IntPtr][Int64]$hwnd) (Join-Path $out "browser.png") }
+$p = Get-Process reaper -ErrorAction SilentlyContinue | Select-Object -First 1
+if ($p) { Shot $p.MainWindowHandle (Join-Path $out "reaper.png") }
+"#;
+    let ps1 = run.join("snap.ps1");
+    if fs::write(&ps1, script).is_err() {
+        return;
+    }
+    let st = Command::new("powershell")
+        .current_dir(run)
+        .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File"])
+        .arg(&ps1)
+        .arg(hwnd)
+        .arg(dir)
+        .status();
+    match st {
+        Ok(s) if s.success() => println!("photos : {}", dir.display()),
+        _ => println!("(photo impossible)"),
     }
 }
 

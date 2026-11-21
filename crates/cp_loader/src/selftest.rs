@@ -33,6 +33,9 @@ pub struct SelfTest {
     voices: Vec<VoiceH>,
     loop_clip: Option<ClipH>,
     played_at: Option<Instant>,
+    ui_at: Option<Instant>,
+    frames0: cp_abi::FrameInfo,
+    snapped: bool,
 }
 
 struct TestFile {
@@ -50,6 +53,10 @@ enum Phase {
     Wait,
     Decoding,
     Playing,
+    /// La suite se passe hors du moteur audio : insertion, interface.
+    Insert,
+    OpenUi,
+    Watch,
     Done,
 }
 
@@ -66,6 +73,9 @@ pub fn requested() -> Option<SelfTest> {
         voices: Vec::new(),
         loop_clip: None,
         played_at: None,
+        ui_at: None,
+        frames0: cp_abi::FrameInfo::default(),
+        snapped: false,
     })
 }
 
@@ -206,13 +216,114 @@ impl SelfTest {
                     .played_at
                     .is_some_and(|t| t.elapsed() > Duration::from_secs(4))
                 {
-                    self.finish(a);
+                    self.audio_report(a);
+                    self.phase = Phase::Insert;
+                }
+            }
+            Phase::Insert | Phase::OpenUi | Phase::Watch | Phase::Done => {}
+        }
+        false
+    }
+
+    /// La partie hors moteur audio. Rend vrai quand tout est fini.
+    pub fn tick_ui(&mut self) -> bool {
+        let Some(r) = crate::REAPER.get() else {
+            return true;
+        };
+        match self.phase {
+            Phase::Insert => {
+                if let Some(f) = self.files.first() {
+                    let path = f.path.to_string_lossy().into_owned();
+                    match r.insert_media(&path, Some((0.5, 1.0))) {
+                        Ok(()) => match r.first_selected_item() {
+                            Some((pos, len, off)) => {
+                                let ok = (len - 0.5).abs() < 1e-9 && (off - 0.5).abs() < 1e-9;
+                                self.say(
+                                    ok,
+                                    format!("insertion d'une section : item a {pos:.3} s, longueur {len:.6} s, decalage {off:.6} s"),
+                                );
+                            }
+                            None => self.say(
+                                false,
+                                "insertion : aucun item choisi apres InsertMedia".into(),
+                            ),
+                        },
+                        Err(e) => self.say(false, format!("insertion : {e}")),
+                    }
+                }
+                self.phase = Phase::OpenUi;
+            }
+            Phase::OpenUi => {
+                let cmd = r.named_command("_CPSTUDIO_BROWSER");
+                let perf = r.named_command("_CPSTUDIO_PERF");
+                if cmd == 0 {
+                    self.say(false, "l'action du navigateur n'existe pas".into());
+                    self.finish_report();
+                    return true;
+                }
+                if crate::views_count() == 0 {
+                    r.main_on_command(cmd);
+                }
+                if perf != 0 {
+                    r.main_on_command(perf);
+                }
+                self.say(
+                    crate::views_count() > 0,
+                    format!("le navigateur s'ouvre ({} fenetre)", crate::views_count()),
+                );
+                self.frames0 = cp_abi::FrameInfo::default();
+                self.ui_at = Some(Instant::now());
+                self.phase = Phase::Watch;
+            }
+            Phase::Watch => {
+                let t = self.ui_at.map_or(0.0, |t| t.elapsed().as_secs_f64());
+                if t > 1.5 && !self.snapped {
+                    self.snapped = true;
+                    // Le signal pour la photo (cargo xtask reaper-test) : la
+                    // fenetre du navigateur.
+                    let h = crate::first_view().map_or(0, |h| h.0);
+                    let _ = fs::write(dir().join("snap.txt"), format!("{h}\n"));
+                }
+                // La mesure commence APRES la photo (elle charge la machine) et
+                // dure deux secondes.
+                if t > 2.5 && self.frames0.qpc_freq == 0 {
+                    self.frames0 = crate::views::frame_info();
+                    self.frames0.qpc_freq = self.frames0.qpc_freq.max(1);
+                }
+                if t > 4.5 {
+                    let f = crate::views::frame_info();
+                    let n = f.count.saturating_sub(self.frames0.count);
+                    let missed = f.missed.saturating_sub(self.frames0.missed);
+                    let hz = if f.period_qpc > 0 {
+                        f.qpc_freq as f64 / f.period_qpc as f64
+                    } else {
+                        0.0
+                    };
+                    self.say(
+                        n > 0,
+                        format!("images de l'ecran : {n} en 2 s, cadence mesuree {hz:.1} Hz"),
+                    );
+                    self.say(
+                        missed == 0,
+                        format!("images ou le navigateur etait en retard : {missed}"),
+                    );
+                    // On remet l'affichage des mesures comme il etait.
+                    let perf = r.named_command("_CPSTUDIO_PERF");
+                    if perf != 0 {
+                        r.main_on_command(perf);
+                    }
+                    self.finish_report();
                     return true;
                 }
             }
             Phase::Done => return true,
+            _ => {}
         }
         false
+    }
+
+    pub fn wants_audio(&self) -> bool {
+        matches!(self.phase, Phase::Wait | Phase::Decoding | Phase::Playing)
     }
 
     fn start_playing(&mut self, a: &mut AudioHost) {
@@ -237,7 +348,7 @@ impl SelfTest {
         self.phase = Phase::Playing;
     }
 
-    fn finish(&mut self, a: &mut AudioHost) {
+    fn audio_report(&mut self, a: &mut AudioHost) {
         let st = a.stats();
         self.say(
             st.hook,
@@ -290,6 +401,9 @@ impl SelfTest {
                 a.release(c);
             }
         }
+    }
+
+    fn finish_report(&mut self) {
         let verdict = if self.ok { "PASS" } else { "FAIL" };
         crate::log(cp_abi::LOG_INFO, &format!("[selftest] {verdict}"));
         let mut text = self.lines.join("\n");
