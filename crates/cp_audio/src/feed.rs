@@ -21,6 +21,8 @@ pub struct FeedStats {
     /// Un temps saute.
     pub skips: AtomicU32,
     pub last_len: AtomicU32,
+    /// Frames rendus en tout : le temps mur pendant lequel le port a ete tire.
+    pub frames: AtomicU64,
     /// Temps passe dans le rendu, en nanosecondes.
     pub busy_ns: AtomicU64,
     /// Le dernier temps demande (bits d'un f64), pour la continuite.
@@ -86,6 +88,7 @@ impl PortRender for PortFeed {
             }
             done += n;
         }
+        st.frames.fetch_add(b.frames as u64, Relaxed);
         st.busy_ns
             .fetch_add(t0.elapsed().as_nanos() as u64, Relaxed);
     }

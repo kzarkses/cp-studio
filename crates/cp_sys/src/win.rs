@@ -22,6 +22,7 @@ pub const WM_CLOSE: u32 = 0x0010;
 pub const WM_ERASEBKGND: u32 = 0x0014;
 pub const WM_NCDESTROY: u32 = 0x0082;
 pub const WM_KEYDOWN: u32 = 0x0100;
+pub const WM_COMMAND: u32 = 0x0111;
 pub const WM_TIMER: u32 = 0x0113;
 pub const WM_MOUSEMOVE: u32 = 0x0200;
 pub const WM_LBUTTONDOWN: u32 = 0x0201;
@@ -107,6 +108,7 @@ unsafe extern "system" {
     fn DestroyWindow(h: Raw) -> i32;
     fn IsWindow(h: Raw) -> i32;
     fn ShowWindow(h: Raw, cmd: i32) -> i32;
+    fn PostMessageW(h: Raw, msg: u32, wp: usize, lp: isize) -> i32;
     fn SetForegroundWindow(h: Raw) -> i32;
     fn InvalidateRect(h: Raw, r: *const Rect, erase: i32) -> i32;
     fn BeginPaint(h: Raw, ps: *mut PaintStruct) -> Raw;
@@ -288,6 +290,13 @@ pub fn show(h: Hwnd) {
 }
 
 /// Demande un nouveau WM_PAINT.
+/// Depose un message dans la file de la fenetre (il sera traite APRES le
+/// retour de l'appelant).
+pub fn post_message(h: Hwnd, msg: u32, wp: usize, lp: isize) -> bool {
+    // SAFETY: PostMessageW accepte n'importe quel handle (echec propre).
+    unsafe { PostMessageW(h.0 as Raw, msg, wp, lp) != 0 }
+}
+
 pub fn invalidate(h: Hwnd) {
     // SAFETY: rectangle nul = toute la fenetre ; sans effet si invalide.
     unsafe {

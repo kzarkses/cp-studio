@@ -271,12 +271,11 @@ impl SelfTest {
                 st.busy_renders, st.dropped_commands
             ),
         );
-        let wall = st.blocks.max(1) as f64 * st.last_block.max(1) as f64 / st.srate.max(1.0);
         self.say(
             true,
             format!(
                 "charge : {:.4} % du fil audio pour {} voix",
-                st.busy_ns as f64 / 1e9 / wall * 100.0,
+                st.load_percent(),
                 st.active_voices
             ),
         );

@@ -48,7 +48,8 @@ Ce que ces mots veulent dire, en critères :
 | ✅ La petite DLL fixe et le rechargement à chaud du module | 2026-11-21 | retouche recompilée en 0,6 s, rechargée en 0,9 s ; le vrai chargeur testé dans un faux REAPER |
 | ✅ Le cœur du moteur audio : voix, colonnes, vivier, horloge | 2026-11-21 | identique au bit à l'ancien C++ (10 scénarios, 300 graines de fuzz) |
 | ✅ La première application est choisie : le navigateur de fichiers | 2026-11-21 | décision de Cedric |
-| ▶ **En cours : A1**, le premier son dans REAPER, puis tout le **jalon 1** (le navigateur utilisable), en autonomie complète | | |
+| ✅ A1 : le moteur branché dans REAPER (aperçu matériel permanent, crochet, décodage par REAPER, pics) | 2026-11-21 | `cargo xtask reaper-test` dans le vrai REAPER : deux WAV relus au bit près, aperçu tiré une fois par bloc, aucun compteur de perte, 0,18 % du fil audio pour 3 voix |
+| ▶ **En cours : le jalon 1** (le navigateur utilisable) : B1, B2, B5, B7, puis la suite, en autonomie complète | | |
 
 **Le but immédiat est le jalon 1** (voir plus bas) : un navigateur de fichiers
 complet et utilisable au quotidien. Il fait tourner ensemble les deux moteurs,

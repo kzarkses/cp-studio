@@ -115,10 +115,30 @@ fn log(level: u32, msg: &str) {
         LOG_ERROR => "ERREUR",
         _ => "info",
     };
-    if let Some(f) = lock(&LOG).as_mut() {
-        let _ = writeln!(f, "[{h:02}:{m:02}:{s:02}.{ms:03}] {tag:9} {msg}");
-        let _ = f.flush();
+    // `try_lock` : une panique pendant une ecriture du journal ne doit pas
+    // attendre le journal qu'elle tient deja.
+    if let Ok(mut g) = LOG.try_lock() {
+        if let Some(f) = g.as_mut() {
+            let _ = writeln!(f, "[{h:02}:{m:02}:{s:02}.{ms:03}] {tag:9} {msg}");
+            let _ = f.flush();
+        }
     }
+}
+
+/// Chaque panique du chargeur va au journal, avec sa pile : sans ca, elle ne
+/// s'ecrit que sur une console que personne ne voit.
+fn install_panic_hook() {
+    std::panic::set_hook(Box::new(|info| {
+        let bt = std::backtrace::Backtrace::force_capture();
+        let th = std::thread::current();
+        log(
+            LOG_ERROR,
+            &format!(
+                "PANIQUE dans le chargeur (fil {}) : {info}\n{bt}",
+                th.name().unwrap_or("?")
+            ),
+        );
+    }));
 }
 
 fn console(msg: &str) {
@@ -382,8 +402,6 @@ fn status_text() -> String {
     }
     s += &format!("  windows: {}\n", lock(&WINDOWS).len());
     if let Some(st) = audio(None, |a| Some(a.stats())) {
-        let blocks = st.blocks.max(1) as f64;
-        let wall = blocks * st.last_block.max(1) as f64 / st.srate.max(1.0);
         s += &format!(
             "  audio: {} Hz, {} blocks of {}, hook {}, ports open {}\n",
             st.srate,
@@ -404,7 +422,7 @@ fn status_text() -> String {
         );
         s += &format!(
             "  audio load: {:.3} % of the audio thread, {} voices, {} clips ({:.1} MB), {} decoding\n",
-            st.busy_ns as f64 / 1e9 / wall * 100.0,
+            st.load_percent(),
             st.active_voices,
             st.clips,
             st.bytes as f64 / 1e6,
@@ -477,8 +495,11 @@ fn selftest_tick() {
         drop(g);
         if quit {
             log(LOG_INFO, "[selftest] fermeture de REAPER demandee");
+            // DEPOSEE, pas appelee : REAPER se demonte pendant la commande, et
+            // il ne doit pas le faire pendant que notre battement est sur la
+            // pile (c'est ce que fait un clic dans le menu).
             if let Some(r) = REAPER.get() {
-                r.main_on_command(40004); // File: Quit REAPER
+                win::post_message(r.main_hwnd(), win::WM_COMMAND, 40004, 0);
             }
         }
     }
@@ -623,6 +644,7 @@ fn module_source(plugins: &Path) -> PathBuf {
 fn on_load(instance: isize, r: Reaper) -> bool {
     let _ = REAPER.set(r);
     open_log(&r);
+    install_panic_hook();
     log(
         LOG_INFO,
         &format!("chargeur {VERSION} demarre (ABI {})", cp_abi::ABI),

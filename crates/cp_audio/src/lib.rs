@@ -82,10 +82,25 @@ pub struct Stats {
     pub busy_renders: u32,
     pub dropped_commands: u32,
     pub busy_ns: u64,
+    /// Le plus long temps de tirage d'un port, en frames.
+    pub frames_pulled: u64,
     pub active_voices: usize,
     pub clips: usize,
     pub bytes: usize,
     pub decoding: usize,
+}
+
+impl Stats {
+    /// La part du fil audio passee dans nos rendus, en pour cent, sur le temps
+    /// ou les ports ont ete tires.
+    pub fn load_percent(&self) -> f64 {
+        let wall = self.frames_pulled as f64 / self.srate.max(1.0);
+        if wall <= 0.0 {
+            0.0
+        } else {
+            self.busy_ns as f64 / 1e9 / wall * 100.0
+        }
+    }
 }
 
 static HOOK_CORE: OnceLock<Arc<Core>> = OnceLock::new();
@@ -500,6 +515,7 @@ impl AudioHost {
             s.rewinds += p.stats.rewinds.load(Relaxed);
             s.skips += p.stats.skips.load(Relaxed);
             s.busy_ns += p.stats.busy_ns.load(Relaxed);
+            s.frames_pulled = s.frames_pulled.max(p.stats.frames.load(Relaxed));
             s.over_pulls += core.port_over_pulls(i);
             s.under_pulls += core.port_under_pulls(i);
         }

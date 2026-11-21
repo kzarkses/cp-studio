@@ -5,6 +5,11 @@
 //!   de temps ca a pris.
 //! - `install` : construit et installe le chargeur dans UserPlugins (REAPER
 //!   doit etre ferme), et lui dit ou trouver le module de developpement.
+//! - `reaper-test` : lance le VRAI REAPER avec l'auto-test du chargeur
+//!   (`CP_STUDIO_SELFTEST=quit`, tout a gain 0), lit le verdict, et ferme
+//!   REAPER s'il ne s'est pas ferme seul. Refuse si REAPER est deja ouvert.
+//!   REAPER est lance depuis un dossier VIDE (jamais le depot comme dossier
+//!   courant d'un outil tiers).
 //!
 //! Dossier de REAPER : `%APPDATA%\REAPER`, ou `CP_REAPER_RESOURCE` s'il est
 //! defini (installation portable).
@@ -13,7 +18,7 @@ use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 fn root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -111,13 +116,88 @@ fn install() -> ExitCode {
     ExitCode::SUCCESS
 }
 
+fn reaper_running() -> bool {
+    Command::new("tasklist")
+        .args(["/FI", "IMAGENAME eq reaper.exe", "/NH"])
+        .output()
+        .map(|o| {
+            String::from_utf8_lossy(&o.stdout)
+                .to_lowercase()
+                .contains("reaper.exe")
+        })
+        .unwrap_or(false)
+}
+
+fn reaper_test() -> ExitCode {
+    if reaper_running() {
+        eprintln!(
+            "REAPER est ouvert : l'auto-test lance son propre REAPER, fermer l'autre d'abord"
+        );
+        return ExitCode::from(2);
+    }
+    let exe = env::var_os("CP_REAPER_EXE")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(r"C:\Program Files\REAPER (x64)\reaper.exe"));
+    let dir = env::temp_dir().join("cp_selftest");
+    let run = dir.join("run");
+    let _ = fs::create_dir_all(&run);
+    let result = dir.join("result.txt");
+    let _ = fs::remove_file(&result);
+    let t0 = Instant::now();
+    let mut child = match Command::new(&exe)
+        .current_dir(&run)
+        .env("CP_STUDIO_SELFTEST", "quit")
+        .args(["-new", "-nosplash", "-ignoreerrors"])
+        .spawn()
+    {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("{} : {e}", exe.display());
+            return ExitCode::FAILURE;
+        }
+    };
+    while !result.exists() && t0.elapsed() < Duration::from_secs(90) {
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    // Laisser REAPER se fermer seul ; sinon (une autre extension peut bloquer
+    // la sortie), le fermer.
+    let t1 = Instant::now();
+    while t1.elapsed() < Duration::from_secs(10) {
+        if let Ok(Some(_)) = child.try_wait() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    if let Ok(None) = child.try_wait() {
+        let _ = child.kill();
+        let _ = child.wait();
+        println!("(REAPER ne s'est pas ferme seul : arrete)");
+    }
+    match fs::read_to_string(&result) {
+        Ok(text) => {
+            print!("{text}");
+            println!("({:.1} s)", t0.elapsed().as_secs_f64());
+            if text.trim_end().ends_with("PASS") {
+                ExitCode::SUCCESS
+            } else {
+                ExitCode::FAILURE
+            }
+        }
+        Err(_) => {
+            eprintln!("pas de verdict en 90 s (voir cp_studio.log)");
+            ExitCode::FAILURE
+        }
+    }
+}
+
 fn main() -> ExitCode {
     match env::args().nth(1).as_deref() {
         Some("check") => check(),
         Some("module") => module(),
         Some("install") => install(),
+        Some("reaper-test") => reaper_test(),
         _ => {
-            eprintln!("usage : cargo xtask <check | module | install>");
+            eprintln!("usage : cargo xtask <check | module | install | reaper-test>");
             ExitCode::FAILURE
         }
     }
