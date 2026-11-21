@@ -4,6 +4,9 @@ CP Studio est la suite de Cedric pour REAPER, reecrite en Rust, entierement en
 natif : une extension REAPER, sans Lua. Elle remplace CP_Scripts (Lua + C++),
 dont le depot a ete efface le 2026-11-20.
 
+**Par ou commencer : `ROADMAP_CPStudio.md`** (les exigences de Cedric, ce qui
+est fait, tout ce qui reste, dans l'ordre, avec un critere de fin par etape).
+
 ## 1. D'ou on vient
 
 - Le materiel de l'ancien depot est sur `E:\CP_Scripts_recovery_20261120`
