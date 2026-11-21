@@ -340,6 +340,42 @@ impl Transport {
         self.drag.is_some()
     }
 
+    /// La cible sous la souris.
+    pub fn hovered(&self) -> Hit {
+        self.hover
+    }
+
+    /// Ce que dit l'infobulle d'une cible.
+    pub fn label(&self, h: Hit) -> Option<String> {
+        Some(match h {
+            Hit::None | Hit::Counter => return None,
+            Hit::Start => "Go to start".into(),
+            Hit::Stop => "Stop".into(),
+            Hit::Play => "Play".into(),
+            Hit::Pause => "Pause".into(),
+            Hit::Record => "Record".into(),
+            Hit::Repeat => "Repeat (loop playback)".into(),
+            Hit::Bpm => "Tempo: drag or wheel (Shift: fine), double-click to type".into(),
+            Hit::Sig => "Time signature (project settings)".into(),
+            Hit::Tap => "Tap tempo".into(),
+            Hit::Metronome => "Metronome".into(),
+            Hit::Rate => "Play rate: drag or wheel, double-click for 1.00".into(),
+            Hit::Add => "Add an action to CP Transport".into(),
+            Hit::Item(i) => {
+                let it = self.items.get(i)?;
+                format!("{}  (right-click: move, remove)", it.name)
+            }
+            Hit::View(i) => {
+                let v = self.views.get(i)?;
+                if i == 0 {
+                    format!("{}: REAPER's tracks", v.name)
+                } else {
+                    format!("{}  (right-click: where it lives)", v.name)
+                }
+            }
+        })
+    }
+
     pub fn hit(&self, x: f32, y: f32) -> Hit {
         self.boxes
             .iter()

@@ -70,6 +70,9 @@ pub(crate) struct TPart {
     images: std::collections::HashMap<String, Option<Surface>>,
     /// Battements depuis la derniere relecture des icones.
     since_items: u32,
+    /// L'infobulle, et la cible survolee depuis quand.
+    tip: Option<ui::Tooltip>,
+    hover: (cp_transport::Hit, std::time::Instant),
 }
 
 impl TPart {
@@ -90,6 +93,8 @@ impl TPart {
             kb: items::kb_scripts(&kb),
             images: Default::default(),
             since_items: 0,
+            tip: None,
+            hover: (cp_transport::Hit::None, std::time::Instant::now()),
         }
     }
 }
@@ -375,6 +380,7 @@ impl App {
             self.tp.since_items = 0;
             self.refresh_items();
         }
+        self.transport_tip();
         let tabs = self.view_tabs();
         if tabs != self.tp.t.views {
             self.tp.t.views = tabs;
@@ -388,6 +394,35 @@ impl App {
         } else if self.tp.t.take_dirty() {
             self.tp.t.mark();
             self.transport_render(false);
+        }
+    }
+
+    /// L'infobulle : apres 0,6 s immobile sur une cible, sous elle.
+    fn transport_tip(&mut self) {
+        let Some(hwnd) = self.tp.view.as_ref().map(|v| v.hwnd) else {
+            return;
+        };
+        let h = self.tp.t.hovered();
+        if h != self.tp.hover.0 {
+            self.tp.hover = (h, std::time::Instant::now());
+            if let Some(t) = &mut self.tp.tip {
+                t.hide();
+            }
+            return;
+        }
+        let shown = self.tp.tip.as_ref().is_some_and(|t| t.is_shown());
+        if shown || self.tp.t.dragging() || self.tp.hover.1.elapsed().as_secs_f64() < 0.6 {
+            return;
+        }
+        let (Some(text), Some((x, y, _, bh))) = (self.tp.t.label(h), self.tp.t.rect_of(h)) else {
+            return;
+        };
+        if self.tp.tip.is_none() {
+            self.tp.tip = ui::Tooltip::new(hwnd);
+        }
+        let (sx, sy) = ui::client_to_screen(hwnd, x as i32, (y + bh) as i32 + 6);
+        if let Some(t) = &mut self.tp.tip {
+            t.show(&text, sx, sy);
         }
     }
 
@@ -748,6 +783,13 @@ impl App {
             }
             _ => return None,
         };
+        if matches!(ev, Ev::Down { .. } | Ev::Leave) {
+            if let Some(t) = &mut self.tp.tip {
+                t.hide();
+            }
+            // Le survol recommence a zero : pas de bulle juste apres un clic.
+            self.tp.hover = (cp_transport::Hit::None, std::time::Instant::now());
+        }
         let act = self.tp.t.event(&ev);
         if self.tp.t.dragging() {
             self.transport_want_frames();
