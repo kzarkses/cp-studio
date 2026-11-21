@@ -61,6 +61,8 @@ Ce que ces mots veulent dire, en critères :
 | ✅ Le navigateur V1 : arbre des raccourcis, en-têtes collés empilés, écoute au relâchement, forme d'onde à tout zoom (64 px par échantillon), section, insertion et glisser-déposer avec section, recherche (noms + MediaDB), favoris, clavier, ancrable | 2026-11-21 | tests avec le vrai moteur et les vraies polices ; vrai REAPER (insertion exacte, fenêtre, ancrage) |
 | ✅ Le navigateur V2 : collections colorées 1 à 7, hasard (R), calage au tempo (×0,5 / 1 / 2, par la hauteur), remplacement à chaud de la source (Q, Échap), vue « samples », effets comme racine virtuelle | 2026-11-21 | vrai REAPER : 1 615 effets listés, tempo du projet lu, pic de la miniature = pic du fichier ; reste : rangées de hauteur variable dans la vue « samples », l'étirement (A5) pour caler sans changer la hauteur |
 | ✅ Premier retour de Cedric : « stable et fonctionnel, barebone mais c'est là », sauf un gel de REAPER en mode ancré | 2026-11-21 | gel trouvé et corrigé à la racine (voir B5), l'auto-test mesure désormais ce cas |
+| ✅ Les places natives (ABI 6) : une vue de CP Studio à la place d'une vue de REAPER (l'arrangement, le transport), tenue et rendue par la DLL fixe | 2026-11-22 | vrai REAPER : CP Transport posé sur le transport natif masqué (2560 × 36 en 0,0) et lui cède la place quand Cédric le rallume ; le navigateur à la place de l'arrangement (2557 × 1310), clavier, rechargement à chaud, Arrange / Browser |
+| ✅ CP Transport : transport, compteur, tempo (glisser, molette, saisie), signature, Tap, métronome, vitesse, icônes d'actions (ajouter par la liste des actions de REAPER, retirer, déplacer), sélecteur de vues avec la place de chaque vue | 2026-11-22 | 6 tests et planches PNG ; démarre seul avec REAPER |
 | ▶ **Maintenant : le jalon 1 à l'usage.** Cedric s'en sert au quotidien ; on corrige et on polit à partir de ses retours. Ensuite, le choix de l'application suivante | | |
 
 **Le but immédiat est le jalon 1** (voir plus bas) : un navigateur de fichiers
@@ -465,7 +467,7 @@ REAPER, et en fait un vrai retour.
 | Éditeur de clips | audio et MIDI, piano roll, enveloppes, établi d'un son | mémoires `project-sampler`, `project-editor-sound-workbench`, `project-midi-command-layer` |
 | Session | lanceur de clips, prises, vers l'arrangeur, sortie MIDI par colonne | mémoires `project-session-*`, `ROADMAP_Chantiers.md` (ancien dépôt) |
 | Sampler | kits de pads, un effet par kit | mémoires `project-kit-sampler-jsfx`, `project-sampler` |
-| Transport | le transport à la place de celui de REAPER, clock externe | mémoires `project-transport-custom`, `project-ext-clock` |
+| Transport | le transport à la place de celui de REAPER, clock externe | **construit le 2026-11-22** (`cp_transport`) ; reste la clock externe : mémoire `project-ext-clock` |
 | FX Constellation | moteur de modulation, pad, graphe, liens | mémoires `project-fx-constellation-refonte`, `project-moteur-modulation-plan`, `ROADMAP_FXConstellation.md` |
 | Séquenceur / Sound Gen | séquenceur à la Pigments, synthé JSFX | mémoires `project-sequenceur`, `project-soundgen-modulation`, `ROADMAP_Sequenceur.md` |
 | Vidéo | caméra, stop motion, calage par le son | mémoire `project-video`, `ROADMAP_Video.md` |

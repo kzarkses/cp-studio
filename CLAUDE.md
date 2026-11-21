@@ -32,6 +32,7 @@ est fait, tout ce qui reste, dans l'ordre, avec un critere de fin par etape).
 | `cp_gfx` | le moteur de dessin : rasteriseur a couverture exacte, chemins, texte (cache de glyphes), PNG, sans Windows |
 | `cp_ui` | le toolkit : theme, evenements, icones Lucide (SVG), champ de saisie, defilement |
 | `cp_browser` | le navigateur de fichiers (jalon 1), sans Windows : il se teste avec le vrai moteur et se dessine en PNG |
+| `cp_transport` | CP Transport, la barre qui remplace le transport de REAPER (transport, compteur, tempo, icones d'actions, selecteur de vues), sans Windows : chaque geste rend une `Act` |
 | `cp_hot` | le rechargement a chaud : surveiller, copier, charger, passer l'etat |
 | `cp_loader` | `reaper_cp_studio.dll`, la petite DLL FIXE que REAPER charge au demarrage |
 | `cp_module` | `cp_module.dll`, tout le code de CP Studio, recharge a chaud |
@@ -41,6 +42,16 @@ est fait, tout ce qui reste, dans l'ordre, avec un critere de fin par etape).
 Le chargeur tient TOUT ce que REAPER et Windows connaissent (battement,
 actions, classe de fenetre, fenetres) et le transmet au module courant. Les
 fenetres survivent donc a un rechargement, et le nouveau code les repeint.
+
+LES PLACES NATIVES (ABI 6, `cp_loader/src/places.rs`) : une de nos vues A LA
+PLACE d'une vue de REAPER (l'arrangement, le transport). On masque la vue
+native, on lit le rectangle que REAPER continue de calculer pour elle, et on y
+pose la notre. C'est le chargeur qui tient la place (gardien a chaque
+battement) et qui la rend : quand le module la rend, tombe en faute, quand
+notre vue meurt, a l'arret. Un transport natif qui reapparait, c'est Cedric
+qui l'a rallume : on lui cede. Une vue posee ne recoit pas ses touches par
+REAPER : le crochet clavier les lui livre (`rui::deliver`). Une fenetre peut
+etre sans clavier (`set_keyless` : le transport).
 
 Le moteur audio vit dans le chargeur (`cp_audio`) : une retouche du module ne
 coupe jamais le son. Le module le pilote par `HostApi::audio` (ABI 2) avec des
@@ -120,11 +131,19 @@ refuse. Changer le moteur = reinstaller le chargeur, REAPER ferme.
   REAPER au bit pres, fait tourner le moteur (compteurs de pertes), pose une
   section dans le projet vide, ouvre le navigateur, mesure la cadence de
   l'ecran et les images en retard, l'ancre puis le rend flottant, photographie
-  ses fenetres dans `%TEMP%\cp_selftest`. REAPER doit etre ferme. A lancer
+  ses fenetres dans `%TEMP%\cp_selftest`. Puis les places natives : CP
+  Transport pose exactement sur le transport natif masque, qui lui cede la
+  place quand on le rallume ; le navigateur a la place de l'arrangement (ses
+  touches, le rechargement a chaud, Arrange / Browser), et sa place d'origine
+  rendue. REAPER doit etre ferme. A lancer
   apres chaque changement du chargeur. (REAPER ne se ferme pas seul a la fin :
   une autre extension avorte a la sortie, meme sans la notre ; xtask l'arrete.)
 - `cp_browser` : ses tests ecrivent des PNG (`%TEMP%\cp_browser_*.png`) :
-  les REGARDER apres un changement de dessin.
+  les REGARDER apres un changement de dessin. Idem `cp_transport`
+  (`%TEMP%\cp_transport_*.png`).
+- Un echec « apercus tires 0 fois » avec une boite « Error opening devices »
+  sur la photo : l'interface audio de Cedric est eteinte (ASIO), ce n'est pas
+  le code.
 - Ils ne prouvent ni l'oreille ni le geste reel (glisser-deposer, clavier dans
   un docker). C'est Cedric qui ecoute et qui manipule.
 
