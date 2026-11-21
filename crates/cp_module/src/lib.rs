@@ -186,6 +186,29 @@ impl BrowserHost for Adapter<'_> {
     fn window_action(&mut self, id: u32) {
         *self.action = Some(id);
     }
+    fn project_bpm(&mut self) -> f64 {
+        self.r.master_tempo()
+    }
+    fn set_rate(&mut self, voice: u32, rate: f64) {
+        self.host.audio_set(voice, 0, rate);
+    }
+    fn insert_rate(&mut self, rate: f64) {
+        self.r.set_selected_item_rate(rate);
+    }
+    fn swap_begin(&mut self) -> Result<(String, f64), String> {
+        self.r.selected_take_file().ok_or_else(|| {
+            "select an item in the arrange first (hot swap replaces its file)".to_string()
+        })
+    }
+    fn swap(&mut self, path: &str, offset: f64) -> Result<(), String> {
+        self.r.swap_take_source(path, offset)
+    }
+    fn installed_fx(&mut self) -> Vec<String> {
+        self.r.installed_fx().into_iter().map(|(n, _)| n).collect()
+    }
+    fn add_fx(&mut self, name: &str) -> Result<(), String> {
+        self.r.add_fx(name)
+    }
 }
 
 /// La fenetre du navigateur.
@@ -636,6 +659,8 @@ impl App {
         let (x, y) = (x as f32, y as f32);
         let c = if y < l.bar_h && x >= l.search_x && x < l.search_x + l.search_w {
             Cursor::IBeam
+        } else if self.browser.over_split(y) {
+            Cursor::SizeNS
         } else {
             Cursor::Arrow
         };
@@ -713,6 +738,15 @@ impl Module for App {
             browser.volume = v;
         }
         browser.looping = r.ext_get(SECTION, "browser_loop").as_deref() == Some("1");
+        browser.sync = r.ext_get(SECTION, "browser_sync").as_deref() == Some("1");
+        if let Some(v) = r
+            .ext_get(SECTION, "browser_wave_h")
+            .and_then(|v| v.parse().ok())
+        {
+            browser.wave_h_pref = v;
+        }
+        browser.data_dir = r.resource_path().map(|p| p.join("CP_Studio"));
+        browser.load_collections();
         let cmd_browser =
             host.register_action("CPSTUDIO_BROWSER", "CP Studio: Browser (show/hide)");
         let cmd_perf = host.register_action(

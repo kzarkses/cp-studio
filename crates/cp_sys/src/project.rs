@@ -242,3 +242,239 @@ impl Reaper {
         done
     }
 }
+
+impl Reaper {
+    /// Le tempo du projet (le premier marqueur de tempo).
+    pub fn master_tempo(&self) -> f64 {
+        type F = unsafe extern "C" fn() -> f64;
+        // SAFETY: double Master_GetTempo().
+        match unsafe { self.api::<F>(c"Master_GetTempo") } {
+            // SAFETY: appel sans argument, fil principal.
+            Some(f) => unsafe { f() },
+            None => 0.0,
+        }
+    }
+
+    /// Change la vitesse de lecture du premier item choisi (sa longueur suit).
+    pub fn set_selected_item_rate(&self, rate: f64) {
+        type SelItem = unsafe extern "C" fn(P, i32) -> P;
+        type ActTake = unsafe extern "C" fn(P) -> P;
+        type GetVal = unsafe extern "C" fn(P, *const c_char) -> f64;
+        type SetVal = unsafe extern "C" fn(P, *const c_char, f64) -> bool;
+        if rate.is_nan() || rate <= 0.0 || (rate - 1.0).abs() < 1e-12 {
+            return;
+        }
+        // SAFETY: GetSelectedMediaItem, GetActiveTake, Get/SetMediaItemInfo_Value,
+        // SetMediaItemTakeInfo_Value (signatures du SDK).
+        let fns = unsafe {
+            (
+                self.api::<SelItem>(c"GetSelectedMediaItem"),
+                self.api::<ActTake>(c"GetActiveTake"),
+                self.api::<GetVal>(c"GetMediaItemInfo_Value"),
+                self.api::<SetVal>(c"SetMediaItemInfo_Value"),
+                self.api::<SetVal>(c"SetMediaItemTakeInfo_Value"),
+            )
+        };
+        let (Some(si), Some(at), Some(gi), Some(sv), Some(st)) = fns else {
+            return;
+        };
+        // SAFETY: pointeurs rendus par REAPER, verifies non nuls.
+        unsafe {
+            let item = si(null_mut(), 0);
+            if item.is_null() {
+                return;
+            }
+            let take = at(item);
+            if take.is_null() {
+                return;
+            }
+            let len = gi(item, c"D_LENGTH".as_ptr());
+            st(take, c"D_PLAYRATE".as_ptr(), rate);
+            sv(item, c"D_LENGTH".as_ptr(), len / rate);
+        }
+    }
+
+    /// Le fichier et le decalage de la prise active du premier item choisi.
+    pub fn selected_take_file(&self) -> Option<(String, f64)> {
+        type SelItem = unsafe extern "C" fn(P, i32) -> P;
+        type ActTake = unsafe extern "C" fn(P) -> P;
+        type TakeSrc = unsafe extern "C" fn(P) -> P;
+        type SrcName = unsafe extern "C" fn(P, *mut c_char, i32);
+        type GetVal = unsafe extern "C" fn(P, *const c_char) -> f64;
+        // SAFETY: signatures du SDK (voir trim_dropped).
+        let (si, at, ts, sn, gt) = unsafe {
+            (
+                self.api::<SelItem>(c"GetSelectedMediaItem")?,
+                self.api::<ActTake>(c"GetActiveTake")?,
+                self.api::<TakeSrc>(c"GetMediaItemTake_Source")?,
+                self.api::<SrcName>(c"GetMediaSourceFileName")?,
+                self.api::<GetVal>(c"GetMediaItemTakeInfo_Value")?,
+            )
+        };
+        // SAFETY: pointeurs rendus par REAPER, verifies non nuls ; tampon de
+        // 4096 octets annonce.
+        unsafe {
+            let item = si(null_mut(), 0);
+            if item.is_null() {
+                return None;
+            }
+            let take = at(item);
+            if take.is_null() {
+                return None;
+            }
+            let src = ts(take);
+            if src.is_null() {
+                return None;
+            }
+            let mut buf = vec![0u8; 4096];
+            sn(src, buf.as_mut_ptr() as *mut c_char, 4096);
+            let f = CStr::from_ptr(buf.as_ptr() as *const c_char)
+                .to_string_lossy()
+                .into_owned();
+            if f.is_empty() {
+                return None;
+            }
+            Some((f, gt(take, c"D_STARTOFFS".as_ptr())))
+        }
+    }
+
+    /// Remplace le fichier de la prise active du premier item choisi (la
+    /// position et la longueur de l'item restent). `offset` : le decalage dans
+    /// le nouveau fichier. Par SWS s'il est la (il garde les proprietes de la
+    /// source), sinon par l'API de REAPER (l'ancienne source n'est pas
+    /// detruite : l'historique d'annulation peut la tenir).
+    pub fn swap_take_source(&self, path: &str, offset: f64) -> Result<(), String> {
+        type SelItem = unsafe extern "C" fn(P, i32) -> P;
+        type ActTake = unsafe extern "C" fn(P) -> P;
+        type BrSet = unsafe extern "C" fn(P, *const c_char, bool, bool) -> bool;
+        type Create = unsafe extern "C" fn(*const c_char) -> P;
+        type SetSrc = unsafe extern "C" fn(P, P) -> bool;
+        type SetVal = unsafe extern "C" fn(P, *const c_char, f64) -> bool;
+        type Void = unsafe extern "C" fn();
+        type Cmd = unsafe extern "C" fn(i32, i32);
+        let c = CString::new(path).map_err(|e| e.to_string())?;
+        // SAFETY: signatures du SDK et de SWS :
+        // bool BR_SetTakeSourceFromFile2(MediaItem_Take*, const char*, bool, bool) ;
+        // PCM_source* PCM_Source_CreateFromFile(const char*) ;
+        // bool SetMediaItemTake_Source(MediaItem_Take*, PCM_source*).
+        let (si, at, br, create, setsrc, st, upd, cmd) = unsafe {
+            (
+                self.api::<SelItem>(c"GetSelectedMediaItem"),
+                self.api::<ActTake>(c"GetActiveTake"),
+                self.api::<BrSet>(c"BR_SetTakeSourceFromFile2"),
+                self.api::<Create>(c"PCM_Source_CreateFromFile"),
+                self.api::<SetSrc>(c"SetMediaItemTake_Source"),
+                self.api::<SetVal>(c"SetMediaItemTakeInfo_Value"),
+                self.api::<Void>(c"UpdateArrange"),
+                self.api::<Cmd>(c"Main_OnCommand"),
+            )
+        };
+        let (Some(si), Some(at)) = (si, at) else {
+            return Err("REAPER API missing".into());
+        };
+        // SAFETY: pointeurs rendus par REAPER, verifies non nuls ; fil principal.
+        unsafe {
+            let item = si(null_mut(), 0);
+            if item.is_null() {
+                return Err("select an item in the arrange first".into());
+            }
+            let take = at(item);
+            if take.is_null() {
+                return Err("the selected item has no take".into());
+            }
+            let ok = match (br, create, setsrc) {
+                (Some(br), _, _) => br(take, c.as_ptr(), false, true),
+                (None, Some(cr), Some(ss)) => {
+                    let src = cr(c.as_ptr());
+                    !src.is_null() && ss(take, src)
+                }
+                _ => false,
+            };
+            if !ok {
+                return Err("REAPER refused the new source".into());
+            }
+            if let Some(st) = st {
+                st(take, c"D_STARTOFFS".as_ptr(), offset.max(0.0));
+            }
+            if let Some(f) = upd {
+                f();
+            }
+            // Item: Build any missing peaks.
+            if let Some(f) = cmd {
+                f(40047, 0);
+            }
+        }
+        Ok(())
+    }
+
+    /// Les effets installes : (nom affiche, identifiant).
+    pub fn installed_fx(&self) -> Vec<(String, String)> {
+        type F = unsafe extern "C" fn(i32, *mut *const c_char, *mut *const c_char) -> bool;
+        // SAFETY: bool EnumInstalledFX(int index, const char** nameOut, const char** identOut).
+        let Some(f) = (unsafe { self.api::<F>(c"EnumInstalledFX") }) else {
+            return Vec::new();
+        };
+        let mut v = Vec::new();
+        for i in 0..100_000 {
+            let mut n: *const c_char = std::ptr::null();
+            let mut id: *const c_char = std::ptr::null();
+            // SAFETY: deux pointeurs de chaine ecrits par REAPER, tenus par lui.
+            if !unsafe { f(i, &mut n, &mut id) } {
+                break;
+            }
+            if n.is_null() {
+                continue;
+            }
+            // SAFETY: chaines terminees par zero tenues par REAPER.
+            let name = unsafe { CStr::from_ptr(n) }.to_string_lossy().into_owned();
+            let ident = if id.is_null() {
+                String::new()
+            } else {
+                // SAFETY: idem.
+                unsafe { CStr::from_ptr(id) }.to_string_lossy().into_owned()
+            };
+            v.push((name, ident));
+        }
+        v
+    }
+
+    /// Ajoute un effet a la piste choisie (ou la derniere touchee) et l'ouvre.
+    pub fn add_fx(&self, name: &str) -> Result<(), String> {
+        type SelTrack = unsafe extern "C" fn(P, i32) -> P;
+        type LastTrack = unsafe extern "C" fn() -> P;
+        type Add = unsafe extern "C" fn(P, *const c_char, bool, i32) -> i32;
+        type Show = unsafe extern "C" fn(P, i32, i32);
+        let c = CString::new(name).map_err(|e| e.to_string())?;
+        // SAFETY: MediaTrack* GetSelectedTrack(ReaProject*, int) ;
+        // MediaTrack* GetLastTouchedTrack() ;
+        // int TrackFX_AddByName(MediaTrack*, const char*, bool, int) ;
+        // void TrackFX_Show(MediaTrack*, int, int).
+        let (sel, last, add, show) = unsafe {
+            (
+                self.api::<SelTrack>(c"GetSelectedTrack"),
+                self.api::<LastTrack>(c"GetLastTouchedTrack"),
+                self.api::<Add>(c"TrackFX_AddByName"),
+                self.api::<Show>(c"TrackFX_Show"),
+            )
+        };
+        let add = add.ok_or("REAPER API missing")?;
+        // SAFETY: pointeurs rendus par REAPER, verifies non nuls ; fil principal.
+        unsafe {
+            let mut tr = sel.map_or(null_mut(), |f| f(null_mut(), 0));
+            if tr.is_null() {
+                tr = last.map_or(null_mut(), |f| f());
+            }
+            if tr.is_null() {
+                return Err("select a track first".into());
+            }
+            let idx = add(tr, c.as_ptr(), false, -1);
+            if idx < 0 {
+                return Err("REAPER could not add this effect".into());
+            }
+            if let Some(s) = show {
+                s(tr, idx, 3);
+            }
+        }
+        Ok(())
+    }
+}

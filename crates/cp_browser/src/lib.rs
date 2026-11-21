@@ -21,6 +21,7 @@
 
 pub mod draw;
 pub mod model;
+pub mod v2;
 pub mod wave;
 
 use std::path::{Path, PathBuf};
@@ -85,6 +86,28 @@ pub trait Host {
         Vec::new()
     }
     fn window_action(&mut self, _id: u32) {}
+
+    // --- V2 (par defaut : absent)
+    /// Le tempo du projet.
+    fn project_bpm(&mut self) -> f64 {
+        0.0
+    }
+    fn set_rate(&mut self, _voice: u32, _rate: f64) {}
+    /// Apres une insertion : la vitesse de l'item pose.
+    fn insert_rate(&mut self, _rate: f64) {}
+    /// Le fichier et le decalage de l'item choisi dans REAPER.
+    fn swap_begin(&mut self) -> Result<(String, f64), String> {
+        Err("hot swap is not available".into())
+    }
+    fn swap(&mut self, _path: &str, _offset: f64) -> Result<(), String> {
+        Err("hot swap is not available".into())
+    }
+    fn installed_fx(&mut self) -> Vec<String> {
+        Vec::new()
+    }
+    fn add_fx(&mut self, _name: &str) -> Result<(), String> {
+        Err("effects are not available".into())
+    }
 }
 
 /// Une ligne de menu (`id` 0 = separateur).
@@ -167,6 +190,7 @@ pub struct Layout {
     pub vol_x: f32,
     pub vol_w: f32,
     pub star_x: f32,
+    pub sync_x: f32,
 }
 
 /// Un appui de souris en cours sur la liste.
@@ -185,6 +209,8 @@ enum Grab {
     Volume,
     Wave,
     WavePan,
+    /// La couture entre la liste et la forme d'onde.
+    Split,
 }
 
 /// Un clip garde en memoire (les derniers ecoutes).
@@ -231,6 +257,17 @@ pub struct Browser {
     searched: String,
     dirty: bool,
     pub scale: f32,
+    /// Le calage au tempo du projet.
+    pub sync: bool,
+    pub swap: Option<v2::Swap>,
+    pub collections: v2::Collections,
+    /// Ou ranger les collections.
+    pub data_dir: Option<PathBuf>,
+    seed: u64,
+    /// La hauteur voulue de la forme d'onde (a 96 DPI).
+    pub wave_h_pref: f32,
+    /// La racine des effets demande sa liste au prochain evenement.
+    fx_wanted: bool,
 }
 
 impl Browser {
@@ -270,6 +307,13 @@ impl Browser {
             searched: String::new(),
             dirty: true,
             scale: 1.0,
+            sync: false,
+            swap: None,
+            collections: v2::Collections::new(),
+            data_dir: None,
+            seed: v2::seed(),
+            wave_h_pref: 120.0,
+            fx_wanted: false,
         };
         b.rebuild();
         b
@@ -352,6 +396,18 @@ impl Browser {
         }
     }
 
+    pub fn selected_path_pub(&self) -> Option<PathBuf> {
+        self.selected_path()
+    }
+
+    pub fn select_row_pub(&mut self, i: usize, h: &mut dyn Host, play: bool) {
+        self.select_row(i, h, play)
+    }
+
+    pub fn insert_selected_pub(&mut self, h: &mut dyn Host) {
+        self.insert_selected(h)
+    }
+
     fn selected_path(&self) -> Option<PathBuf> {
         let r = *self.rows.get(self.sel?)?;
         self.row_path(r).map(Path::to_path_buf)
@@ -367,11 +423,9 @@ impl Browser {
         let bar_h = s(34.0);
         let status_h = s(22.0);
         let row_h = s(22.0);
-        let wave_h = if h > s(260.0) {
-            s(120.0)
-        } else {
-            (h * 0.3).round()
-        };
+        let wave_h = s(self.wave_h_pref.clamp(40.0, 2000.0))
+            .min((h - bar_h - status_h - s(80.0)).max(s(30.0)))
+            .max(s(30.0).min(h * 0.3));
         let btn = s(26.0);
         let pad = s(6.0);
         let vol_w = s(70.0);
@@ -379,8 +433,9 @@ impl Browser {
         let vol_x = star_x - s(8.0) - vol_w;
         let play_x = vol_x - s(8.0) - btn;
         let loop_x = play_x - s(4.0) - btn;
+        let sync_x = loop_x - s(4.0) - btn;
         let search_x = pad;
-        let search_w = (loop_x - s(8.0) - search_x).max(s(40.0));
+        let search_w = (sync_x - s(8.0) - search_x).max(s(40.0));
         let list_y = bar_h + 1.0;
         let wave_y = h - status_h - wave_h;
         self.lay = Layout {
@@ -403,6 +458,7 @@ impl Browser {
             vol_x,
             vol_w,
             star_x,
+            sync_x,
         };
         self.wave.layout(w);
         self.layout_scroll();
@@ -514,6 +570,12 @@ impl Browser {
         }
         let ps = p.to_string_lossy().into_owned();
         self.error = None;
+        if self.swap.is_some() && play {
+            // En remplacement a chaud, on n'ecoute pas : le fichier va dans
+            // l'item, et c'est le projet qui joue.
+            self.swap_to_selected(h);
+        }
+        let play = play && self.swap.is_none();
         if let Some(c) = self.cached(&ps) {
             self.wave.set_clip(c.clip, c.info, &ps);
             self.wave.layout(self.lay.w);
@@ -546,6 +608,11 @@ impl Browser {
             (None, None) => (0, 0),
         };
         self.voice = h.play(self.wave.clip, a, b, self.looping, self.gain());
+        if self.voice != 0 {
+            if let Some(r) = self.sync_rate(h) {
+                h.set_rate(self.voice, r);
+            }
+        }
         self.voice_path = self.wave.path.clone();
         if self.voice == 0 {
             self.error = Some("the audio engine refused to play".into());
@@ -752,6 +819,9 @@ impl Browser {
         if !self.tree.is_container(id) {
             return;
         }
+        if id == self.tree.fx_root && self.tree.nodes[id].children.is_none() {
+            self.fx_wanted = true;
+        }
         self.tree.load(id);
         let n = &mut self.tree.nodes[id];
         n.expanded = !n.expanded;
@@ -836,8 +906,18 @@ impl Browser {
         } else {
             None
         };
+        let rate = if self.wave.path == p.to_string_lossy() {
+            self.sync_rate(h)
+        } else {
+            None
+        };
         match h.insert(&p.to_string_lossy(), sec) {
-            Ok(()) => self.status = format!("Inserted {}", model::display_name(&p)),
+            Ok(()) => {
+                if let Some(r) = rate {
+                    h.insert_rate(r);
+                }
+                self.status = format!("Inserted {}", model::display_name(&p));
+            }
             Err(e) => self.error = Some(e),
         }
         self.dirty = true;
@@ -875,6 +955,8 @@ impl Browser {
             0x46 if m.ctrl => KeyUse::Eat,                   // Ctrl+F
             0x43 if m.ctrl => KeyUse::Eat,                   // Ctrl+C : le chemin
             0x46 | 0x4C if !m.ctrl && !m.alt => KeyUse::Eat, // F favori, L boucle
+            0x31..=0x37 if !m.ctrl && !m.alt => KeyUse::Eat, // 1-7 collections
+            0x52 | 0x51 | 0x54 if !m.ctrl && !m.alt => KeyUse::Eat, // R hasard, Q echange, T tempo
             _ => KeyUse::NotMine,
         }
     }
@@ -951,6 +1033,12 @@ impl Browser {
                     }
                 }
             }
+            vk::RETURN if self.swap.is_some() => {
+                self.swap = None;
+                self.status = "Hot swap kept".into();
+            }
+            vk::ESCAPE if self.swap.is_some() => self.swap_cancel(h),
+            vk::RETURN if self.add_selected_fx(h) => {}
             vk::RETURN => {
                 if let Some(r) = self.sel.and_then(|i| self.rows.get(i).copied()) {
                     match r {
@@ -973,6 +1061,17 @@ impl Browser {
                 }
             }
             0x46 => self.toggle_favorite(h),
+            0x31..=0x37 => self.toggle_collection((k - 0x30) as u8),
+            0x52 => self.random_pick(h, m.shift),
+            0x51 => self.swap_toggle(h),
+            0x54 => {
+                self.sync = !self.sync;
+                h.save("sync", if self.sync { "1" } else { "0" });
+                if self.voice != 0 {
+                    let r = self.sync_rate(h).unwrap_or(1.0);
+                    h.set_rate(self.voice, r);
+                }
+            }
             0x4C => {
                 self.looping = !self.looping;
                 h.save("loop", if self.looping { "1" } else { "0" });
@@ -1025,6 +1124,11 @@ impl Browser {
     // La souris
     // -----------------------------------------------------------------------
 
+    /// Sur la couture entre la liste et la forme d'onde (a 4 px pres).
+    pub fn over_split(&self, y: f32) -> bool {
+        (y - self.lay.wave_y).abs() <= 4.0 * self.scale
+    }
+
     fn in_wave(&self, y: f32) -> bool {
         y >= self.lay.wave_y && y < self.lay.status_y
     }
@@ -1054,6 +1158,17 @@ impl Browser {
 
     /// Un evenement. Rend vrai si la vue doit etre redessinee.
     pub fn event(&mut self, h: &mut dyn Host, ev: &Ev) -> bool {
+        let r = self.event_inner(h, ev);
+        if self.fx_wanted {
+            self.fx_wanted = false;
+            self.ensure_fx(h);
+            self.rebuild();
+            return true;
+        }
+        r
+    }
+
+    fn event_inner(&mut self, h: &mut dyn Host, ev: &Ev) -> bool {
         match *ev {
             Ev::Key { vk: k, mods, .. } => return self.key(h, k, mods),
             Ev::Char(c) => {
@@ -1086,6 +1201,12 @@ impl Browser {
                     }
                     Grab::Volume => self.set_volume_x(x, h),
                     Grab::Wave => self.wave.drag_select(x),
+                    Grab::Split => {
+                        let bottom = self.lay.status_y;
+                        self.wave_h_pref = ((bottom - y) / self.scale).clamp(40.0, 2000.0);
+                        let (w, hh, sc) = (self.lay.w, self.lay.h, self.scale);
+                        self.layout(w, hh, sc);
+                    }
                     Grab::WavePan => {
                         if let Some((x0, s0)) = self.wave.pan {
                             self.wave.start = s0;
@@ -1141,7 +1262,14 @@ impl Browser {
             if b != Button::Left {
                 return;
             }
-            if self.btn_hit(x, y, self.lay.loop_x) {
+            if self.btn_hit(x, y, self.lay.sync_x) {
+                self.sync = !self.sync;
+                h.save("sync", if self.sync { "1" } else { "0" });
+                if self.voice != 0 {
+                    let r = self.sync_rate(h).unwrap_or(1.0);
+                    h.set_rate(self.voice, r);
+                }
+            } else if self.btn_hit(x, y, self.lay.loop_x) {
                 self.looping = !self.looping;
                 h.save("loop", if self.looping { "1" } else { "0" });
             } else if self.btn_hit(x, y, self.lay.play_x) {
@@ -1155,6 +1283,10 @@ impl Browser {
             return;
         }
         self.focus = Focus::List;
+        if b == Button::Left && self.over_split(y) {
+            self.grab = Grab::Split;
+            return;
+        }
         if self.in_wave(y) {
             if !self.wave.has() {
                 return;
@@ -1204,6 +1336,15 @@ impl Browser {
                             self.sel = Some(i);
                             self.toggle(id);
                             return;
+                        }
+                    }
+                    if dbl {
+                        if let Row::Node(id) = r {
+                            if self.tree.nodes[id].kind == Kind::Fx {
+                                self.sel = Some(i);
+                                self.add_selected_fx(h);
+                                return;
+                            }
                         }
                     }
                     if dbl && self.row_is_file(r) {
@@ -1262,6 +1403,10 @@ impl Browser {
             }
             Grab::WavePan => {
                 self.wave.pan = None;
+                return;
+            }
+            Grab::Split => {
+                h.save("wave_h", &format!("{:.0}", self.wave_h_pref));
                 return;
             }
             Grab::Wave => {

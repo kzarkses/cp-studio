@@ -61,7 +61,12 @@ impl Browser {
         self.draw_list(cv, g);
         cv.fill_rect(0.0, l.wave_y - 1.0, l.w, 1.0, th.seam);
         self.draw_wave(cv, g, h);
-        self.draw_status(cv, g);
+        let rate = self
+            .sync_rate(h)
+            .zip(crate::v2::bpm_from_name(&crate::model::display_name(
+                std::path::Path::new(&self.wave.path),
+            )));
+        self.draw_status(cv, g, rate);
     }
 
     fn draw_bar(&mut self, cv: &mut Canvas<'_>, g: &mut Gfx<'_>) {
@@ -133,6 +138,8 @@ impl Browser {
                 filled,
             );
         };
+        let sync_tint = if self.sync { th.accent } else { th.text_dim };
+        button(cv, g, l.sync_x, Icon::Music, self.sync, false, sync_tint);
         let loop_tint = if self.looping { th.accent } else { th.text_dim };
         button(
             cv,
@@ -207,6 +214,17 @@ impl Browser {
                     Kind::File => (Icon::FileMusic, self.wave_color(), false),
                     Kind::Favorites => (Icon::Star, cp_gfx::hex(0xF2C444), true),
                     Kind::Section => (Icon::List, self.dir_color(), false),
+                    Kind::Collection(_) => (Icon::List, self.dir_color(), false),
+                    Kind::FxRoot | Kind::FxGroup => (
+                        if n.expanded {
+                            Icon::FolderOpen
+                        } else {
+                            Icon::Folder
+                        },
+                        cp_gfx::hex(0xB48CE0),
+                        false,
+                    ),
+                    Kind::Fx => (Icon::AudioLines, cp_gfx::hex(0xB48CE0), false),
                 }
             }
         }
@@ -313,8 +331,17 @@ impl Browser {
         x += s(16.0);
         let (icon, tint, filled) = self.row_icon(r);
         let isz = s(15.0);
-        g.icons
-            .draw(cv, icon, x, y + (rh - isz) * 0.5, isz as u16, tint, filled);
+        match r {
+            Row::Node(id) if matches!(self.tree.nodes[id].kind, Kind::Collection(_)) => {
+                if let Kind::Collection(n) = self.tree.nodes[id].kind {
+                    let c = cp_gfx::hex(crate::model::COLLECTION_COLORS[(n - 1) as usize]);
+                    cv.fill_circle(x + isz * 0.5, y + rh * 0.5, s(5.0), c);
+                }
+            }
+            _ => g
+                .icons
+                .draw(cv, icon, x, y + (rh - isz) * 0.5, isz as u16, tint, filled),
+        }
         x += isz + s(6.0);
         // A droite : ce qu'on sait du fichier, ou le dossier d'un resultat.
         let fs = th.font_small();
@@ -333,19 +360,34 @@ impl Browser {
             Row::Hit(k) => fmt_meta(&self.hits[k].meta),
         };
         let mut rw = 0.0;
+        if let Some(p) = self.row_path(r) {
+            let mask = self.collection_mask(p);
+            if mask != 0 {
+                let mut cx = w - s(10.0);
+                for n in (0..7).rev() {
+                    if mask & (1 << n) != 0 {
+                        let c = cp_gfx::hex(crate::model::COLLECTION_COLORS[n]);
+                        cv.fill_circle(cx, y + rh * 0.5, s(3.5), c);
+                        cx -= s(9.0);
+                    }
+                }
+                rw = w - cx - s(4.0);
+            }
+        }
         if !right.is_empty() {
-            rw = g.text.measure(fs, &right) + s(10.0);
+            let mw = g.text.measure(fs, &right) + s(10.0);
             g.text.draw_in(
                 cv,
                 fs,
-                w - rw,
+                w - rw - mw,
                 y,
-                rw - s(8.0),
+                mw - s(8.0),
                 rh,
                 &right,
                 th.text_faint,
                 Align::Right,
             );
+            rw += mw;
         }
         let avail = (w - x - rw - s(4.0)).max(0.0);
         let col = if sel {
@@ -581,7 +623,7 @@ impl Browser {
         cv.pop_clip();
     }
 
-    fn draw_status(&mut self, cv: &mut Canvas<'_>, g: &mut Gfx<'_>) {
+    fn draw_status(&mut self, cv: &mut Canvas<'_>, g: &mut Gfx<'_>, sync: Option<(f64, f64)>) {
         let th = g.th;
         let l = self.lay;
         cv.fill_rect(0.0, l.status_y, l.w, l.status_h, th.bar);
@@ -606,6 +648,9 @@ impl Browser {
                 ch,
                 fmt_time(len)
             );
+            if let Some((r, bpm)) = sync {
+                s += &format!("  ·  {bpm:.0} BPM  x{r:.3}");
+            }
             if let Some((a, b)) = self.wave.sel {
                 s += &format!(
                     "  ·  section {}  ({} samples)",

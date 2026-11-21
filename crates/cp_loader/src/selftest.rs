@@ -264,6 +264,17 @@ impl SelfTest {
                         Err(e) => self.say(false, format!("insertion : {e}")),
                     }
                 }
+                let fx = r.installed_fx();
+                self.say(
+                    !fx.is_empty(),
+                    format!(
+                        "effets installes : {} (par exemple « {} »)",
+                        fx.len(),
+                        fx.first().map_or("", |f| f.0.as_str())
+                    ),
+                );
+                let bpm = r.master_tempo();
+                self.say(bpm > 0.0, format!("tempo du projet : {bpm} BPM"));
                 self.phase = Phase::OpenUi;
             }
             Phase::OpenUi => {
@@ -347,10 +358,7 @@ impl SelfTest {
                     let docked = crate::first_view().and_then(|h| r.dock_of(h));
                     self.say(
                         docked.is_some(),
-                        format!(
-                            "le navigateur s'ancre (docker {})",
-                            docked.unwrap_or(-1)
-                        ),
+                        format!("le navigateur s'ancre (docker {})", docked.unwrap_or(-1)),
                     );
                     let h = crate::first_view().map_or(0, |h| h.0);
                     let _ = fs::write(dir().join("snap2.txt"), format!("{h}\n"));

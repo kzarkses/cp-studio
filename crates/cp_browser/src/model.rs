@@ -20,7 +20,20 @@ pub enum Kind {
     /// Une base MediaDB (`.ReaperFileList`).
     Db,
     File,
+    /// Une collection coloree (1 a 7) : les fichiers marques de sa couleur.
+    Collection(u8),
+    /// La racine des effets installes, leurs familles, un effet.
+    FxRoot,
+    FxGroup,
+    Fx,
 }
+
+/// Les couleurs des collections 1 a 7.
+pub const COLLECTION_COLORS: [u32; 7] = [
+    0xE05252, 0xE8913A, 0xE8C93A, 0x5DBB63, 0x3AB7C9, 0x4C8DFF, 0xA970E8,
+];
+pub const COLLECTION_NAMES: [&str; 7] =
+    ["Red", "Orange", "Yellow", "Green", "Cyan", "Blue", "Purple"];
 
 /// Ce que la base sait d'un fichier (lignes DATA).
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -183,6 +196,8 @@ pub struct Tree {
     pub nodes: Vec<Node>,
     pub roots: Vec<usize>,
     pub favorites: usize,
+    pub collections: [usize; 7],
+    pub fx_root: usize,
 }
 
 impl Tree {
@@ -214,6 +229,21 @@ impl Tree {
         t.favorites = fav;
         t.roots.push(fav);
         t.set_favorites(favs);
+        for i in 0..7u8 {
+            let id = t.add(Node {
+                kind: Kind::Collection(i + 1),
+                name: COLLECTION_NAMES[i as usize].to_string(),
+                path: PathBuf::new(),
+                parent: None,
+                depth: 0,
+                children: Some(Vec::new()),
+                expanded: false,
+                meta: Meta::default(),
+                error: None,
+            });
+            t.collections[i as usize] = id;
+            t.roots.push(id);
+        }
         for s in sc {
             let target = s.target.trim();
             let title = s.title.as_deref().map(str::trim);
@@ -271,7 +301,96 @@ impl Tree {
             });
             t.roots.push(id);
         }
+        let fx = t.add(Node {
+            kind: Kind::FxRoot,
+            name: "Effects".into(),
+            path: PathBuf::new(),
+            parent: None,
+            depth: 0,
+            children: None,
+            expanded: false,
+            meta: Meta::default(),
+            error: None,
+        });
+        t.fx_root = fx;
+        t.roots.push(fx);
         t
+    }
+
+    /// Les fichiers d'une collection (1 a 7).
+    pub fn set_collection(&mut self, n: u8, paths: &[PathBuf]) {
+        let root = self.collections[(n - 1) as usize];
+        let mut kids = Vec::new();
+        for p in paths {
+            let kind = if is_audio(p) { Kind::File } else { Kind::Dir };
+            let id = self.add(Node {
+                kind,
+                name: display_name(p),
+                path: p.clone(),
+                parent: Some(root),
+                depth: 1,
+                children: None,
+                expanded: false,
+                meta: Meta::default(),
+                error: None,
+            });
+            kids.push(id);
+        }
+        self.nodes[root].children = Some(kids);
+    }
+
+    /// Les effets installes, ranges par famille (« VST3 », « JS »...).
+    pub fn set_fx(&mut self, names: &[String]) {
+        let root = self.fx_root;
+        let mut groups: Vec<(String, Vec<String>)> = Vec::new();
+        for n in names {
+            let fam = n
+                .split_once(':')
+                .map_or("Other", |(a, _)| a.trim())
+                .to_string();
+            match groups.iter_mut().find(|(g, _)| *g == fam) {
+                Some((_, v)) => v.push(n.clone()),
+                None => groups.push((fam, vec![n.clone()])),
+            }
+        }
+        groups.sort_by_key(|(g, _)| g.to_lowercase());
+        let mut kids = Vec::new();
+        for (g, mut v) in groups {
+            v.sort_by_key(|x| x.to_lowercase());
+            let gid = self.add(Node {
+                kind: Kind::FxGroup,
+                name: format!("{g} ({})", v.len()),
+                path: PathBuf::new(),
+                parent: Some(root),
+                depth: 1,
+                children: None,
+                expanded: false,
+                meta: Meta::default(),
+                error: None,
+            });
+            let mut leaves = Vec::new();
+            for n in v {
+                let short = n
+                    .split_once(':')
+                    .map_or(n.as_str(), |(_, b)| b.trim())
+                    .to_string();
+                leaves.push(self.add(Node {
+                    kind: Kind::Fx,
+                    name: short,
+                    // Le nom complet sert a TrackFX_AddByName.
+                    path: PathBuf::from(n),
+                    parent: Some(gid),
+                    depth: 2,
+                    children: Some(Vec::new()),
+                    expanded: false,
+                    meta: Meta::default(),
+                    error: None,
+                }));
+            }
+            self.nodes[gid].children = Some(leaves);
+            kids.push(gid);
+        }
+        self.nodes[root].children = Some(kids);
     }
 
     /// Remplace les enfants des favoris.
@@ -298,7 +417,9 @@ impl Tree {
 
     /// Charge les enfants d'un dossier ou d'une base (une fois).
     pub fn load(&mut self, id: usize) {
-        if self.nodes[id].children.is_some() {
+        // La racine des effets est remplie par le navigateur (la liste vient
+        // de REAPER), jamais par le disque.
+        if self.nodes[id].children.is_some() || self.nodes[id].kind == Kind::FxRoot {
             return;
         }
         let (kind, path, depth) = {
@@ -390,7 +511,13 @@ impl Tree {
     pub fn is_container(&self, id: usize) -> bool {
         matches!(
             self.nodes[id].kind,
-            Kind::Dir | Kind::Drive | Kind::Db | Kind::Favorites
+            Kind::Dir
+                | Kind::Drive
+                | Kind::Db
+                | Kind::Favorites
+                | Kind::Collection(_)
+                | Kind::FxRoot
+                | Kind::FxGroup
         )
     }
 
@@ -400,6 +527,15 @@ impl Tree {
         out.clear();
         let mut stack: Vec<usize> = self.roots.iter().rev().copied().collect();
         while let Some(id) = stack.pop() {
+            // Une collection vide ne se montre pas.
+            if matches!(self.nodes[id].kind, Kind::Collection(_))
+                && self.nodes[id]
+                    .children
+                    .as_ref()
+                    .is_none_or(|k| k.is_empty())
+            {
+                continue;
+            }
             out.push(id);
             let n = &self.nodes[id];
             if n.expanded {
@@ -477,7 +613,12 @@ mod tests {
             Some(Path::new("C:\\P")),
             &[],
         );
-        let kinds: Vec<Kind> = t.roots.iter().map(|&r| t.nodes[r].kind.clone()).collect();
+        let kinds: Vec<Kind> = t
+            .roots
+            .iter()
+            .map(|&r| t.nodes[r].kind.clone())
+            .filter(|k| !matches!(k, Kind::Collection(_) | Kind::FxRoot))
+            .collect();
         assert_eq!(
             kinds,
             vec![
@@ -489,10 +630,20 @@ mod tests {
             ]
         );
         assert_eq!(
-            t.nodes[t.roots[2]].path,
+            t.nodes[*t
+                .roots
+                .iter()
+                .find(|&&r| t.nodes[r].kind == Kind::Db)
+                .unwrap()]
+            .path,
             PathBuf::from("C:\\R\\MediaDB\\00.ReaperFileList")
         );
-        assert_eq!(t.nodes[t.roots[4]].name, "DATABASES");
+        let sec = t
+            .roots
+            .iter()
+            .find(|&&r| t.nodes[r].kind == Kind::Section)
+            .unwrap();
+        assert_eq!(t.nodes[*sec].name, "DATABASES");
     }
 
     #[test]
@@ -521,7 +672,11 @@ mod tests {
             title: None,
         }];
         let mut t = Tree::from_shortcuts(&sc, Path::new("."), None, &[]);
-        let r = t.roots[1];
+        let r = *t
+            .roots
+            .iter()
+            .find(|&&r| t.nodes[r].kind == Kind::Dir)
+            .unwrap();
         t.load(r);
         t.nodes[r].expanded = true;
         let names: Vec<String> = t.nodes[r]
@@ -534,7 +689,9 @@ mod tests {
         assert_eq!(names, vec!["alpha", "Zed", "A.flac", "b.wav"]);
         let mut rows = Vec::new();
         t.rows(&mut rows);
-        assert_eq!(rows.len(), 2 + 4);
+        // Favoris, le dossier et ses 4 enfants, les effets (les collections
+        // vides ne se montrent pas).
+        assert_eq!(rows.len(), 3 + 4);
         let found = t.reveal(&root.join("Zed"));
         assert!(found.is_some());
     }

@@ -21,6 +21,10 @@ struct Fake {
     next: u32,
     inserted: Vec<(String, Option<(f64, f64)>)>,
     saved: Vec<(String, String)>,
+    /// L'item « choisi dans REAPER » : son fichier.
+    item: Option<(String, f64)>,
+    fx_added: Vec<String>,
+    rate: f64,
 }
 
 impl Fake {
@@ -31,6 +35,9 @@ impl Fake {
             next: 1,
             inserted: Vec::new(),
             saved: Vec::new(),
+            item: Some(("C:\\orig.wav".into(), 0.0)),
+            fx_added: Vec::new(),
+            rate: 1.0,
         }
     }
 
@@ -119,6 +126,31 @@ impl Host for Fake {
     }
     fn save(&mut self, key: &str, value: &str) {
         self.saved.push((key.into(), value.into()));
+    }
+    fn project_bpm(&mut self) -> f64 {
+        100.0
+    }
+    fn set_rate(&mut self, _voice: u32, rate: f64) {
+        self.rate = rate;
+    }
+    fn swap_begin(&mut self) -> Result<(String, f64), String> {
+        self.item.clone().ok_or_else(|| "no item".into())
+    }
+    fn swap(&mut self, path: &str, offset: f64) -> Result<(), String> {
+        self.item = Some((path.to_string(), offset));
+        Ok(())
+    }
+    fn installed_fx(&mut self) -> Vec<String> {
+        vec![
+            "VST3: Pro-Q 3 (FabFilter)".into(),
+            "JS: Saturation".into(),
+            "VST3: ReaEQ (Cockos)".into(),
+            "CLAP: Surge XT".into(),
+        ]
+    }
+    fn add_fx(&mut self, name: &str) -> Result<(), String> {
+        self.fx_added.push(name.to_string());
+        Ok(())
     }
 }
 
@@ -401,4 +433,74 @@ fn l_etat_survit_a_un_rechargement() {
     b2.restore_state(&s);
     assert_eq!(b2.rows.len(), rows);
     assert_eq!(b2.sel, b.sel);
+}
+
+#[test]
+fn v2_collections_hasard_echange_effets_tempo() {
+    let root = library();
+    let mut h = Fake::new();
+    let mut b = Browser::new(&shortcuts(&root), Path::new("."), None, Vec::new());
+    let data = std::env::temp_dir().join("cp_browser_data");
+    let _ = std::fs::remove_file(data.join("collections.txt"));
+    b.data_dir = Some(data.clone());
+    b.load_collections();
+    let mut sc = Screen::new(460, 560);
+    b.layout(460.0, 560.0, 1.0);
+    let fx = b
+        .rows
+        .iter()
+        .position(|&r| matches!(r, Row::Node(id) if b.tree.nodes[id].name == "FX"))
+        .unwrap();
+    b.sel = Some(fx);
+    key(&mut b, &mut h, vk::RIGHT);
+    key(&mut b, &mut h, vk::DOWN); // FX 01
+    b.tick(&mut h);
+    // Collections : 1 et 4 sur FX 01, 1 sur FX 02.
+    key(&mut b, &mut h, 0x31);
+    key(&mut b, &mut h, 0x34);
+    key(&mut b, &mut h, vk::DOWN);
+    key(&mut b, &mut h, 0x31);
+    let text = std::fs::read_to_string(data.join("collections.txt")).unwrap();
+    assert_eq!(text.lines().count(), 2, "{text}");
+    let red = b.tree.collections[0];
+    assert_eq!(b.tree.nodes[red].children.as_ref().unwrap().len(), 2);
+    // Relue a froid.
+    let mut b2 = Browser::new(&shortcuts(&root), Path::new("."), None, Vec::new());
+    b2.data_dir = Some(data.clone());
+    b2.load_collections();
+    assert_eq!(b2.collections.len(), 2);
+
+    // Le hasard : un fichier du meme dossier.
+    key(&mut b, &mut h, 0x52);
+    let p = b.selected_path_pub().unwrap();
+    assert!(p.starts_with(root.join("FX")), "{}", p.display());
+
+    // Le remplacement a chaud : Q, une fleche, Echap rend l'original.
+    key(&mut b, &mut h, 0x51);
+    assert!(b.swapping());
+    key(&mut b, &mut h, vk::UP);
+    assert_ne!(h.item.as_ref().unwrap().0, "C:\\orig.wav");
+    key(&mut b, &mut h, vk::ESCAPE);
+    assert!(!b.swapping());
+    assert_eq!(h.item.as_ref().unwrap().0, "C:\\orig.wav");
+
+    // Les effets : la racine se remplit a l'ouverture, Entree ajoute.
+    let fxr = b
+        .rows
+        .iter()
+        .position(|&r| r == Row::Node(b.tree.fx_root))
+        .unwrap();
+    b.sel = Some(fxr);
+    key(&mut b, &mut h, vk::RIGHT);
+    assert!(b.tree.nodes[b.tree.fx_root].children.is_some());
+    key(&mut b, &mut h, vk::DOWN); // CLAP (1)
+    key(&mut b, &mut h, vk::RIGHT);
+    key(&mut b, &mut h, vk::DOWN); // Surge XT
+    key(&mut b, &mut h, vk::RETURN);
+    assert_eq!(h.fx_added, vec!["CLAP: Surge XT".to_string()]);
+    sc.shot(&mut b, &mut h, "5_v2");
+
+    // Le tempo : un fichier « 120 bpm » joue a 100/120 dans un projet a 100.
+    assert_eq!(v2::bpm_from_name("Loop 120 bpm.wav"), Some(120.0));
+    assert!((v2::sync_rate(120.0, 100.0).unwrap() - 100.0 / 120.0).abs() < 1e-12);
 }
