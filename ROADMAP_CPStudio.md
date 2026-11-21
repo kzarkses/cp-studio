@@ -49,7 +49,16 @@ Ce que ces mots veulent dire, en critères :
 | ✅ Le cœur du moteur audio : voix, colonnes, vivier, horloge | 2026-11-21 | identique au bit à l'ancien C++ (10 scénarios, 300 graines de fuzz) |
 | ✅ La première application est choisie : le navigateur de fichiers | 2026-11-21 | décision de Cedric |
 | ✅ A1 : le moteur branché dans REAPER (aperçu matériel permanent, crochet, décodage par REAPER, pics) | 2026-11-21 | `cargo xtask reaper-test` dans le vrai REAPER : deux WAV relus au bit près, aperçu tiré une fois par bloc, aucun compteur de perte, 0,18 % du fil audio pour 3 voix |
-| ▶ **En cours : le jalon 1** (le navigateur utilisable) : B1, B2, B5, B7, puis la suite, en autonomie complète | | |
+| ✅ B1 (en partie) : fenêtres flottantes ou ancrées, clavier des fenêtres ancrées (crochet « accelerator » + dernier clic), double-clic | 2026-11-21 | auto-test : le navigateur s'ancre dans un docker et en revient ; reste : screensets, DPI par écran testé |
+| ✅ B2 (base) : `cp_gfx`, rastériseur à couverture exacte, chemins, Bézier, traits, dégradés, transparence, découpage au pixel | 2026-11-21 | vérités géométriques (disque = πr², rectangle fractionnaire = son aire), planches PNG |
+| ✅ B3 (base) : texte par GDI, cache de glyphes, mesure, « … » | 2026-11-21 | captures du vrai REAPER |
+| ✅ B4 (base) : icônes Lucide en vecteur (SVG avec arcs) | 2026-11-21 | test : chaque icône se dessine dans son carré |
+| ✅ B5 (base) : horloge calée sur l'écran (DwmFlush), images sautées comptées | 2026-11-21 | vrai REAPER : 120 Hz mesurés, 0 image en retard ; une image = 2,1 ms ; reste : ne repeindre que ce qui change |
+| ✅ B7 (base) : mesures à l'écran (temps d'image, cadence, images sautées) | 2026-11-21 | action « Performance overlay » |
+| ✅ A2 (base) : écoute en flux (jouable dès la première seconde décodée), pics à plusieurs résolutions | 2026-11-21 | tests ; limite 1,5 Go par fichier (23 min stéréo 48 kHz) ; reste : le vrai flux disque pour les fichiers de plusieurs heures |
+| ✅ A3 (premier critère) : une section de N échantillons rend N échantillons, N de 1 à 4096 | 2026-11-21 | test `cp_audio` |
+| ✅ Le navigateur V1 : arbre des raccourcis, en-têtes collés empilés, écoute au relâchement, forme d'onde à tout zoom (64 px par échantillon), section, insertion et glisser-déposer avec section, recherche (noms + MediaDB), favoris, clavier, ancrable | 2026-11-21 | tests avec le vrai moteur et les vraies polices ; vrai REAPER (insertion exacte, fenêtre, ancrage) |
+| ▶ **En cours : le navigateur V2** (collections, hasard, calage au tempo, remplacement à chaud, effets), puis le retour de Cedric | | |
 
 **Le but immédiat est le jalon 1** (voir plus bas) : un navigateur de fichiers
 complet et utilisable au quotidien. Il fait tourner ensemble les deux moteurs,

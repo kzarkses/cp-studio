@@ -29,6 +29,9 @@ est fait, tout ce qui reste, dans l'ordre, avec un critere de fin par etape).
 | `cp_engine` | le moteur audio (voix, ports, vivier, horloge), en Rust sur, sans REAPER |
 | `cp_audio` | le moteur DANS REAPER : apercu permanent par port, crochet de bloc, decodage des fichiers par REAPER sur un fil de travail, pics de forme d'onde |
 | `cp_oracle` | l'ancien moteur C++ compile en DLL, pour comparer `cp_engine` a lui, et le programme C++ qui verifie nos tables virtuelles contre le SDK (tests seulement) |
+| `cp_gfx` | le moteur de dessin : rasteriseur a couverture exacte, chemins, texte (cache de glyphes), PNG, sans Windows |
+| `cp_ui` | le toolkit : theme, evenements, icones Lucide (SVG), champ de saisie, defilement |
+| `cp_browser` | le navigateur de fichiers (jalon 1), sans Windows : il se teste avec le vrai moteur et se dessine en PNG |
 | `cp_hot` | le rechargement a chaud : surveiller, copier, charger, passer l'etat |
 | `cp_loader` | `reaper_cp_studio.dll`, la petite DLL FIXE que REAPER charge au demarrage |
 | `cp_module` | `cp_module.dll`, tout le code de CP Studio, recharge a chaud |
@@ -112,8 +115,18 @@ refuse. Changer le moteur = reinstaller le chargeur, REAPER ferme.
   etats publies. Des scenarios par comportement, plus 300 graines de fuzz. Il a
   ete verifie qu'il mord : un ordre de multiplication change (1 ULP) et un
   fondu de 4 ms au lieu de 5 sont tous deux attrapes.
-- Ils ne prouvent ni l'ecran ni l'oreille. C'est Cedric qui regarde et qui
-  ecoute.
+- `cargo xtask reaper-test` : le VRAI REAPER, lance depuis un dossier vide
+  avec `CP_STUDIO_SELFTEST=quit`, en silence (gain 0). Il relit deux WAV par
+  REAPER au bit pres, fait tourner le moteur (compteurs de pertes), pose une
+  section dans le projet vide, ouvre le navigateur, mesure la cadence de
+  l'ecran et les images en retard, l'ancre puis le rend flottant, photographie
+  ses fenetres dans `%TEMP%\cp_selftest`. REAPER doit etre ferme. A lancer
+  apres chaque changement du chargeur. (REAPER ne se ferme pas seul a la fin :
+  une autre extension avorte a la sortie, meme sans la notre ; xtask l'arrete.)
+- `cp_browser` : ses tests ecrivent des PNG (`%TEMP%\cp_browser_*.png`) :
+  les REGARDER apres un changement de dessin.
+- Ils ne prouvent ni l'oreille ni le geste reel (glisser-deposer, clavier dans
+  un docker). C'est Cedric qui ecoute et qui manipule.
 
 ## 5 bis. Le portage du moteur audio
 
