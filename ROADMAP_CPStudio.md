@@ -63,6 +63,7 @@ Ce que ces mots veulent dire, en critères :
 | ✅ Premier retour de Cedric : « stable et fonctionnel, barebone mais c'est là », sauf un gel de REAPER en mode ancré | 2026-11-21 | gel trouvé et corrigé à la racine (voir B5), l'auto-test mesure désormais ce cas |
 | ✅ Les places natives (ABI 6) : une vue de CP Studio à la place d'une vue de REAPER (l'arrangement, le transport), tenue et rendue par la DLL fixe | 2026-11-22 | vrai REAPER : CP Transport posé sur le transport natif masqué (2560 × 36 en 0,0) et lui cède la place quand Cédric le rallume ; le navigateur à la place de l'arrangement (2557 × 1310), clavier, rechargement à chaud, Arrange / Browser |
 | ✅ CP Transport : transport, compteur, tempo (glisser, molette, saisie), signature, Tap, métronome, vitesse, icônes d'actions (ajouter par la liste des actions de REAPER, retirer, déplacer), sélecteur de vues avec la place de chaque vue | 2026-11-22 | 6 tests et planches PNG ; démarre seul avec REAPER |
+| ✅ CP Guitar Tab en Rust : l'item choisi devient une piste MIDI (pour comparer à l'oreille) et une partition MusicXML (portée et tablature, rythme calé sur le tempo du projet), ouverte dans MuseScore ; icône dans CP Transport | 2026-11-22 | réseau à 3,8e-5 d'onnxruntime ; vrai REAPER : un riff de 8 noires retrouvé note pour note en 0,5 s |
 | ▶ **Maintenant : le jalon 1 à l'usage.** Cedric s'en sert au quotidien ; on corrige et on polit à partir de ses retours. Ensuite, le choix de l'application suivante | | |
 
 **Le but immédiat est le jalon 1** (voir plus bas) : un navigateur de fichiers
@@ -471,7 +472,7 @@ REAPER, et en fait un vrai retour.
 | FX Constellation | moteur de modulation, pad, graphe, liens | mémoires `project-fx-constellation-refonte`, `project-moteur-modulation-plan`, `ROADMAP_FXConstellation.md` |
 | Séquenceur / Sound Gen | séquenceur à la Pigments, synthé JSFX | mémoires `project-sequenceur`, `project-soundgen-modulation`, `ROADMAP_Sequenceur.md` |
 | Vidéo | caméra, stop motion, calage par le son | mémoire `project-video`, `ROADMAP_Video.md` |
-| Guitar Tab | audio → tablature dans MuseScore | ce dossier n'existe pas encore ; le portage de Basic Pitch est dans la transcription du 2026-11-20 |
+| Guitar Tab | audio → tablature dans MuseScore | **construit le 2026-11-22** (`cp_tab`) ; à venir : liés (hammer-on, pull-off), bends écrits, triolets, accordages, réglage de sensibilité |
 | ChordLab, PaintSynth, barres d'outils… | les plus petits outils | mémoires et anciennes ROADMAP |
 
 Pour chaque application, une ROADMAP à elle (`ROADMAP_<Nom>.md`) sera écrite au

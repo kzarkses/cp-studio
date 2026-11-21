@@ -32,6 +32,7 @@ est fait, tout ce qui reste, dans l'ordre, avec un critere de fin par etape).
 | `cp_gfx` | le moteur de dessin : rasteriseur a couverture exacte, chemins, texte (cache de glyphes), PNG, sans Windows |
 | `cp_ui` | le toolkit : theme, evenements, icones Lucide (SVG), champ de saisie, defilement |
 | `cp_browser` | le navigateur de fichiers (jalon 1), sans Windows : il se teste avec le vrai moteur et se dessine en PNG |
+| `cp_tab` | CP Guitar Tab : Basic Pitch (reseau, poids Apache-2.0 dans `src/bp_weights.bin`, voir NOTICE), decodage des notes, reechantillonnage, doigte, MusicXML ; teste contre onnxruntime (`tools/make_fixture.py`) |
 | `cp_transport` | CP Transport, la barre qui remplace le transport de REAPER (transport, compteur, tempo, icones d'actions, selecteur de vues), sans Windows : chaque geste rend une `Act` |
 | `cp_hot` | le rechargement a chaud : surveiller, copier, charger, passer l'etat |
 | `cp_loader` | `reaper_cp_studio.dll`, la petite DLL FIXE que REAPER charge au demarrage |
@@ -141,6 +142,11 @@ refuse. Changer le moteur = reinstaller le chargeur, REAPER ferme.
 - `cp_browser` : ses tests ecrivent des PNG (`%TEMP%\cp_browser_*.png`) :
   les REGARDER apres un changement de dessin. Idem `cp_transport`
   (`%TEMP%\cp_transport_*.png`).
+- `cp_tab` : le reseau contre le VRAI modele (onnxruntime) a 1e-4 pres, les
+  notes d'un signal connu, le reechantillonnage (hauteur, amplitude, pas de
+  repliement), le doigte, les mesures du MusicXML. Regenerer la reference :
+  un venv avec `onnx onnxruntime numpy`, `nmp.onnx` de spotify/basic-pitch,
+  puis `tools/make_fixture.py` (jamais dans le depot comme dossier courant).
 - Un echec « apercus tires 0 fois » avec une boite « Error opening devices »
   sur la photo : l'interface audio de Cedric est eteinte (ASIO), ce n'est pas
   le code.
