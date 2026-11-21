@@ -415,6 +415,8 @@ impl App {
                 qn0: r.time_to_qn(a),
                 qn1: r.time_to_qn(b),
                 pitch: n.pitch,
+                // Sans attaque : l'astuce melodia, une note liee.
+                legato: n.peak == 0.0,
             })
             .collect();
         let set = self.gtab_settings();

@@ -240,26 +240,31 @@ fn la_partition_tient_dans_ses_mesures() {
             qn0: 8.0,
             qn1: 9.0,
             pitch: 52,
+            legato: false,
         },
         TabNote {
             qn0: 9.02,
             qn1: 9.74,
             pitch: 55,
+            legato: false,
         },
         TabNote {
             qn0: 11.0,
             qn1: 13.5,
             pitch: 45,
+            legato: false,
         },
         TabNote {
             qn0: 11.0,
             qn1: 13.5,
             pitch: 52,
+            legato: false,
         },
         TabNote {
             qn0: 13.5,
             qn1: 14.0,
             pitch: 28,
+            legato: false,
         },
     ];
     let (xml, st) = musicxml(&notes, &spec);
@@ -282,4 +287,36 @@ fn la_partition_tient_dans_ses_mesures() {
         xml.matches("<note>").count(),
         xml.matches("</note>").count()
     );
+}
+
+#[test]
+fn un_marteau_et_un_tire_s_ecrivent_sur_la_meme_corde() {
+    let spec = ScoreSpec {
+        title: "legato".into(),
+        origin_qn: 0.0,
+        sig: (4, 4),
+        bpm: 100.0,
+        grid: 4,
+        tuning: Tuning::standard(),
+    };
+    // G3 (corde de sol a vide) puis A3 sans attaque (marteau), puis G3 sans
+    // attaque (tire) ; enfin une note attaquee (pas de lie).
+    let n = |q: f64, p: i32, legato: bool| TabNote {
+        qn0: q,
+        qn1: q + 0.5,
+        pitch: p,
+        legato,
+    };
+    let notes = vec![
+        n(0.0, 55, false),
+        n(0.5, 57, true),
+        n(1.0, 55, true),
+        n(1.5, 57, false),
+    ];
+    let (xml, st) = musicxml(&notes, &spec);
+    assert_eq!(st.legato, 2);
+    assert!(xml.contains("<hammer-on number=\"1\" type=\"start\">H</hammer-on>"));
+    assert!(xml.contains("<hammer-on number=\"1\" type=\"stop\"/>"));
+    assert!(xml.contains("<pull-off number=\"1\" type=\"start\">P</pull-off>"));
+    assert_eq!(xml.matches("<slur type=\"start\"").count(), 2 * 2);
 }

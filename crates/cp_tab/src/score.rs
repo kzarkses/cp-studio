@@ -13,6 +13,10 @@
 //! - Le MusicXML : une partie, deux portees -- la portee standard (clef de sol
 //!   octaviee, les hauteurs REELLES) et la tablature (6 lignes, l'accordage),
 //!   ou chaque note porte sa corde et sa case.
+//! - Les LIES : une note sans attaque (`legato`, l'astuce melodia de Basic
+//!   Pitch) qui suit la precedente sans silence, sur la meme corde, est un
+//!   marteau (plus haute) ou un tire (plus basse) : une liaison, et « H » ou
+//!   « P » sur la tablature.
 
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
@@ -25,6 +29,8 @@ pub struct TabNote {
     pub qn0: f64,
     pub qn1: f64,
     pub pitch: i32,
+    /// Jouee sans attaque (liee a la precedente).
+    pub legato: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -48,6 +54,8 @@ pub struct Stats {
     pub measures: usize,
     /// Notes qui ne se jouent pas (trop de notes ensemble) : absentes.
     pub dropped: usize,
+    /// Lies ecrits (marteaux et tires).
+    pub legato: usize,
 }
 
 /// Un evenement de la voix : un accord ou un silence.
@@ -57,6 +65,11 @@ struct Ev {
     dur: i64,
     /// (hauteur, place) ; vide = silence.
     notes: Vec<(i32, Spot)>,
+    legato: bool,
+    /// Le lie qui part de cette note, et celui qui y arrive
+    /// (« hammer-on » ou « pull-off »).
+    lig_start: Option<&'static str>,
+    lig_stop: Option<&'static str>,
 }
 
 const NAMES: [(&str, i32); 12] = [
@@ -141,7 +154,7 @@ pub fn musicxml(notes: &[TabNote], spec: &ScoreSpec) -> (String, Stats) {
     let tuning = &spec.tuning;
     let mut stats = Stats::default();
     // 1. Le rythme, sur la grille.
-    let mut groups: BTreeMap<i64, Vec<(i32, i64)>> = BTreeMap::new();
+    let mut groups: BTreeMap<i64, Vec<(i32, i64, bool)>> = BTreeMap::new();
     for n in notes {
         let s = ((n.qn0 - spec.origin_qn) * g as f64).round() as i64;
         let e = (((n.qn1 - spec.origin_qn) * g as f64).round() as i64).max(s + 1);
@@ -152,8 +165,9 @@ pub fn musicxml(notes: &[TabNote], spec: &ScoreSpec) -> (String, Stats) {
         let gr = groups.entry(s).or_default();
         if let Some(x) = gr.iter_mut().find(|x| x.0 == p) {
             x.1 = x.1.max(e);
+            x.2 &= n.legato;
         } else {
-            gr.push((p, e));
+            gr.push((p, e, n.legato));
         }
     }
     // 2. Le doigte, sur toute la phrase.
@@ -184,6 +198,9 @@ pub fn musicxml(notes: &[TabNote], spec: &ScoreSpec) -> (String, Stats) {
                 start: t,
                 dur: s - t,
                 notes: Vec::new(),
+                legato: false,
+                lig_start: None,
+                lig_stop: None,
             });
         }
         let next = starts.get(i + 1).copied().unwrap_or(i64::MAX);
@@ -195,29 +212,46 @@ pub fn musicxml(notes: &[TabNote], spec: &ScoreSpec) -> (String, Stats) {
             .min(next)
             .max(s + 1);
         let mut chord: Vec<(i32, Spot)> = Vec::new();
-        for (k, &(p, _)) in gr.iter().enumerate() {
+        for (k, &(p, _, _)) in gr.iter().enumerate() {
             match spots[i].get(k).copied().flatten() {
                 Some(sp) => chord.push((p, sp)),
                 None => stats.dropped += 1,
             }
         }
         chord.sort_by_key(|x| x.0);
-        if chord.is_empty() {
-            evs.push(Ev {
-                start: s,
-                dur: end - s,
-                notes: Vec::new(),
-            });
-        } else {
+        let legato = gr.len() == 1 && gr[0].2;
+        if !chord.is_empty() {
             stats.notes += chord.len();
             stats.chords += 1;
-            evs.push(Ev {
-                start: s,
-                dur: end - s,
-                notes: chord,
-            });
         }
+        evs.push(Ev {
+            start: s,
+            dur: end - s,
+            notes: chord,
+            legato,
+            lig_start: None,
+            lig_stop: None,
+        });
         t = end;
+    }
+    // Les lies : une note seule, sans attaque, collee a la note seule qui la
+    // precede sur la meme corde.
+    for i in 1..evs.len() {
+        let (a, b) = (&evs[i - 1], &evs[i]);
+        if !b.legato || a.notes.len() != 1 || b.notes.len() != 1 {
+            continue;
+        }
+        if a.start + a.dur != b.start {
+            continue;
+        }
+        let ((pa, sa), (pb, sb)) = (a.notes[0], b.notes[0]);
+        if sa.string != sb.string || pa == pb {
+            continue;
+        }
+        let kind = if pb > pa { "hammer-on" } else { "pull-off" };
+        evs[i - 1].lig_start = Some(kind);
+        evs[i].lig_stop = Some(kind);
+        stats.legato += 1;
     }
     // 4. Les mesures (la derniere completee d'un silence).
     let mlen = (spec.sig.0.max(1) as i64 * g * 4 / spec.sig.1.max(1) as i64).max(1);
@@ -228,6 +262,9 @@ pub fn musicxml(notes: &[TabNote], spec: &ScoreSpec) -> (String, Stats) {
             start: t,
             dur: nmeas * mlen - t,
             notes: Vec::new(),
+            legato: false,
+            lig_start: None,
+            lig_stop: None,
         });
     }
     stats.measures = nmeas as usize;
@@ -342,13 +379,36 @@ pub fn musicxml(notes: &[TabNote], spec: &ScoreSpec) -> (String, Stats) {
                         if tie_start {
                             nots += "<tied type=\"start\"/>";
                         }
+                        // Le lie arrive sur la premiere partie de la note et
+                        // part de la derniere.
+                        let lstop = ev.lig_stop.filter(|_| pi == 0 && a == ev.start);
+                        let lstart = ev
+                            .lig_start
+                            .filter(|_| pi + 1 == n && b == ev.start + ev.dur);
+                        if lstop.is_some() {
+                            nots += "<slur type=\"stop\" number=\"1\"/>";
+                        }
+                        if lstart.is_some() {
+                            nots += "<slur type=\"start\" number=\"1\"/>";
+                        }
                         if staff == 2 {
-                            let _ = write!(
-                                nots,
-                                "<technical><string>{}</string><fret>{}</fret></technical>",
+                            let mut tech = format!(
+                                "<string>{}</string><fret>{}</fret>",
                                 nstr - sp.string,
                                 sp.fret
                             );
+                            let mark = |k: &str| if k == "hammer-on" { "H" } else { "P" };
+                            if let Some(k) = lstop {
+                                let _ = write!(tech, "<{k} number=\"1\" type=\"stop\"/>");
+                            }
+                            if let Some(k) = lstart {
+                                let _ = write!(
+                                    tech,
+                                    "<{k} number=\"1\" type=\"start\">{}</{k}>",
+                                    mark(k)
+                                );
+                            }
+                            let _ = write!(nots, "<technical>{tech}</technical>");
                         }
                         if !nots.is_empty() {
                             let _ = write!(x, "<notations>{nots}</notations>");
