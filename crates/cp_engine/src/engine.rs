@@ -176,9 +176,7 @@ impl Ctl {
     /// Le taux est une entree, pas une constante : REAPER peut changer de
     /// peripherique sous nos pieds.
     pub fn set_srate(&self, srate: f64) {
-        if srate > 1.0 {
-            self.core.srate.store(srate.to_bits(), Release);
-        }
+        self.core.set_srate(srate);
     }
 
     fn post(&mut self, port: usize, c: Cmd) -> bool {
@@ -223,6 +221,11 @@ impl Ctl {
     /// commande ulterieure portant l'ancien handle est refusee a la frontiere.
     /// L'emplacement reste possede jusqu'a ce que le fil audio l'ait eteint.
     pub fn voice_release(&mut self, h: VoiceH) {
+        self.voice_release_with(h, 0.005);
+    }
+
+    /// Comme [`Ctl::voice_release`], avec un fondu de sortie choisi (secondes).
+    pub fn voice_release_with(&mut self, h: VoiceH, fade_s: f64) {
         if !self.core.voice_valid(h) {
             return;
         }
@@ -235,7 +238,7 @@ impl Ctl {
                 local,
                 gen_: h.generation(),
                 new_gen: ng,
-                fade_s: 0.005,
+                fade_s,
             },
         );
     }
@@ -302,6 +305,13 @@ impl Ctl {
 }
 
 impl Core {
+    /// Le taux du peripherique. Appelable depuis le fil audio (le crochet le
+    /// lit a chaque bloc) : une simple ecriture atomique.
+    pub fn set_srate(&self, srate: f64) {
+        if srate > 1.0 && srate != self.srate() {
+            self.srate.store(srate.to_bits(), Release);
+        }
+    }
     pub fn srate(&self) -> f64 {
         f64::from_bits(self.srate.load(Acquire))
     }

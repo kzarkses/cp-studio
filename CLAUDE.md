@@ -27,7 +27,8 @@ est fait, tout ce qui reste, dans l'ordre, avec un critere de fin par etape).
 | `cp_abi` | le contrat binaire entre le chargeur et le module (la SEULE frontiere binaire) |
 | `cp_sys` | la seule porte vers REAPER et Windows, et les primitives temps reel (`rt`) : tout le code `unsafe` est ici |
 | `cp_engine` | le moteur audio (voix, ports, vivier, horloge), en Rust sur, sans REAPER |
-| `cp_oracle` | l'ancien moteur C++ compile en DLL, pour comparer `cp_engine` a lui (tests seulement) |
+| `cp_audio` | le moteur DANS REAPER : apercu permanent par port, crochet de bloc, decodage des fichiers par REAPER sur un fil de travail, pics de forme d'onde |
+| `cp_oracle` | l'ancien moteur C++ compile en DLL, pour comparer `cp_engine` a lui, et le programme C++ qui verifie nos tables virtuelles contre le SDK (tests seulement) |
 | `cp_hot` | le rechargement a chaud : surveiller, copier, charger, passer l'etat |
 | `cp_loader` | `reaper_cp_studio.dll`, la petite DLL FIXE que REAPER charge au demarrage |
 | `cp_module` | `cp_module.dll`, tout le code de CP Studio, recharge a chaud |
@@ -37,6 +38,11 @@ est fait, tout ce qui reste, dans l'ordre, avec un critere de fin par etape).
 Le chargeur tient TOUT ce que REAPER et Windows connaissent (battement,
 actions, classe de fenetre, fenetres) et le transmet au module courant. Les
 fenetres survivent donc a un rechargement, et le nouveau code les repeint.
+
+Le moteur audio vit dans le chargeur (`cp_audio`) : une retouche du module ne
+coupe jamais le son. Le module le pilote par `HostApi::audio` (ABI 2) avec des
+entiers a generation (clips, voix) : 0 n'est jamais valide, un handle perime est
+refuse. Changer le moteur = reinstaller le chargeur, REAPER ferme.
 
 ## 3. Les regles non negociables
 
@@ -89,6 +95,18 @@ fenetres survivent donc a un rechargement, et le nouveau code les repeint.
 - `cp_sys/tests/fake_reaper.rs` : le VRAI `reaper_cp_studio.dll` charge par un
   faux REAPER avec les structures exactes du SDK : version refusee,
   enregistrements, actions, rechargement par le battement, fermeture.
+- `cp_sys/tests/fake_reaper.rs` joue aussi le FIL AUDIO de REAPER : crochet
+  « pre », chaque apercu tire sa source par la table virtuelle, crochet
+  « post ». La boucle de test s'y repete exactement, aucun compteur de perte ne
+  bouge.
+- `cp_oracle/tests/pcm_abi.rs` : un programme C++ compile contre le SDK appelle
+  notre `PCM_source` par ses methodes C++, nous tend une source C++ que nous
+  appelons par notre table, et donne la disposition des structures
+  (`PCM_source_transfer_t`, `preview_register_t`, `audio_hook_register_t`).
+  Le SDK est cherche dans `$REAPER_SDK`, sinon `../reaper-sdk/sdk`.
+- `cp_audio` : a vitesse 1 la sortie est la matiere au bit pres, une section
+  joue exactement sa matiere, le decodage rend chaque echantillon a sa place,
+  les pics encadrent le vrai min/max a tout zoom.
 - `cp_oracle/tests/differential.rs` : `cp_engine` contre l'ancien moteur C++,
   sur les memes commandes. Sorties IDENTIQUES AU BIT, memes dates de bloc, memes
   etats publies. Des scenarios par comportement, plus 300 graines de fuzz. Il a
@@ -111,9 +129,11 @@ fenetres survivent donc a un rechargement, et le nouveau code les repeint.
   Les lectures sont bornees au tampon (l'ancien C++ lisait hors du tampon sur
   une position negative).
 - Pas encore porte : les lanes MIDI (`cp_lanes.cpp` est incomplet, l'oracle
-  utilise un bouchon), la clock externe, et tout le cote REAPER (la source
-  audio maison jouee en apercu permanent, le crochet audio, le decodage des
-  fichiers).
+  utilise un bouchon) et la clock externe.
+- Le cote REAPER (`cp_audio`, A1) : un apercu MATERIEL (`PlayPreviewEx`, sortie
+  1/2) par port, jamais arrete. Pas un apercu de piste : il passerait par le
+  rendu anticipe de REAPER, en avance et par gros blocs, et l'horloge du
+  crochet ne serait plus celle du bloc tire.
 
 ## 6. Travailler avec Cedric
 

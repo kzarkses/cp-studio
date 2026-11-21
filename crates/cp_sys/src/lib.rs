@@ -11,13 +11,18 @@
 //! - [`module`] : cote module, la table offerte au chargeur et la macro
 //!   [`export_module!`].
 //! - [`rt`] : les primitives temps reel (l'anneau sans verrou du fil audio).
+//! - [`pcm`] : `PCM_source` dans les deux sens (notre source tiree par REAPER,
+//!   une source de REAPER lue par nous).
+//! - [`audio`] : le crochet de bloc, l'apercu permanent, l'ouverture de fichiers.
 
 pub use cp_abi as abi;
 
+pub mod audio;
 pub mod dylib;
 pub mod guard;
 pub mod host;
 pub mod module;
+pub mod pcm;
 pub mod reaper;
 pub mod rt;
 pub mod win;

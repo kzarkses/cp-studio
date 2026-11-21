@@ -7,7 +7,7 @@ use std::ffi::{CStr, c_char, c_void};
 use std::ptr::null_mut;
 use std::sync::OnceLock;
 
-use cp_abi::{ABI, HostApi};
+use cp_abi::{ABI, AudioApi, ClipInfo, HostApi, LOAD_FAILED, LOAD_PENDING, LOAD_READY};
 
 use crate::guard;
 
@@ -22,6 +22,59 @@ pub trait Host: Send + Sync {
     fn create_window(&self, kind: u32, title: &str, w: i32, h: i32) -> isize;
     fn store_state(&self, data: &[u8]);
     fn generation(&self) -> u32;
+
+    // --- le moteur audio (par defaut : absent)
+    fn audio_load(&self, _path: &str) -> u32 {
+        0
+    }
+    fn audio_poll(&self, _ticket: u32) -> AudioLoad {
+        AudioLoad::Failed("no audio engine".into())
+    }
+    fn audio_info(&self, _clip: u32) -> Option<ClipInfo> {
+        None
+    }
+    fn audio_release(&self, _clip: u32) {}
+    #[allow(clippy::too_many_arguments)]
+    fn audio_peaks(
+        &self,
+        _clip: u32,
+        _ch: Option<usize>,
+        _start: f64,
+        _fpp: f64,
+        _min: &mut [f32],
+        _max: &mut [f32],
+    ) -> usize {
+        0
+    }
+    fn audio_play(
+        &self,
+        _port: u32,
+        _clip: u32,
+        _start: i64,
+        _end: i64,
+        _looped: bool,
+        _gain: f64,
+    ) -> u32 {
+        0
+    }
+    fn audio_stop(&self, _voice: u32, _fade_s: f64) {}
+    fn audio_voice(&self, _voice: u32) -> Option<(f64, i32)> {
+        None
+    }
+    fn audio_set(&self, _voice: u32, _param: u32, _value: f64) -> bool {
+        false
+    }
+    fn audio_srate(&self) -> f64 {
+        0.0
+    }
+}
+
+/// Ou en est un chargement de fichier.
+#[derive(Clone, Debug, PartialEq)]
+pub enum AudioLoad {
+    Pending,
+    Ready(u32),
+    Failed(String),
 }
 
 static IMPL: OnceLock<Box<dyn Host>> = OnceLock::new();
@@ -34,6 +87,18 @@ static API: HostApi = HostApi {
     create_window: t_create_window,
     store_state: t_store_state,
     generation: t_generation,
+    audio: AudioApi {
+        load: a_load,
+        poll: a_poll,
+        info: a_info,
+        release: a_release,
+        peaks: a_peaks,
+        play: a_play,
+        stop: a_stop,
+        voice: a_voice,
+        set: a_set,
+        srate: a_srate,
+    },
 };
 
 /// Installe l'implementation (une seule par processus ; un second appel est
@@ -114,4 +179,125 @@ extern "C" fn t_store_state(data: *const u8, len: usize) {
 
 extern "C" fn t_generation() -> u32 {
     guard(|| IMPL.get().map_or(0, |h| h.generation())).unwrap_or(0)
+}
+
+// ---------------------------------------------------------------------------
+// Le moteur audio
+// ---------------------------------------------------------------------------
+
+fn with<T>(default: T, f: impl FnOnce(&dyn Host) -> T) -> T {
+    match IMPL.get() {
+        Some(h) => guard(|| f(h.as_ref())).unwrap_or(default),
+        None => default,
+    }
+}
+
+extern "C" fn a_load(path: *const u8, len: usize) -> u32 {
+    // SAFETY: tranche valide pendant l'appel.
+    let p = unsafe { bytes(path, len) };
+    with(0, |h| h.audio_load(&String::from_utf8_lossy(p)))
+}
+
+extern "C" fn a_poll(
+    ticket: u32,
+    clip: *mut u32,
+    err: *mut u8,
+    cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    match with(AudioLoad::Failed("panic".into()), |h| h.audio_poll(ticket)) {
+        AudioLoad::Pending => LOAD_PENDING,
+        AudioLoad::Ready(c) => {
+            if !clip.is_null() {
+                // SAFETY: le module passe l'adresse d'un u32 a lui.
+                unsafe { *clip = c };
+            }
+            LOAD_READY
+        }
+        AudioLoad::Failed(e) => {
+            let b = e.as_bytes();
+            let n = b.len().min(cap);
+            if !err.is_null() && n > 0 {
+                // SAFETY: le module passe `cap` octets inscriptibles.
+                unsafe { std::ptr::copy_nonoverlapping(b.as_ptr(), err, n) };
+            }
+            if !err_len.is_null() {
+                // SAFETY: l'adresse d'un usize du module.
+                unsafe { *err_len = n };
+            }
+            LOAD_FAILED
+        }
+    }
+}
+
+extern "C" fn a_info(clip: u32, out: *mut ClipInfo) -> i32 {
+    match with(None, |h| h.audio_info(clip)) {
+        Some(i) => {
+            if !out.is_null() {
+                // SAFETY: l'adresse d'un ClipInfo du module.
+                unsafe { *out = i };
+            }
+            1
+        }
+        None => 0,
+    }
+}
+
+extern "C" fn a_release(clip: u32) {
+    with((), |h| h.audio_release(clip));
+}
+
+extern "C" fn a_peaks(
+    clip: u32,
+    ch: i32,
+    start: f64,
+    fpp: f64,
+    n: usize,
+    min: *mut f32,
+    max: *mut f32,
+) -> usize {
+    if min.is_null() || max.is_null() || n == 0 {
+        return 0;
+    }
+    // SAFETY: le module passe deux tableaux distincts de `n` f32, a lui,
+    // pendant l'appel.
+    let (lo, hi) = unsafe {
+        (
+            std::slice::from_raw_parts_mut(min, n),
+            std::slice::from_raw_parts_mut(max, n),
+        )
+    };
+    let c = usize::try_from(ch).ok();
+    with(0, |h| h.audio_peaks(clip, c, start, fpp, lo, hi))
+}
+
+extern "C" fn a_play(port: u32, clip: u32, start: i64, end: i64, looped: i32, gain: f64) -> u32 {
+    with(0, |h| {
+        h.audio_play(port, clip, start, end, looped != 0, gain)
+    })
+}
+
+extern "C" fn a_stop(voice: u32, fade_s: f64) {
+    with((), |h| h.audio_stop(voice, fade_s));
+}
+
+extern "C" fn a_voice(voice: u32, pos: *mut f64) -> i32 {
+    match with(None, |h| h.audio_voice(voice)) {
+        Some((p, st)) => {
+            if !pos.is_null() {
+                // SAFETY: l'adresse d'un f64 du module.
+                unsafe { *pos = p };
+            }
+            st
+        }
+        None => -1,
+    }
+}
+
+extern "C" fn a_set(voice: u32, param: u32, value: f64) -> i32 {
+    with(false, |h| h.audio_set(voice, param, value)) as i32
+}
+
+extern "C" fn a_srate() -> f64 {
+    with(0.0, |h| h.audio_srate())
 }

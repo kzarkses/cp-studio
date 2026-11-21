@@ -13,6 +13,8 @@ crate-type = ["cdylib"]
 
 [dependencies]
 cp_abi = { path = "../cp_abi" }
+cp_audio = { path = "../cp_audio" }
+cp_engine = { path = "../cp_engine" }
 cp_hot = { path = "../cp_hot" }
 cp_sys = { path = "../cp_sys" }
 

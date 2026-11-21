@@ -7,6 +7,14 @@ name = "cp_abi"
 version = "0.1.0"
 
 [[package]]
+name = "cp_audio"
+version = "0.1.0"
+dependencies = [
+ "cp_engine",
+ "cp_sys",
+]
+
+[[package]]
 name = "cp_engine"
 version = "0.1.0"
 dependencies = [
@@ -33,6 +41,8 @@ name = "cp_loader"
 version = "0.1.0"
 dependencies = [
  "cp_abi",
+ "cp_audio",
+ "cp_engine",
  "cp_hot",
  "cp_sys",
 ]
@@ -49,6 +59,7 @@ name = "cp_oracle"
 version = "0.1.0"
 dependencies = [
  "cp_engine",
+ "cp_sys",
 ]
 
 [[package]]

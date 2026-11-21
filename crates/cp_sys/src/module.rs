@@ -14,7 +14,12 @@
 use std::ffi::{CStr, c_void};
 use std::sync::{Mutex, OnceLock, TryLockError};
 
-use cp_abi::{ABI, BUSY, FAULT, HostApi, LOG_ERROR, LOG_INFO, LOG_WARN, ModuleApi, OK};
+use cp_abi::{
+    ABI, BUSY, ClipInfo, FAULT, HostApi, LOAD_PENDING, LOAD_READY, LOG_ERROR, LOG_INFO, LOG_WARN,
+    ModuleApi, OK,
+};
+
+pub use crate::host::AudioLoad;
 
 use crate::guard;
 use crate::win::{Hwnd, WinMsg};
@@ -71,6 +76,71 @@ impl HostRef {
     }
     pub fn generation(&self) -> u32 {
         (self.0.generation)()
+    }
+
+    // --- le moteur audio (il vit dans le chargeur)
+
+    /// Ouvre et decode un fichier sur un fil de travail. Rend un ticket.
+    pub fn audio_load(&self, path: &str) -> u32 {
+        (self.0.audio.load)(path.as_ptr(), path.len())
+    }
+    pub fn audio_poll(&self, ticket: u32) -> AudioLoad {
+        let mut clip = 0u32;
+        let mut err = [0u8; 256];
+        let mut n = 0usize;
+        match (self.0.audio.poll)(ticket, &mut clip, err.as_mut_ptr(), err.len(), &mut n) {
+            LOAD_PENDING => AudioLoad::Pending,
+            LOAD_READY => AudioLoad::Ready(clip),
+            _ => AudioLoad::Failed(String::from_utf8_lossy(&err[..n.min(err.len())]).into_owned()),
+        }
+    }
+    pub fn audio_info(&self, clip: u32) -> Option<ClipInfo> {
+        let mut i = ClipInfo::default();
+        ((self.0.audio.info)(clip, &mut i) == 1).then_some(i)
+    }
+    pub fn audio_release(&self, clip: u32) {
+        (self.0.audio.release)(clip)
+    }
+    /// Min et max par pixel ; `ch = None` fond les canaux.
+    pub fn audio_peaks(
+        &self,
+        clip: u32,
+        ch: Option<usize>,
+        start: f64,
+        fpp: f64,
+        min: &mut [f32],
+        max: &mut [f32],
+    ) -> usize {
+        let n = min.len().min(max.len());
+        let c = ch.map_or(-1, |c| c as i32);
+        (self.0.audio.peaks)(clip, c, start, fpp, n, min.as_mut_ptr(), max.as_mut_ptr())
+    }
+    /// Rend la voix (0 = refuse).
+    pub fn audio_play(
+        &self,
+        port: u32,
+        clip: u32,
+        start: i64,
+        end: i64,
+        looped: bool,
+        gain: f64,
+    ) -> u32 {
+        (self.0.audio.play)(port, clip, start, end, looped as i32, gain)
+    }
+    pub fn audio_stop(&self, voice: u32, fade_s: f64) {
+        (self.0.audio.stop)(voice, fade_s)
+    }
+    /// (position en frames du clip, etat) ; `None` si la voix n'existe plus.
+    pub fn audio_voice(&self, voice: u32) -> Option<(f64, i32)> {
+        let mut p = 0.0;
+        let st = (self.0.audio.voice)(voice, &mut p);
+        (st >= 0).then_some((p, st))
+    }
+    pub fn audio_set(&self, voice: u32, param: u32, value: f64) -> bool {
+        (self.0.audio.set)(voice, param, value) == 1
+    }
+    pub fn audio_srate(&self) -> f64 {
+        (self.0.audio.srate)()
     }
 }
 

@@ -213,3 +213,25 @@ impl Reaper {
         self.reg("custom_action", ca as *mut CustomAction as *mut c_void)
     }
 }
+
+impl Reaper {
+    /// La boite d'ouverture de fichier de REAPER (modale). `None` si annulee.
+    pub fn ask_file_to_read(&self, title: &str, ext: &str) -> Option<String> {
+        type F = unsafe extern "C" fn(*mut c_char, *const c_char, *const c_char) -> bool;
+        let p = self.get_func(c"GetUserFileNameForRead");
+        if p.is_null() {
+            return None;
+        }
+        // SAFETY: bool GetUserFileNameForRead(char* filenameNeed4096,
+        // const char* title, const char* defext).
+        let f: F = unsafe { std::mem::transmute(p) };
+        let (t, e) = (CString::new(title).ok()?, CString::new(ext).ok()?);
+        let mut buf = vec![0u8; 4096];
+        // SAFETY: tampon de 4096 octets, comme le demande l'API.
+        if !unsafe { f(buf.as_mut_ptr() as *mut c_char, t.as_ptr(), e.as_ptr()) } {
+            return None;
+        }
+        let end = buf.iter().position(|&b| b == 0).unwrap_or(buf.len());
+        Some(String::from_utf8_lossy(&buf[..end]).into_owned())
+    }
+}

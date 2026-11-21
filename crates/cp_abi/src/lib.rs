@@ -13,7 +13,7 @@ use core::ffi::{c_char, c_void};
 
 /// Version du contrat. Un entier : jamais de mineure (le piege du double de
 /// l'ancien moteur, ou `1.10` valait `1.1`).
-pub const ABI: u32 = 1;
+pub const ABI: u32 = 2;
 
 /// Le symbole exporte par le module.
 pub const ENTRY_SYMBOL: &[u8] = b"cp_module_entry\0";
@@ -54,6 +54,71 @@ pub struct HostApi {
     pub store_state: extern "C" fn(data: *const u8, len: usize),
     /// Numero de chargement du module courant (1, 2, 3...).
     pub generation: extern "C" fn() -> u32,
+    /// Le moteur audio (ABI 2). Il vit dans le chargeur : un rechargement du
+    /// module ne coupe jamais le son.
+    pub audio: AudioApi,
+}
+
+/// Etats d'un chargement de fichier.
+pub const LOAD_PENDING: i32 = 0;
+pub const LOAD_READY: i32 = 1;
+pub const LOAD_FAILED: i32 = -1;
+
+/// Ce qu'on sait d'un clip.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct ClipInfo {
+    pub frames: i64,
+    pub nch: u32,
+    pub srate: f64,
+}
+
+/// Le moteur audio vu du module. Les clips et les voix sont des entiers a
+/// generation : 0 n'est jamais valide, et un handle perime est refuse.
+#[repr(C)]
+pub struct AudioApi {
+    /// Ouvre et decode un fichier (chemin UTF-8, sans zero final), sur un fil
+    /// de travail. Rend un ticket (> 0).
+    pub load: extern "C" fn(path: *const u8, len: usize) -> u32,
+    /// L'etat d'un ticket : LOAD_PENDING, LOAD_READY (`*clip` recoit le clip),
+    /// ou LOAD_FAILED (le message, UTF-8, tronque a `cap` octets, et sa longueur
+    /// dans `*err_len`). Un ticket fini est oublie apres avoir ete lu.
+    pub poll: extern "C" fn(
+        ticket: u32,
+        clip: *mut u32,
+        err: *mut u8,
+        cap: usize,
+        err_len: *mut usize,
+    ) -> i32,
+    /// 1 et `*out` rempli si le clip vit, 0 sinon.
+    pub info: extern "C" fn(clip: u32, out: *mut ClipInfo) -> i32,
+    /// Plus aucun lancement ; la matiere part quand plus rien ne la joue.
+    pub release: extern "C" fn(clip: u32),
+    /// Min et max par pixel (`n` pixels a partir de la frame `start`, `fpp`
+    /// frames par pixel). `ch` < 0 fond les canaux. Rend le nombre de pixels
+    /// qui tombent dans le clip.
+    pub peaks: extern "C" fn(
+        clip: u32,
+        ch: i32,
+        start: f64,
+        fpp: f64,
+        n: usize,
+        min: *mut f32,
+        max: *mut f32,
+    ) -> usize,
+    /// Joue `[start, end)` (frames du clip ; `end` = 0 : jusqu'au bout) sur un
+    /// port. Rend la voix, 0 si refuse.
+    pub play:
+        extern "C" fn(port: u32, clip: u32, start: i64, end: i64, looped: i32, gain: f64) -> u32,
+    /// Arrete et rend une voix, avec un fondu en secondes.
+    pub stop: extern "C" fn(voice: u32, fade_s: f64),
+    /// L'etat d'une voix vivante (et sa position en frames du clip), -1 si elle
+    /// n'existe plus.
+    pub voice: extern "C" fn(voice: u32, pos: *mut f64) -> i32,
+    /// Un reglage de voix (numeros de `cp_engine::Param`). 1 si poste.
+    pub set: extern "C" fn(voice: u32, param: u32, value: f64) -> i32,
+    /// Le taux du peripherique audio.
+    pub srate: extern "C" fn() -> f64,
 }
 
 /// Ce que le module offre au chargeur. Tous les appels se font sur le fil

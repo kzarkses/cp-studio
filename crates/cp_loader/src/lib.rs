@@ -7,7 +7,9 @@
 //!   jamais a REAPER un pointeur vers son propre code, qui peut disparaitre ;
 //! - elle possede les fenetres : elles restent ouvertes pendant un rechargement
 //!   et le nouveau code les repeint ;
-//! - elle surveille `cp_module.dll` et le recharge (voir cp_hot).
+//! - elle surveille `cp_module.dll` et le recharge (voir cp_hot) ;
+//! - elle porte le MOTEUR AUDIO (cp_audio) : un rechargement du module ne coupe
+//!   jamais le son. Le module le pilote par `HostApi::audio`.
 //!
 //! Le module a charger : la premiere ligne de `reaper_cp_studio.module` a cote
 //! de cette DLL (ecrit par `cargo xtask install`), sinon `cp_module.dll` a cote.
@@ -21,9 +23,11 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard, OnceLock};
 use std::time::{Duration, Instant};
 
-use cp_abi::{FAULT, HostApi, LOG_ERROR, LOG_INFO, LOG_WARN};
+use cp_abi::{ClipInfo, FAULT, HostApi, LOG_ERROR, LOG_INFO, LOG_WARN};
+use cp_audio::{AudioHost, ClipH, Load};
+use cp_engine::VoiceH;
 use cp_hot::{Hot, Report};
-use cp_sys::host::{self, Host};
+use cp_sys::host::{self, AudioLoad, Host};
 use cp_sys::reaper::Reaper;
 use cp_sys::win::{self, Hwnd, Paint, WinMsg, rgb};
 
@@ -34,6 +38,8 @@ const VERSION: &str = env!("CARGO_PKG_VERSION");
 enum Owner {
     Reload,
     Status,
+    TestLoop,
+    TestFile,
     Module,
 }
 
@@ -54,6 +60,31 @@ static ACTIONS: Mutex<Actions> = Mutex::new(Actions {
 static WINDOWS: Mutex<Vec<Hwnd>> = Mutex::new(Vec::new());
 static LAST_POLL: Mutex<Option<Instant>> = Mutex::new(None);
 static LAST_RELOAD: Mutex<Option<String>> = Mutex::new(None);
+/// Le moteur audio. Fil principal seulement ; pris en `try_lock` par ce que le
+/// module appelle, pour qu'une reentrance ne se bloque jamais sur elle-meme.
+static AUDIO: Mutex<Option<AudioHost>> = Mutex::new(None);
+static TEST: Mutex<TestState> = Mutex::new(TestState {
+    loop_clip: None,
+    loop_voice: None,
+    file_ticket: None,
+    file_voice: None,
+});
+
+/// Les sons des actions de test.
+struct TestState {
+    loop_clip: Option<ClipH>,
+    loop_voice: Option<VoiceH>,
+    file_ticket: Option<u32>,
+    file_voice: Option<VoiceH>,
+}
+
+/// Le moteur, s'il est la et libre.
+fn audio<T>(default: T, f: impl FnOnce(&mut AudioHost) -> T) -> T {
+    match AUDIO.try_lock() {
+        Ok(mut g) => g.as_mut().map_or(default, f),
+        Err(_) => default,
+    }
+}
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|e| e.into_inner())
@@ -141,6 +172,87 @@ impl Host for LoaderHost {
     fn generation(&self) -> u32 {
         HOT.get().map_or(0, |h| h.generation())
     }
+
+    fn audio_load(&self, path: &str) -> u32 {
+        audio(0, |a| a.load_file(path))
+    }
+
+    fn audio_poll(&self, ticket: u32) -> AudioLoad {
+        match audio(Load::Failed("audio engine busy".into()), |a| {
+            a.ticket(ticket)
+        }) {
+            Load::Pending => AudioLoad::Pending,
+            Load::Ready(c) => AudioLoad::Ready(c.0),
+            Load::Failed(e) => AudioLoad::Failed(e),
+        }
+    }
+
+    fn audio_info(&self, clip: u32) -> Option<ClipInfo> {
+        audio(None, |a| a.clip_info(ClipH(clip))).map(|(frames, nch, srate)| ClipInfo {
+            frames,
+            nch: nch as u32,
+            srate,
+        })
+    }
+
+    fn audio_release(&self, clip: u32) {
+        audio((), |a| a.release(ClipH(clip)));
+    }
+
+    fn audio_peaks(
+        &self,
+        clip: u32,
+        ch: Option<usize>,
+        start: f64,
+        fpp: f64,
+        min: &mut [f32],
+        max: &mut [f32],
+    ) -> usize {
+        audio(0, |a| a.peaks(ClipH(clip), ch, start, fpp, min, max))
+    }
+
+    fn audio_play(
+        &self,
+        port: u32,
+        clip: u32,
+        start: i64,
+        end: i64,
+        looped: bool,
+        gain: f64,
+    ) -> u32 {
+        audio(None, |a| {
+            a.play(port as usize, ClipH(clip), start, end, looped, gain)
+        })
+        .map_or(0, |v| v.0)
+    }
+
+    fn audio_stop(&self, voice: u32, fade_s: f64) {
+        audio((), |a| a.stop(VoiceH(voice), fade_s));
+    }
+
+    fn audio_voice(&self, voice: u32) -> Option<(f64, i32)> {
+        audio(None, |a| a.voice(VoiceH(voice)))
+    }
+
+    fn audio_set(&self, voice: u32, param: u32, value: f64) -> bool {
+        let Some(p) = param_from(param) else {
+            return false;
+        };
+        audio(false, |a| a.set(VoiceH(voice), p, value))
+    }
+
+    fn audio_srate(&self) -> f64 {
+        audio(0.0, |a| a.core().srate())
+    }
+}
+
+fn param_from(n: u32) -> Option<cp_engine::Param> {
+    use cp_engine::Param::*;
+    const ALL: [cp_engine::Param; 19] = [
+        Rate, Gain, Pan, LoopStart, LoopEnd, FadeIn, FadeOut, Pos, Loop, Env, Attack, Decay,
+        Sustain, Release, ACurve, DCurve, RCurve, Gate, EnvPts,
+    ];
+    ALL.iter().copied().find(|p| *p as u32 == n)
 }
 
 /// Idempotent par identifiant : apres un rechargement, le module retrouve le
@@ -233,6 +345,8 @@ fn on_timer() {
     if due {
         reload(false);
     }
+    audio((), |a| a.poll());
+    test_file_poll();
     if let Some(hot) = HOT.get() {
         let sane = hot.fault().is_none();
         hot.call(|api| (api.tick)());
@@ -262,6 +376,36 @@ fn status_text() -> String {
         s += &format!("  last reload: {l}\n");
     }
     s += &format!("  windows: {}\n", lock(&WINDOWS).len());
+    if let Some(st) = audio(None, |a| Some(a.stats())) {
+        let blocks = st.blocks.max(1) as f64;
+        let wall = blocks * st.last_block.max(1) as f64 / st.srate.max(1.0);
+        s += &format!(
+            "  audio: {} Hz, {} blocks of {}, hook {}, ports open {}\n",
+            st.srate,
+            st.blocks,
+            st.last_block,
+            if st.hook { "on" } else { "OFF" },
+            st.ports_open
+        );
+        s += &format!(
+            "  audio pulls: {} calls, over {} / under {}, rewinds {} / skips {}, busy renders {}, lost commands {}\n",
+            st.calls,
+            st.over_pulls,
+            st.under_pulls,
+            st.rewinds,
+            st.skips,
+            st.busy_renders,
+            st.dropped_commands
+        );
+        s += &format!(
+            "  audio load: {:.3} % of the audio thread, {} voices, {} clips ({:.1} MB), {} decoding\n",
+            st.busy_ns as f64 / 1e9 / wall * 100.0,
+            st.active_voices,
+            st.clips,
+            st.bytes as f64 / 1e6,
+            st.decoding
+        );
+    }
     if let Some(p) = LOG_PATH.get() {
         s += &format!("  log: {}\n", p.display());
     }
@@ -291,6 +435,14 @@ fn on_command(cmd: i32) -> bool {
             console(&status_text());
             true
         }
+        Some(Owner::TestLoop) => {
+            test_loop_toggle();
+            true
+        }
+        Some(Owner::TestFile) => {
+            test_file_start();
+            true
+        }
         Some(Owner::Module) => {
             let hot = HOT.get();
             let sane = hot.is_some_and(|h| h.fault().is_none());
@@ -303,6 +455,89 @@ fn on_command(cmd: i32) -> bool {
                 ),
             }
             true
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Les sons de test
+// ---------------------------------------------------------------------------
+
+/// Lance la boucle de test, ou l'arrete (fondu de 20 ms).
+fn test_loop_toggle() {
+    let mut t = lock(&TEST);
+    let msg = audio("CP Studio: audio engine not available\n".to_string(), |a| {
+        if let Some(v) = t.loop_voice.take() {
+            a.stop(v, 0.02);
+            return "CP Studio: test loop stopped\n".into();
+        }
+        let clip = match t.loop_clip.filter(|c| a.clip_info(*c).is_some()) {
+            Some(c) => c,
+            None => {
+                let sr = a.core().srate();
+                let (s, _) = cp_audio::testloop::synth(sr);
+                match a.load_samples(s, 2, sr) {
+                    Ok(c) => c,
+                    Err(e) => return format!("CP Studio: test loop refused: {e}\n"),
+                }
+            }
+        };
+        t.loop_clip = Some(clip);
+        match a.play(0, clip, 0, 0, true, 1.0) {
+            Some(v) => {
+                t.loop_voice = Some(v);
+                format!(
+                    "CP Studio: test loop playing ({} Hz). Run the action again to stop it.\n",
+                    a.core().srate()
+                )
+            }
+            None => "CP Studio: test loop refused by the engine\n".into(),
+        }
+    });
+    drop(t);
+    log(LOG_INFO, msg.trim_end());
+    console(&msg);
+}
+
+/// Demande un fichier et le joue une fois, par le decodeur et le moteur.
+fn test_file_start() {
+    let Some(r) = REAPER.get() else { return };
+    let Some(path) = r.ask_file_to_read("CP Studio: play an audio file", "wav") else {
+        return;
+    };
+    let mut t = lock(&TEST);
+    if let Some(v) = t.file_voice.take() {
+        audio((), |a| a.stop(v, 0.01));
+    }
+    t.file_ticket = audio(None, |a| Some(a.load_file(&path)));
+    log(LOG_INFO, &format!("fichier de test demande : {path}"));
+}
+
+fn test_file_poll() {
+    let mut t = lock(&TEST);
+    let Some(ticket) = t.file_ticket else { return };
+    let state = audio(Load::Pending, |a| a.ticket(ticket));
+    match state {
+        Load::Pending => {}
+        Load::Ready(c) => {
+            t.file_ticket = None;
+            let v = audio(None, |a| {
+                let v = a.play(0, c, 0, 0, false, 1.0);
+                // Le clip part du vivier des que la voix l'a fini.
+                a.release(c);
+                v
+            });
+            t.file_voice = v;
+            console(if v.is_some() {
+                "CP Studio: playing the file\n"
+            } else {
+                "CP Studio: the engine refused to play the file\n"
+            });
+        }
+        Load::Failed(e) => {
+            t.file_ticket = None;
+            log(LOG_WARN, &format!("fichier de test refuse : {e}"));
+            console(&format!("CP Studio: cannot play this file: {e}\n"));
         }
     }
 }
@@ -386,6 +621,20 @@ fn on_load(instance: isize, r: Reaper) -> bool {
             src.display()
         ),
     );
+    let srate = cp_sys::audio::device_srate(&r).unwrap_or(0.0);
+    *lock(&AUDIO) = Some(AudioHost::new(Some(r), srate));
+    log(
+        LOG_INFO,
+        &format!(
+            "moteur audio pret ({} Hz annonces par le peripherique, crochet {})",
+            srate,
+            if audio(false, |a| a.stats().hook) {
+                "pose"
+            } else {
+                "REFUSE"
+            }
+        ),
+    );
     let _ = HOT.set(Hot::new(src, shadow));
     let _ = HOST_API.set(host::install(Box::new(LoaderHost)));
     if let Err(e) = win::register_class(instance, wnd_proc) {
@@ -397,6 +646,16 @@ fn on_load(instance: isize, r: Reaper) -> bool {
         Owner::Reload,
     );
     register_action("_CPSTUDIO_STATUS", "CP Studio: Show status", Owner::Status);
+    register_action(
+        "_CPSTUDIO_TEST_LOOP",
+        "CP Studio: Play/stop the test loop",
+        Owner::TestLoop,
+    );
+    register_action(
+        "_CPSTUDIO_TEST_FILE",
+        "CP Studio: Play an audio file (engine test)",
+        Owner::TestFile,
+    );
     if !r.register_command_hook(on_command) {
         log(LOG_ERROR, "hookcommand2 refuse");
     }
@@ -408,6 +667,10 @@ fn on_load(instance: isize, r: Reaper) -> bool {
 }
 
 fn on_unload() {
+    // Le son d'abord : crochet retire, apercus arretes, sources liberees.
+    if let Some(mut a) = lock(&AUDIO).take() {
+        a.shutdown();
+    }
     if let Some(r) = REAPER.get() {
         r.unregister_timer();
         r.unregister_command_hook();

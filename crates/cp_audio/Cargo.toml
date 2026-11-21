@@ -1,0 +1,14 @@
+[package]
+name = "cp_audio"
+description = "Le moteur audio dans REAPER : apercu permanent par colonne, crochet de bloc, decodage, pics"
+edition.workspace = true
+version.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+cp_engine = { path = "../cp_engine" }
+cp_sys = { path = "../cp_sys" }
+
+[lints]
+workspace = true

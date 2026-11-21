@@ -46,10 +46,10 @@ fn newest(paths: &[PathBuf]) -> Option<SystemTime> {
 /// compilation par processus, meme si les tests tournent en parallele.
 pub fn build() -> Result<PathBuf, String> {
     static ONCE: std::sync::OnceLock<Result<PathBuf, String>> = std::sync::OnceLock::new();
-    ONCE.get_or_init(build_now).clone()
+    ONCE.get_or_init(build_oracle).clone()
 }
 
-fn build_now() -> Result<PathBuf, String> {
+fn build_oracle() -> Result<PathBuf, String> {
     let refdir = workspace_root().join("reference");
     let core = refdir.join("cp_native").join("src").join("core");
     let oracle_dir = refdir.join("oracle");
@@ -67,12 +67,53 @@ fn build_now() -> Result<PathBuf, String> {
     if let Ok(rd) = fs::read_dir(&core) {
         deps.extend(rd.flatten().map(|e| e.path()));
     }
+    build_dll("cp_oracle", &units, &deps, &[])
+}
 
+/// Le SDK de REAPER : `$REAPER_SDK`, sinon `../reaper-sdk/sdk` a cote du depot.
+pub fn reaper_sdk() -> Result<PathBuf, String> {
+    let p = match std::env::var_os("REAPER_SDK") {
+        Some(v) => PathBuf::from(v),
+        None => workspace_root().join("..").join("reaper-sdk").join("sdk"),
+    };
+    if p.join("reaper_plugin.h").exists() {
+        Ok(p)
+    } else {
+        Err(format!(
+            "SDK de REAPER introuvable ({}) : cloner github.com/justinfrankel/reaper-sdk a cote du depot, ou poser REAPER_SDK",
+            p.display()
+        ))
+    }
+}
+
+/// Le programme C++ compile contre le SDK qui verifie nos tables virtuelles et
+/// nos structures (`cpp/pcm_abi.cpp`, voir `tests/pcm_abi.rs`).
+pub fn build_pcm_abi() -> Result<PathBuf, String> {
+    static ONCE: std::sync::OnceLock<Result<PathBuf, String>> = std::sync::OnceLock::new();
+    ONCE.get_or_init(|| {
+        let sdk = reaper_sdk()?;
+        let unit = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("cpp")
+            .join("pcm_abi.cpp");
+        let deps = [unit.clone(), sdk.join("reaper_plugin.h")];
+        build_dll("cp_pcm_abi", std::slice::from_ref(&unit), &deps, &[sdk])
+    })
+    .clone()
+}
+
+/// Compile une DLL C++ avec MSVC dans `%TEMP%\cp_oracle_build`, seulement si
+/// une dependance a change.
+fn build_dll(
+    name: &str,
+    units: &[PathBuf],
+    deps: &[PathBuf],
+    includes: &[PathBuf],
+) -> Result<PathBuf, String> {
     let out = std::env::temp_dir().join("cp_oracle_build");
     fs::create_dir_all(&out).map_err(|e| format!("{}: {e}", out.display()))?;
-    let dll = out.join("cp_oracle.dll");
+    let dll = out.join(format!("{name}.dll"));
     let built = fs::metadata(&dll).ok().and_then(|m| m.modified().ok());
-    if let (Some(b), Some(n)) = (built, newest(&deps)) {
+    if let (Some(b), Some(n)) = (built, newest(deps)) {
         if b >= n {
             return Ok(dll);
         }
@@ -107,14 +148,22 @@ fn build_now() -> Result<PathBuf, String> {
         .iter()
         .map(|p| format!("\"{}\"", p.display()))
         .collect();
+    let incs: Vec<String> = includes
+        .iter()
+        .map(|p| format!("/I\"{}\"", p.display()))
+        .collect();
+    let objdir = out.join(format!("{name}_obj"));
+    fs::create_dir_all(&objdir).map_err(|e| e.to_string())?;
+    let log = format!("{name}.log");
     let script = format!(
-        "@echo off\r\ncall \"{}\" >nul 2>&1\r\ncl /nologo /LD /O2 /EHsc /std:c++17 /MT /W3 /fp:precise /Fe\"{}\" /Fo\"{}\\\\\" {} > build.log 2>&1\r\nexit /b %errorlevel%\r\n",
+        "@echo off\r\ncall \"{}\" >nul 2>&1\r\ncl /nologo /LD /O2 /EHsc /std:c++17 /MT /W3 /fp:precise {} /Fe\"{}\" /Fo\"{}\\\\\" {} > {log} 2>&1\r\nexit /b %errorlevel%\r\n",
         vcvars.display(),
+        incs.join(" "),
         dll.display(),
-        out.display(),
+        objdir.display(),
         files.join(" ")
     );
-    let cmd_file = out.join("build_oracle.cmd");
+    let cmd_file = out.join(format!("build_{name}.cmd"));
     fs::write(&cmd_file, script).map_err(|e| e.to_string())?;
     let st = Command::new("cmd")
         .current_dir(&out)
@@ -123,8 +172,11 @@ fn build_now() -> Result<PathBuf, String> {
         .status()
         .map_err(|e| e.to_string())?;
     if !st.success() {
-        let log = fs::read_to_string(out.join("build.log")).unwrap_or_default();
-        return Err(format!("compilation de l'oracle en echec :\n{log}"));
+        let log = fs::read_to_string(out.join(&log)).unwrap_or_default();
+        return Err(format!(
+            "compilation de {name} en echec :
+{log}"
+        ));
     }
     Ok(dll)
 }
@@ -289,5 +341,32 @@ impl Drop for Oracle {
         (self.f.free)(self.e);
         // SAFETY: plus aucun pointeur de fonction de la DLL n'est appele.
         unsafe { FreeLibrary(self.lib) };
+    }
+}
+
+/// Une DLL chargee, pour les tests qui appellent leurs propres symboles.
+pub struct Dll(*mut c_void);
+
+impl Dll {
+    pub fn load(path: &Path) -> Result<Dll, String> {
+        let w: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
+        // SAFETY: chemin termine par zero.
+        let h = unsafe { LoadLibraryW(w.as_ptr()) };
+        if h.is_null() {
+            return Err(format!("LoadLibrary {}", path.display()));
+        }
+        Ok(Dll(h))
+    }
+
+    /// L'adresse d'un symbole exporte (non nulle).
+    pub fn sym(&self, name: &str) -> Result<*mut c_void, String> {
+        let c = format!("{name}\0");
+        // SAFETY: handle valide, nom termine par zero.
+        let p = unsafe { GetProcAddress(self.0, c.as_ptr()) };
+        if p.is_null() {
+            Err(format!("symbole absent : {name}"))
+        } else {
+            Ok(p)
+        }
     }
 }
