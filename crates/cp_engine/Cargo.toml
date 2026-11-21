@@ -1,0 +1,13 @@
+[package]
+name = "cp_engine"
+description = "Le moteur audio : voix, ports, vivier, horloge. Rust sur, sans REAPER"
+edition.workspace = true
+version.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+cp_sys = { path = "../cp_sys" }
+
+[lints]
+workspace = true

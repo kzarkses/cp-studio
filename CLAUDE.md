@@ -22,7 +22,9 @@ dont le depot a ete efface le 2026-11-20.
 | crate | role |
 |---|---|
 | `cp_abi` | le contrat binaire entre le chargeur et le module (la SEULE frontiere binaire) |
-| `cp_sys` | la seule porte vers REAPER et Windows : tout le code `unsafe` est ici |
+| `cp_sys` | la seule porte vers REAPER et Windows, et les primitives temps reel (`rt`) : tout le code `unsafe` est ici |
+| `cp_engine` | le moteur audio (voix, ports, vivier, horloge), en Rust sur, sans REAPER |
+| `cp_oracle` | l'ancien moteur C++ compile en DLL, pour comparer `cp_engine` a lui (tests seulement) |
 | `cp_hot` | le rechargement a chaud : surveiller, copier, charger, passer l'etat |
 | `cp_loader` | `reaper_cp_studio.dll`, la petite DLL FIXE que REAPER charge au demarrage |
 | `cp_module` | `cp_module.dll`, tout le code de CP Studio, recharge a chaud |
@@ -37,8 +39,9 @@ fenetres survivent donc a un rechargement, et le nouveau code les repeint.
 
 1. **`unsafe` n'existe que dans `cp_sys`.** Les autres crates le refusent a la
    compilation. Seules exceptions : les deux points d'entree exportes, generes
-   par `export_reaper_plugin!` et `export_module!`. Chaque bloc `unsafe` porte
-   un commentaire `SAFETY:` (clippy le verifie).
+   par `export_reaper_plugin!` et `export_module!`, et `cp_oracle`, qui pilote
+   une DLL C++ et n'est jamais livre. Chaque bloc `unsafe` porte un commentaire
+   `SAFETY:` (clippy le verifie).
 2. **Aucune panique ne traverse une frontiere `extern "C"`.** Elle ferait
    avorter REAPER avec le projet ouvert. Tout point d'entree passe par
    `cp_sys::guard`. Un module qui panique est mis de cote jusqu'a la
@@ -83,7 +86,31 @@ fenetres survivent donc a un rechargement, et le nouveau code les repeint.
 - `cp_sys/tests/fake_reaper.rs` : le VRAI `reaper_cp_studio.dll` charge par un
   faux REAPER avec les structures exactes du SDK : version refusee,
   enregistrements, actions, rechargement par le battement, fermeture.
-- Ils ne prouvent ni l'ecran ni le son. C'est Cedric qui regarde et qui ecoute.
+- `cp_oracle/tests/differential.rs` : `cp_engine` contre l'ancien moteur C++,
+  sur les memes commandes. Sorties IDENTIQUES AU BIT, memes dates de bloc, memes
+  etats publies. Des scenarios par comportement, plus 300 graines de fuzz. Il a
+  ete verifie qu'il mord : un ordre de multiplication change (1 ULP) et un
+  fondu de 4 ms au lieu de 5 sont tous deux attrapes.
+- Ils ne prouvent ni l'ecran ni l'oreille. C'est Cedric qui regarde et qui
+  ecoute.
+
+## 5 bis. Le portage du moteur audio
+
+- La reference est `reference/cp_native` (voir `reference/PROVENANCE.md` : un
+  instantane du 2026-10-25 au matin, ce qui est prouve et ce qui ne l'est pas).
+- **Le Rust suit le C++ operation par operation**, memes types (f32 / f64),
+  meme ordre. Ne jamais « simplifier » une expression du rendu sans relancer
+  l'oracle : deux ordres d'operations ne donnent pas les memes bits.
+- Deux ecarts VOULUS, sans effet sur les cas normaux : chaque port possede ses
+  voix (deux ports peuvent etre rendus en meme temps sans rien partager), et un
+  clip voyage dans la commande qui le lance (`Arc`) : une voix ne perd jamais sa
+  matiere en plein son, et la memoire n'est jamais liberee dans le fil audio.
+  Les lectures sont bornees au tampon (l'ancien C++ lisait hors du tampon sur
+  une position negative).
+- Pas encore porte : les lanes MIDI (`cp_lanes.cpp` est incomplet, l'oracle
+  utilise un bouchon), la clock externe, et tout le cote REAPER (la source
+  audio maison jouee en apercu permanent, le crochet audio, le decodage des
+  fichiers).
 
 ## 6. Travailler avec Cedric
 

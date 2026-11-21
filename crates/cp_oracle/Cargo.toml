@@ -1,0 +1,15 @@
+[package]
+name = "cp_oracle"
+description = "L'ancien moteur C++ compile en DLL, pour comparer cp_engine a lui (tests seulement)"
+edition.workspace = true
+version.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dev-dependencies]
+cp_engine = { path = "../cp_engine" }
+
+# Pas de `[lints] workspace = true` : ce crate pilote une DLL C++, c'est du FFI
+# par nature (l'exception est ecrite dans CLAUDE.md). Il n'est jamais livre.
+[lints.clippy]
+undocumented_unsafe_blocks = "warn"
