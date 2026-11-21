@@ -168,3 +168,40 @@ fn un_long_fichier_s_ecoute_avant_d_etre_decode() {
     );
     assert!(hi[3] > hi[0]);
 }
+
+#[test]
+fn une_section_de_n_echantillons_rend_n_echantillons_de_1_a_4096() {
+    // A3 : la matiere de la section, exactement, sans fondu impose, quelle que
+    // soit sa taille, a tout endroit d'un bloc.
+    let s: Vec<f32> = (0..20000)
+        .map(|i| ((i % 251) as f32 + 1.0) / 256.0)
+        .collect();
+    let mut h = AudioHost::new(None, 48000.0);
+    let c = h.load_samples(s.clone(), 1, 48000.0).unwrap();
+    let mut sizes: Vec<usize> = (1..=64).collect();
+    sizes.extend([
+        100, 127, 128, 129, 255, 256, 257, 1000, 2047, 2048, 4095, 4096,
+    ]);
+    for (k, &n) in sizes.iter().enumerate() {
+        let start = 1000 + k * 37;
+        // Un bloc de taille variable avant : le depart tombe n'importe ou.
+        block(&mut h, 0, 1 + (k * 13) % 97);
+        let v = h
+            .play(0, c, start as i64, (start + n) as i64, false, 1.0)
+            .unwrap();
+        let mut heard = Vec::new();
+        while heard.len() < n + 200 {
+            heard.extend(block(&mut h, 0, 64).chunks(2).map(|f| f[0]));
+        }
+        let got: Vec<f64> = heard.into_iter().filter(|&x| x != 0.0).collect();
+        assert_eq!(got.len(), n, "section de {n}");
+        for (i, &x) in got.iter().enumerate() {
+            assert_eq!(x, s[start + i] as f64, "section de {n}, echantillon {i}");
+        }
+        h.poll();
+        assert!(
+            h.voice(v).is_none(),
+            "la voix d'une section finie est rendue"
+        );
+    }
+}

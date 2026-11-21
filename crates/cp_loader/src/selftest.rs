@@ -58,6 +58,7 @@ enum Phase {
     Insert,
     OpenUi,
     Watch,
+    Dock,
     Done,
 }
 
@@ -232,7 +233,7 @@ impl SelfTest {
                     self.phase = Phase::Insert;
                 }
             }
-            Phase::Insert | Phase::OpenUi | Phase::Watch | Phase::Done => {}
+            Phase::Insert | Phase::OpenUi | Phase::Watch | Phase::Dock | Phase::Done => {}
         }
         false
     }
@@ -324,6 +325,44 @@ impl SelfTest {
                     if perf != 0 {
                         r.main_on_command(perf);
                     }
+                    // Puis l'ancrage : dans un docker, et retour.
+                    let dock = r.named_command("_CPSTUDIO_BROWSER_DOCK");
+                    let floating_before =
+                        crate::first_view().is_some_and(|h| r.dock_of(h).is_none());
+                    if dock != 0 && floating_before {
+                        r.main_on_command(dock);
+                        self.ui_at = Some(Instant::now());
+                        self.snapped = false;
+                        self.phase = Phase::Dock;
+                        return false;
+                    }
+                    self.finish_report();
+                    return true;
+                }
+            }
+            Phase::Dock => {
+                let t = self.ui_at.map_or(0.0, |t| t.elapsed().as_secs_f64());
+                if t > 1.0 && !self.snapped {
+                    self.snapped = true;
+                    let docked = crate::first_view().and_then(|h| r.dock_of(h));
+                    self.say(
+                        docked.is_some(),
+                        format!(
+                            "le navigateur s'ancre (docker {})",
+                            docked.unwrap_or(-1)
+                        ),
+                    );
+                    let h = crate::first_view().map_or(0, |h| h.0);
+                    let _ = fs::write(dir().join("snap2.txt"), format!("{h}\n"));
+                }
+                if t > 2.5 {
+                    // Rendre a Cedric sa fenetre flottante.
+                    let dock = r.named_command("_CPSTUDIO_BROWSER_DOCK");
+                    if dock != 0 {
+                        r.main_on_command(dock);
+                    }
+                    let floating = crate::first_view().is_some_and(|h| r.dock_of(h).is_none());
+                    self.say(floating, "et redevient flottante".into());
                     self.finish_report();
                     return true;
                 }

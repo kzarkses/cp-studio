@@ -156,14 +156,21 @@ fn reaper_test() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let snap = dir.join("snap.txt");
-    let _ = fs::remove_file(&snap);
-    let mut snapped = false;
+    // Les photos demandees par l'auto-test : snap.txt (flottante), snap2.txt
+    // (ancree).
+    let snaps = [("snap.txt", ""), ("snap2.txt", "_docked")];
+    for (f, _) in snaps {
+        let _ = fs::remove_file(dir.join(f));
+    }
+    let mut done = [false; 2];
     while !result.exists() && t0.elapsed() < Duration::from_secs(90) {
-        if !snapped && snap.exists() {
-            snapped = true;
-            let hwnd = fs::read_to_string(&snap).unwrap_or_default();
-            capture(&run, hwnd.trim(), &dir);
+        for (i, (f, suffix)) in snaps.iter().enumerate() {
+            let p = dir.join(f);
+            if !done[i] && p.exists() {
+                done[i] = true;
+                let hwnd = fs::read_to_string(&p).unwrap_or_default();
+                capture(&run, hwnd.trim(), &dir, suffix);
+            }
         }
         std::thread::sleep(Duration::from_millis(200));
     }
@@ -200,8 +207,8 @@ fn reaper_test() -> ExitCode {
 
 /// Photographie la fenetre du navigateur et la fenetre principale de REAPER
 /// (et rien d'autre de l'ecran) dans `dir`.
-fn capture(run: &Path, hwnd: &str, dir: &Path) {
-    let script = r#"param([string]$hwnd, [string]$out)
+fn capture(run: &Path, hwnd: &str, dir: &Path, suffix: &str) {
+    let script = r#"param([string]$hwnd, [string]$out, [string]$suffix)
 Add-Type -AssemblyName System.Drawing
 Add-Type @"
 using System; using System.Runtime.InteropServices;
@@ -223,9 +230,9 @@ function Shot([IntPtr]$h, [string]$file) {
   $bmp.Save($file)
   $g.Dispose(); $bmp.Dispose()
 }
-if ($hwnd -ne "0") { Shot ([IntPtr][Int64]$hwnd) (Join-Path $out "browser.png") }
+if ($hwnd -ne "0") { Shot ([IntPtr][Int64]$hwnd) (Join-Path $out ("browser" + $suffix.TrimStart("_") + ".png")) }
 $p = Get-Process reaper -ErrorAction SilentlyContinue | Select-Object -First 1
-if ($p) { Shot $p.MainWindowHandle (Join-Path $out "reaper.png") }
+if ($p) { Shot $p.MainWindowHandle (Join-Path $out ("reaper" + $suffix.TrimStart("_") + ".png")) }
 "#;
     let ps1 = run.join("snap.ps1");
     if fs::write(&ps1, script).is_err() {
@@ -237,6 +244,7 @@ if ($p) { Shot $p.MainWindowHandle (Join-Path $out "reaper.png") }
         .arg(&ps1)
         .arg(hwnd)
         .arg(dir)
+        .arg(if suffix.is_empty() { "_" } else { suffix })
         .status();
     match st {
         Ok(s) if s.success() => println!("photos : {}", dir.display()),

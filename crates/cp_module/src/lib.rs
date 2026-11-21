@@ -215,6 +215,7 @@ struct App {
     r: Reaper,
     cmd_browser: i32,
     cmd_perf: i32,
+    cmd_dock: i32,
     browser: Browser,
     view: Option<View>,
     text: TextCache,
@@ -718,11 +719,14 @@ impl Module for App {
             "CPSTUDIO_PERF",
             "CP Studio: Performance overlay (show/hide)",
         );
+        let cmd_dock =
+            host.register_action("CPSTUDIO_BROWSER_DOCK", "CP Studio: Browser - dock/undock");
         let mut app = App {
             host,
             r,
             cmd_browser,
             cmd_perf,
+            cmd_dock,
             browser,
             view: None,
             text: TextCache::new(Box::new(GdiGlyphs::new(&["Segoe UI", "Consolas"]))),
@@ -807,6 +811,20 @@ impl Module for App {
             self.browser.mark();
             self.want_frames();
             true
+        } else if cmd == self.cmd_dock {
+            if self.view.is_some() {
+                self.toggle_dock();
+            } else {
+                let docked = self.ext("browser_docked").as_deref() == Some("1");
+                self.r.ext_set(
+                    SECTION,
+                    "browser_docked",
+                    if docked { "0" } else { "1" },
+                    true,
+                );
+                self.open_view();
+            }
+            true
         } else {
             false
         }
@@ -817,6 +835,8 @@ impl Module for App {
             Some(self.view.is_some())
         } else if cmd == self.cmd_perf {
             Some(self.show_perf)
+        } else if cmd == self.cmd_dock {
+            Some(self.view.as_ref().is_some_and(|v| v.docked))
         } else {
             None
         }
