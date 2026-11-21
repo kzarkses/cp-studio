@@ -547,3 +547,83 @@ pub fn clipboard_text(owner: Hwnd) -> Option<String> {
         out
     }
 }
+
+// ---------------------------------------------------------------------------
+// Le retour de balayage de l'ecran
+// ---------------------------------------------------------------------------
+
+#[repr(C)]
+struct OpenAdapterFromHdc {
+    hdc: Raw,
+    adapter: u32,
+    luid_low: u32,
+    luid_high: i32,
+    source: u32,
+}
+
+#[repr(C)]
+struct WaitVBlank {
+    adapter: u32,
+    device: u32,
+    source: u32,
+}
+
+#[link(name = "gdi32")]
+unsafe extern "system" {
+    fn D3DKMTOpenAdapterFromHdc(p: *mut OpenAdapterFromHdc) -> i32;
+    fn D3DKMTWaitForVerticalBlankEvent(p: *const WaitVBlank) -> i32;
+    fn D3DKMTCloseAdapter(p: *const u32) -> i32;
+}
+
+/// Attendre le VRAI retour de balayage de l'ecran principal (par le pilote
+/// graphique). Contrairement a `DwmFlush`, il arrive a chaque image meme quand
+/// rien ne change a l'ecran : une horloge qui en depend ne s'arrete jamais.
+pub struct VBlank {
+    adapter: u32,
+    source: u32,
+}
+
+impl VBlank {
+    pub fn open() -> Option<VBlank> {
+        // SAFETY: le DC de l'ecran, rendu apres l'ouverture ; structure
+        // complete, ecrite par le systeme.
+        unsafe {
+            let dc = GetDC(null_mut());
+            if dc.is_null() {
+                return None;
+            }
+            let mut o = OpenAdapterFromHdc {
+                hdc: dc,
+                adapter: 0,
+                luid_low: 0,
+                luid_high: 0,
+                source: 0,
+            };
+            let st = D3DKMTOpenAdapterFromHdc(&mut o);
+            ReleaseDC(null_mut(), dc);
+            (st == 0).then_some(VBlank {
+                adapter: o.adapter,
+                source: o.source,
+            })
+        }
+    }
+
+    /// Bloque jusqu'au prochain retour de balayage. Faux en cas d'echec
+    /// (changement de mode d'ecran : rouvrir).
+    pub fn wait(&self) -> bool {
+        let w = WaitVBlank {
+            adapter: self.adapter,
+            device: 0,
+            source: self.source,
+        };
+        // SAFETY: l'adaptateur ouvert par `open`.
+        unsafe { D3DKMTWaitForVerticalBlankEvent(&w) == 0 }
+    }
+}
+
+impl Drop for VBlank {
+    fn drop(&mut self) {
+        // SAFETY: l'adaptateur ouvert par `open`, ferme une fois.
+        unsafe { D3DKMTCloseAdapter(&self.adapter) };
+    }
+}

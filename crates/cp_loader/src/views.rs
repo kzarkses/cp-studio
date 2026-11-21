@@ -1,6 +1,8 @@
 //! Les vues : la cadence de l'ecran, et le clavier des fenetres ancrees.
 //!
-//! LA CADENCE. Un fil attend chaque composition de l'ecran (`DwmFlush`) et
+//! LA CADENCE. Un fil attend chaque retour de balayage de l'ecran (par le
+//! pilote : `D3DKMTWaitForVerticalBlankEvent`, jamais `DwmFlush`, qui attend
+//! sans fin quand rien ne change a l'ecran) et
 //! depose un WM_CP_FRAME a chaque vue qui en veut. Une vue qui n'a pas fini
 //! l'image precedente n'en recoit pas de nouvelle : la file ne s'emballe
 //! jamais, et l'image sautee est COMPTEE (`missed`). Le dessin se fait donc
@@ -34,6 +36,15 @@ use crate::lock;
 #[derive(Default)]
 struct Clock {
     want: Vec<Hwnd>,
+    /// LA PART DU FIL PRINCIPAL. Une vue qui a mis D a dessiner n'a pas
+    /// d'image avant D de repos : nos images ne prennent jamais plus de la
+    /// moitie du fil principal de REAPER. Sans ce garde, une grande vue ancree
+    /// dont l'image coutait plus d'une periode recevait ses images sans fin ;
+    /// Windows ne donne ses minuteries que quand la file est vide, et REAPER
+    /// ne battait plus (gele, 32 s mesurees).
+    ready_at: Vec<(Hwnd, i64)>,
+    /// Images retenues par ce garde.
+    pub throttled: u64,
     /// Les vues qui n'ont pas fini leur image, et l'instant de la
     /// composition qui l'a declenchee.
     pending: Vec<(Hwnd, i64)>,
@@ -43,6 +54,8 @@ struct Clock {
 
 static CLOCK: Mutex<Clock> = Mutex::new(Clock {
     want: Vec::new(),
+    ready_at: Vec::new(),
+    throttled: 0,
     pending: Vec::new(),
     info: FrameInfo {
         count: 0,
@@ -63,6 +76,7 @@ pub struct FrameCost {
     pub frames: u64,
     pub max_late_ms: f64,
     pub max_draw_ms: f64,
+    pub sum_draw_ms: f64,
     pub late_over_period: u64,
 }
 
@@ -70,6 +84,7 @@ static COST: Mutex<FrameCost> = Mutex::new(FrameCost {
     frames: 0,
     max_late_ms: 0.0,
     max_draw_ms: 0.0,
+    sum_draw_ms: 0.0,
     late_over_period: 0,
 });
 
@@ -83,9 +98,13 @@ pub fn reset_cost() {
 
 /// Une image traitee : `late` de la composition au debut du traitement,
 /// `draw` le temps du module (en compteur).
-pub fn record(late_qpc: i64, draw_qpc: i64) {
+pub fn record(h: Hwnd, late_qpc: i64, draw_qpc: i64) {
     let (freq, period) = {
-        let c = lock(&CLOCK);
+        let mut c = lock(&CLOCK);
+        // Le repos du fil principal : au moins le temps du dessin.
+        let now = ui::qpc();
+        c.ready_at.retain(|p| p.0 != h);
+        c.ready_at.push((h, now + draw_qpc));
         (c.info.qpc_freq.max(1), c.info.period_qpc)
     };
     let ms = |q: i64| q as f64 * 1000.0 / freq as f64;
@@ -93,6 +112,7 @@ pub fn record(late_qpc: i64, draw_qpc: i64) {
     k.frames += 1;
     k.max_late_ms = k.max_late_ms.max(ms(late_qpc));
     k.max_draw_ms = k.max_draw_ms.max(ms(draw_qpc));
+    k.sum_draw_ms += ms(draw_qpc);
     if period > 0 && late_qpc + draw_qpc > period {
         k.late_over_period += 1;
     }
@@ -102,6 +122,10 @@ static THREAD: Mutex<Option<JoinHandle<()>>> = Mutex::new(None);
 fn clock_thread() {
     let freq = ui::qpc_freq();
     let mut last = 0i64;
+    // Le vrai retour de balayage (pas DwmFlush : sur un ecran ou rien ne
+    // change, DWM ne compose rien et DwmFlush attendait sans fin ; la fenetre
+    // attendait l'horloge pour se redessiner, et rien ne bougeait plus).
+    let mut vb = ui::VBlank::open();
     loop {
         {
             let mut c = lock(&CLOCK);
@@ -113,12 +137,20 @@ fn clock_thread() {
             }
         }
         let t_before = ui::qpc();
-        if !ui::dwm_flush() {
-            std::thread::sleep(std::time::Duration::from_millis(16));
+        let waited = match &vb {
+            Some(v) => v.wait(),
+            None => false,
+        };
+        if !waited {
+            // Le pilote refuse (mode d'ecran change) : on rouvre, et en
+            // attendant une minuterie tient la cadence. L'horloge ne s'arrete
+            // JAMAIS.
+            vb = ui::VBlank::open();
+            std::thread::sleep(std::time::Duration::from_millis(8));
         }
         let mut now = ui::qpc();
-        // DwmFlush peut rendre tout de suite (rien a composer) : on ne
-        // cadence jamais plus vite que 4 ms.
+        // Une attente qui rend tout de suite ne fait jamais cadencer a plus
+        // de 250 Hz.
         if (now - t_before) * 1000 < freq * 2 && last != 0 && (now - last) * 1000 < freq * 4 {
             std::thread::sleep(std::time::Duration::from_millis(2));
             now = ui::qpc();
@@ -147,6 +179,10 @@ fn clock_thread() {
         for h in want {
             if c.pending.iter().any(|p| p.0 == h) {
                 c.info.missed += 1;
+                continue;
+            }
+            if c.ready_at.iter().any(|&(w, t)| w == h && now < t) {
+                c.throttled += 1;
                 continue;
             }
             if win::post_message(h, WM_CP_FRAME, count as usize, 0) {
@@ -193,8 +229,14 @@ pub fn frame_info() -> FrameInfo {
     lock(&CLOCK).info
 }
 
+/// Images retenues par le garde de la part du fil principal.
+pub fn throttled() -> u64 {
+    lock(&CLOCK).throttled
+}
+
 pub fn forget(h: Hwnd) {
     let mut c = lock(&CLOCK);
+    c.ready_at.retain(|p| p.0 != h);
     c.want.retain(|&x| x != h);
     c.pending.retain(|p| p.0 != h);
 }

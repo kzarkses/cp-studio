@@ -278,6 +278,16 @@ pub struct Browser {
     /// Des vignettes visibles sont en cours de calcul (ecrit pendant le
     /// dessin).
     pub thumbs_pending: std::cell::Cell<bool>,
+    /// Seule la forme d'onde (et la ligne d'etat) a change.
+    wave_dirty: bool,
+}
+
+/// Ce qu'il faut redessiner.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Redraw {
+    None,
+    Wave,
+    Full,
 }
 
 impl Browser {
@@ -326,6 +336,7 @@ impl Browser {
             fx_wanted: false,
             samples_view: false,
             thumbs_pending: std::cell::Cell::new(false),
+            wave_dirty: false,
         };
         b.rebuild();
         b
@@ -348,6 +359,32 @@ impl Browser {
 
     pub fn take_dirty(&mut self) -> bool {
         std::mem::replace(&mut self.dirty, false)
+    }
+
+    /// Ce qu'il faut redessiner : rien, la forme d'onde et la ligne d'etat
+    /// seulement (la tete de lecture, un decodage qui avance), ou tout.
+    pub fn take_redraw(&mut self) -> Redraw {
+        let full = std::mem::replace(&mut self.dirty, false);
+        let wave = std::mem::replace(&mut self.wave_dirty, false);
+        if full {
+            Redraw::Full
+        } else if wave {
+            Redraw::Wave
+        } else {
+            Redraw::None
+        }
+    }
+
+    /// Seul le bas est a redessiner (un compteur qui change).
+    pub fn mark_wave(&mut self) {
+        self.wave_dirty = true;
+    }
+
+    /// Le bas de la vue (forme d'onde et ligne d'etat), en pixels :
+    /// (y, hauteur).
+    pub fn wave_band(&self) -> (f32, f32) {
+        let y = self.lay.wave_y - 1.0;
+        (y, self.lay.h - y)
     }
 
     pub fn mark(&mut self) {
@@ -696,7 +733,8 @@ impl Browser {
                         let ph = Some(pos);
                         if ph != self.wave.playhead {
                             self.wave.playhead = ph;
-                            self.dirty = true;
+                            // Seule la forme d'onde bouge : pas toute la vue.
+                            self.wave_dirty = true;
                         }
                     }
                 }
@@ -715,7 +753,7 @@ impl Browser {
                     if let Some(c) = self.cache.iter_mut().find(|c| c.clip == self.wave.clip) {
                         c.info = i;
                     }
-                    self.dirty = true;
+                    self.wave_dirty = true;
                 }
             } else {
                 self.wave.info.decoded = self.wave.info.frames;

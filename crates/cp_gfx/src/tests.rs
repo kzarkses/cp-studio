@@ -180,3 +180,24 @@ fn planche() {
     let path = std::env::temp_dir().join("cp_gfx_planche.png");
     std::fs::write(&path, png::encode(&s)).unwrap();
 }
+
+#[test]
+fn seules_les_bandes_changees_partent_a_l_ecran() {
+    let (w, h) = (4usize, 10usize);
+    let mut shown = vec![0u32; w * h];
+    let mut now = shown.clone();
+    assert!(changed_bands(&now, &mut shown, w, 0, h, 2).is_empty());
+    now[w + 1] = 7; // ligne 1
+    now[2 * w] = 7; // ligne 2
+    now[7 * w + 3] = 9; // ligne 7
+    let b = changed_bands(&now, &mut shown, w, 0, h, 2);
+    assert_eq!(b, vec![(1, 3), (7, 8)]);
+    assert_eq!(shown, now, "l'ecran retenu suit");
+    // Deux bandes proches se fondent.
+    now[4 * w] = 1;
+    now[6 * w] = 1;
+    assert_eq!(changed_bands(&now, &mut shown, w, 0, h, 3), vec![(4, 7)]);
+    // La derniere ligne.
+    now[9 * w] = 5;
+    assert_eq!(changed_bands(&now, &mut shown, w, 0, h, 2), vec![(9, 10)]);
+}

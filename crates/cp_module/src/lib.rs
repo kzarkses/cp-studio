@@ -15,7 +15,7 @@ use cp_abi::{WM_CP_ACCEL, WM_CP_FRAME};
 use cp_browser::draw::Gfx;
 use cp_browser::model::{self, Shortcut};
 use cp_browser::wave::ClipInfo;
-use cp_browser::{Browser, Focus, Host as BrowserHost, KeyUse, Loaded, MenuEntry};
+use cp_browser::{Browser, Focus, Host as BrowserHost, KeyUse, Loaded, MenuEntry, Redraw};
 use cp_gfx::text::{Align, TextCache};
 use cp_gfx::{Canvas, Scratch, Surface};
 use cp_sys::font::GdiGlyphs;
@@ -214,12 +214,22 @@ impl BrowserHost for Adapter<'_> {
     }
 }
 
+/// Ce qu'on fait a la fenetre, au battement.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum WinOp {
+    Open,
+    Close,
+    ToggleDock,
+}
+
 /// La fenetre du navigateur.
 struct View {
     hwnd: Hwnd,
     docked: bool,
     surf: Surface,
     present: Vec<u32>,
+    /// Ce qui est a l'ecran (pour n'envoyer que ce qui change).
+    shown: Vec<u32>,
     theme: Theme,
     tracking: bool,
     frames_on: bool,
@@ -250,6 +260,13 @@ struct App {
     scratch: Scratch,
     action: Option<u32>,
     show_perf: bool,
+    /// Les operations sur la fenetre, faites au prochain battement : JAMAIS
+    /// pendant le traitement d'un message de la fenetre elle-meme (detruire une
+    /// fenetre ancree depuis son propre clic gelait REAPER).
+    ops: Vec<WinOp>,
+    /// Battements depuis le chargement : au demarrage de REAPER, on attend
+    /// qu'il ait fini de se construire avant d'ouvrir (et d'ancrer).
+    ticks: u32,
 }
 
 fn read_shortcuts(r: &Reaper) -> (Vec<Shortcut>, PathBuf) {
@@ -328,6 +345,7 @@ impl App {
             docked,
             surf: Surface::default(),
             present: Vec::new(),
+            shown: Vec::new(),
             theme: Theme::dark(scale),
             tracking: false,
             frames_on: false,
@@ -335,6 +353,11 @@ impl App {
             perf: Perf::default(),
         });
         self.render(true);
+        // Ce qui a ete demande avant que la fenetre existe (les mesures, une
+        // ecoute) reprend sa cadence.
+        if self.show_perf || self.browser.animating() {
+            self.want_frames();
+        }
     }
 
     fn save_rect(&self) {
@@ -381,10 +404,41 @@ impl App {
         self.open_view();
     }
 
+    /// Fait les operations de fenetre en attente (depuis le battement).
+    fn do_ops(&mut self) {
+        let ops = std::mem::take(&mut self.ops);
+        for op in ops {
+            match op {
+                WinOp::Open => self.open_view(),
+                WinOp::Close => self.close_view(true),
+                WinOp::ToggleDock => {
+                    if self.view.is_some() {
+                        self.toggle_dock();
+                    } else {
+                        let docked = self.ext("browser_docked").as_deref() == Some("1");
+                        self.r.ext_set(
+                            SECTION,
+                            "browser_docked",
+                            if docked { "0" } else { "1" },
+                            true,
+                        );
+                        self.open_view();
+                    }
+                }
+            }
+        }
+    }
+
+    fn queue(&mut self, op: WinOp) {
+        if !self.ops.contains(&op) {
+            self.ops.push(op);
+        }
+    }
+
     fn run_action(&mut self) {
         match self.action.take() {
-            Some(WIN_DOCK) => self.toggle_dock(),
-            Some(WIN_CLOSE) => self.close_view(true),
+            Some(WIN_DOCK) => self.queue(WinOp::ToggleDock),
+            Some(WIN_CLOSE) => self.queue(WinOp::Close),
             Some(WIN_PERF) => {
                 self.show_perf = !self.show_perf;
                 self.browser.mark();
@@ -428,10 +482,19 @@ impl App {
         {
             self.browser.layout(w as f32, h as f32, scale);
         }
-        let dirty = self.browser.take_dirty();
-        if !dirty && !force && !resized {
+        // NE REDESSINER QUE CE QUI CHANGE : la tete de lecture et les mesures
+        // ne touchent que le bas. Tout redessiner a chaque image d'une grande
+        // vue ancree coutait plus d'une periode de l'ecran.
+        let kind = if force || resized {
+            self.browser.take_redraw();
+            Redraw::Full
+        } else {
+            self.browser.take_redraw()
+        };
+        if kind == Redraw::None {
             return;
         }
+        let (band_y, band_h) = self.browser.wave_band();
         let t0 = ui::qpc();
         let (hwnd, docked) = (v.hwnd, v.docked);
         {
@@ -452,7 +515,13 @@ impl App {
                 perf: self.show_perf,
                 action: &mut self.action,
             };
-            self.browser.draw(&mut cv, &mut g, &mut ad);
+            if kind == Redraw::Full {
+                self.browser.draw(&mut cv, &mut g, &mut ad);
+            } else {
+                cv.push_clip(0.0, band_y, w as f32, band_h);
+                self.browser.draw_wave_band(&mut cv, &mut g, &mut ad);
+                cv.pop_clip();
+            }
             if self.show_perf {
                 let fi = self.host.frame_info();
                 let hz = if fi.period_qpc > 0 {
@@ -473,9 +542,11 @@ impl App {
                 let f = theme.font_small();
                 let tw = self.text.measure(f, &line) + theme.s(12.0);
                 let bh = theme.s(18.0);
+                // Dans la forme d'onde, en haut a droite : il est redessine
+                // avec elle.
                 let (bx, by) = (
                     w as f32 - tw - theme.s(6.0),
-                    self.browser.lay.list_y + theme.s(4.0),
+                    self.browser.lay.wave_y + theme.s(4.0),
                 );
                 cv.fill_round_rect(bx, by, tw, bh, theme.s(4.0), cp_gfx::rgba(0, 0, 0, 200));
                 self.text.draw_in(
@@ -491,7 +562,27 @@ impl App {
                 );
             }
         }
-        ui::present(v.hwnd, &v.surf.px, w, h, &[(0, 0, w, h)], &mut v.present);
+        // N'envoyer a l'ecran que les lignes qui ont change : sur une grande
+        // vue ancree, la copie vers l'ecran coutait plus que le dessin.
+        let rects: Vec<(i32, i32, i32, i32)> =
+            if force || resized || v.shown.len() != v.surf.px.len() {
+                v.shown.clear();
+                v.shown.extend_from_slice(&v.surf.px);
+                vec![(0, 0, w, h)]
+            } else {
+                let y0 = if kind == Redraw::Full {
+                    0
+                } else {
+                    (band_y.floor() as i32).clamp(0, h) as usize
+                };
+                cp_gfx::changed_bands(&v.surf.px, &mut v.shown, w as usize, y0, h as usize, 8)
+                    .into_iter()
+                    .map(|(a, b)| (0, a as i32, w, (b - a) as i32))
+                    .collect()
+            };
+        if !rects.is_empty() {
+            ui::present(v.hwnd, &v.surf.px, w, h, &rects, &mut v.present);
+        }
         let ms = ((ui::qpc() - t0) as f64 * 1000.0 / ui::qpc_freq() as f64) as f32;
         let p = &mut v.perf;
         p.last_ms = ms;
@@ -503,8 +594,9 @@ impl App {
         p.worst_ms = p.worst_ms.max(ms) * 0.999;
         p.drawn += 1;
         if self.show_perf {
-            // Le compteur change a chaque image : on garde la cadence.
-            self.browser.mark();
+            // Le compteur change a chaque image : on garde la cadence (le bas
+            // seulement).
+            self.browser.mark_wave();
         }
     }
 
@@ -777,6 +869,8 @@ impl Module for App {
             icons: IconCache::default(),
             scratch: Scratch::default(),
             action: None,
+            ops: Vec::new(),
+            ticks: 0,
             show_perf: false,
         };
         match decode(state) {
@@ -791,9 +885,10 @@ impl Module for App {
                 }
             }
             None => {
-                // Premier chargement de la session : rouvrir si elle l'etait.
+                // Premier chargement de la session : rouvrir si elle l'etait,
+                // une fois REAPER construit (au battement).
                 if app.ext("browser_open").as_deref() == Some("1") {
-                    app.open_view();
+                    app.queue(WinOp::Open);
                 }
             }
         }
@@ -830,6 +925,12 @@ impl Module for App {
     }
 
     fn tick(&mut self) {
+        self.ticks = self.ticks.saturating_add(1);
+        // Une demi-seconde de battements apres le chargement : REAPER a fini
+        // de se construire (ses dockers compris).
+        if !self.ops.is_empty() && self.ticks >= 15 {
+            self.do_ops();
+        }
         if self.view.is_none() {
             return;
         }
@@ -845,9 +946,9 @@ impl Module for App {
     fn on_action(&mut self, cmd: i32) -> bool {
         if cmd == self.cmd_browser {
             if self.view.is_some() {
-                self.close_view(true);
+                self.queue(WinOp::Close);
             } else {
-                self.open_view();
+                self.queue(WinOp::Open);
             }
             true
         } else if cmd == self.cmd_perf {
@@ -871,18 +972,7 @@ impl Module for App {
             self.r.ext_set(SECTION, "selftest_state", &st, false);
             true
         } else if cmd == self.cmd_dock {
-            if self.view.is_some() {
-                self.toggle_dock();
-            } else {
-                let docked = self.ext("browser_docked").as_deref() == Some("1");
-                self.r.ext_set(
-                    SECTION,
-                    "browser_docked",
-                    if docked { "0" } else { "1" },
-                    true,
-                );
-                self.open_view();
-            }
+            self.queue(WinOp::ToggleDock);
             true
         } else {
             false
@@ -955,7 +1045,7 @@ impl Module for App {
                 Some(0)
             }
             msg::CLOSE => {
-                self.close_view(true);
+                self.queue(WinOp::Close);
                 Some(0)
             }
             msg::DESTROY => {

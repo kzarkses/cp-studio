@@ -36,6 +36,11 @@ pub struct SelfTest {
     played_at: Option<Instant>,
     ui_at: Option<Instant>,
     keys_step: u8,
+    wheels: u32,
+    last_tick: Option<Instant>,
+    max_gap_ms: f64,
+    throttled0: u64,
+    docked0: bool,
     frames0: cp_abi::FrameInfo,
     snapped: bool,
 }
@@ -80,6 +85,11 @@ pub fn requested() -> Option<SelfTest> {
         played_at: None,
         ui_at: None,
         keys_step: 0,
+        wheels: 0,
+        last_tick: None,
+        max_gap_ms: 0.0,
+        throttled0: 0,
+        docked0: false,
         frames0: cp_abi::FrameInfo::default(),
         snapped: false,
     })
@@ -249,6 +259,15 @@ impl SelfTest {
 
     /// La partie hors moteur audio. Rend vrai quand tout est fini.
     pub fn tick_ui(&mut self) -> bool {
+        // Le battement de REAPER lui-meme : le plus grand trou entre deux
+        // battements dit si son fil principal a ete gele.
+        let now = Instant::now();
+        if let Some(t) = self.last_tick {
+            self.max_gap_ms = self
+                .max_gap_ms
+                .max(now.duration_since(t).as_secs_f64() * 1000.0);
+        }
+        self.last_tick = Some(now);
         let Some(r) = crate::REAPER.get() else {
             return true;
         };
@@ -300,10 +319,8 @@ impl SelfTest {
                 if perf != 0 {
                     r.main_on_command(perf);
                 }
-                self.say(
-                    crate::views_count() > 0,
-                    format!("le navigateur s'ouvre ({} fenetre)", crate::views_count()),
-                );
+                // L'ouverture se fait au battement suivant (jamais dans un
+                // message) : on la verifie un peu plus tard.
                 self.frames0 = cp_abi::FrameInfo::default();
                 self.ui_at = Some(Instant::now());
                 self.phase = Phase::Watch;
@@ -312,6 +329,10 @@ impl SelfTest {
                 let t = self.ui_at.map_or(0.0, |t| t.elapsed().as_secs_f64());
                 if t > 1.5 && !self.snapped {
                     self.snapped = true;
+                    self.say(
+                        crate::views_count() > 0,
+                        format!("le navigateur s'ouvre ({} fenetre)", crate::views_count()),
+                    );
                     // Le signal pour la photo (cargo xtask reaper-test) : la
                     // fenetre du navigateur.
                     let h = crate::first_view().map_or(0, |h| h.0);
@@ -323,6 +344,8 @@ impl SelfTest {
                     self.frames0 = crate::views::frame_info();
                     self.frames0.qpc_freq = self.frames0.qpc_freq.max(1);
                     crate::views::reset_cost();
+                    self.max_gap_ms = 0.0;
+                    self.throttled0 = crate::views::throttled();
                 }
                 if t > 4.5 {
                     let f = crate::views::frame_info();
@@ -358,16 +381,26 @@ impl SelfTest {
                             k.max_late_ms
                         ),
                     );
+                    let docked = crate::first_view().is_some_and(|h| r.dock_of(h).is_some());
+                    self.say(
+                        self.max_gap_ms < 200.0,
+                        format!(
+                            "le battement de REAPER pendant l'animation ({}) : plus grand trou {:.0} ms ; images retenues pour lui laisser la main : {}",
+                            if docked { "ancree" } else { "flottante" },
+                            self.max_gap_ms,
+                            crate::views::throttled() - self.throttled0
+                        ),
+                    );
                     // On remet l'affichage des mesures comme il etait.
                     let perf = r.named_command("_CPSTUDIO_PERF");
                     if perf != 0 {
                         r.main_on_command(perf);
                     }
-                    // Puis l'ancrage : dans un docker, et retour.
+                    // Puis l'ancrage : on bascule, on verifie, on rebascule
+                    // (la preference de Cedric revient telle qu'elle etait).
                     let dock = r.named_command("_CPSTUDIO_BROWSER_DOCK");
-                    let floating_before =
-                        crate::first_view().is_some_and(|h| r.dock_of(h).is_none());
-                    if dock != 0 && floating_before {
+                    self.docked0 = crate::first_view().is_some_and(|h| r.dock_of(h).is_some());
+                    if dock != 0 && crate::first_view().is_some() {
                         r.main_on_command(dock);
                         self.ui_at = Some(Instant::now());
                         self.snapped = false;
@@ -384,20 +417,40 @@ impl SelfTest {
                     self.snapped = true;
                     let docked = crate::first_view().and_then(|h| r.dock_of(h));
                     self.say(
-                        docked.is_some(),
-                        format!("le navigateur s'ancre (docker {})", docked.unwrap_or(-1)),
+                        docked.is_some() != self.docked0,
+                        if self.docked0 {
+                            "le navigateur se desancre (flottant)".to_string()
+                        } else {
+                            format!("le navigateur s'ancre (docker {})", docked.unwrap_or(-1))
+                        },
                     );
                     let h = crate::first_view().map_or(0, |h| h.0);
                     let _ = fs::write(dir().join("snap2.txt"), format!("{h}\n"));
                 }
                 if t > 2.5 {
-                    // Rendre a Cedric sa fenetre flottante.
+                    // Rendre a Cedric sa fenetre comme elle etait.
                     let dock = r.named_command("_CPSTUDIO_BROWSER_DOCK");
                     if dock != 0 {
                         r.main_on_command(dock);
                     }
-                    let floating = crate::first_view().is_some_and(|h| r.dock_of(h).is_none());
-                    self.say(floating, "et redevient flottante".into());
+                    self.ui_at = Some(Instant::now());
+                    self.keys_step = 9;
+                    self.phase = Phase::Keys;
+                }
+            }
+            Phase::Keys if self.keys_step == 9 => {
+                let t = self.ui_at.map_or(0.0, |t| t.elapsed().as_secs_f64());
+                if t > 0.5 {
+                    let docked = crate::first_view().is_some_and(|h| r.dock_of(h).is_some());
+                    self.say(
+                        docked == self.docked0,
+                        if self.docked0 {
+                            "et revient au docker"
+                        } else {
+                            "et redevient flottante"
+                        }
+                        .into(),
+                    );
                     // Puis le clavier, par le vrai chemin des touches.
                     if let Some(h) = crate::first_view() {
                         const WM_KEYDOWN: u32 = 0x100;
@@ -466,8 +519,51 @@ impl SelfTest {
                         st.starts_with("sel=3 "),
                         format!("etat du navigateur apres le rechargement : {st}"),
                     );
-                    self.finish_report();
-                    return true;
+                    // Le defilement a la molette : chaque cran redessine TOUTE
+                    // la vue (la liste bouge). On mesure le dessin et le
+                    // battement de REAPER.
+                    crate::views::reset_cost();
+                    self.max_gap_ms = 0.0;
+                    self.throttled0 = crate::views::throttled();
+                    self.keys_step = 3;
+                    self.wheels = 0;
+                    self.ui_at = Some(Instant::now());
+                } else if self.keys_step == 3 {
+                    if let Some(h) = crate::first_view() {
+                        if self.wheels < 40 {
+                            // Bas puis Haut, sur les racines (des dossiers :
+                            // aucun son). La molette ne sert pas : REAPER
+                            // l'envoie a la fenetre sous la VRAIE souris.
+                            let vk = if self.wheels % 2 == 0 {
+                                0x28usize
+                            } else {
+                                0x26
+                            };
+                            win::post_message(h, 0x100, vk, 1);
+                            win::post_message(h, 0x101, vk, 1);
+                            self.wheels += 1;
+                        } else if t > 2.0 {
+                            let k = crate::views::cost();
+                            let docked = r.dock_of(h).is_some();
+                            let rc = cp_sys::ui::client_rect(h);
+                            self.say(
+                                self.max_gap_ms < 200.0,
+                                format!(
+                                    "redessin complet ({}, {}x{} px, {} images) : {:.1} ms en moyenne, {:.1} au pire ; battement de REAPER {:.0} ms au pire ; images retenues {}",
+                                    if docked { "ancree" } else { "flottante" },
+                                    rc.right - rc.left,
+                                    rc.bottom - rc.top,
+                                    k.frames,
+                                    k.sum_draw_ms / k.frames.max(1) as f64,
+                                    k.max_draw_ms,
+                                    self.max_gap_ms,
+                                    crate::views::throttled() - self.throttled0
+                                ),
+                            );
+                            self.finish_report();
+                            return true;
+                        }
+                    }
                 }
             }
             Phase::Done => return true,

@@ -279,6 +279,27 @@ impl<'a> Canvas<'a> {
         if ix0 >= ix1 || iy0 >= iy1 {
             return;
         }
+        // Le cas courant d'une interface : un rectangle sur des pixels entiers.
+        // Opaque, il se REMPLIT ligne par ligne ; translucide, il se compose
+        // sans calcul de couverture. (Le chemin general coutait 6 ms par image
+        // sur une grande vue ancree, pour des fonds de lignes.)
+        let whole =
+            x0.fract() == 0.0 && y0.fract() == 0.0 && x1.fract() == 0.0 && y1.fract() == 0.0;
+        if let (true, Paint::Solid(c)) = (whole, paint) {
+            let src = c.premul();
+            for py in iy0..iy1 {
+                let row = (py * self.s.w) as usize;
+                let span = &mut self.s.px[row + ix0 as usize..row + ix1 as usize];
+                if c.a == 255 {
+                    span.fill(src);
+                } else {
+                    for d in span {
+                        *d = over(*d, src, 255);
+                    }
+                }
+            }
+            return;
+        }
         let cov1 = |a: f32, b: f32, i: i32| -> f32 {
             let lo = a.max(i as f32);
             let hi = b.min(i as f32 + 1.0);
@@ -527,3 +548,39 @@ impl<'a> Canvas<'a> {
 
 #[cfg(test)]
 mod tests;
+
+/// Les bandes de lignes ou `now` differe de `shown` (ce qui est a l'ecran),
+/// entre les lignes `y0` et `y1` ; `shown` est mis a jour au passage. Deux
+/// bandes separees de moins de `gap` lignes n'en font qu'une. C'est ce qui
+/// fait qu'on n'envoie a l'ecran que ce qui a change : la copie vers l'ecran
+/// coute plus que le dessin sur une grande fenetre.
+pub fn changed_bands(
+    now: &[u32],
+    shown: &mut [u32],
+    w: usize,
+    y0: usize,
+    y1: usize,
+    gap: usize,
+) -> Vec<(usize, usize)> {
+    let mut out: Vec<(usize, usize)> = Vec::new();
+    let mut start: Option<usize> = None;
+    for y in y0..y1 {
+        let r = y * w..(y + 1) * w;
+        if now[r.clone()] != shown[r.clone()] {
+            shown[r.clone()].copy_from_slice(&now[r]);
+            start.get_or_insert(y);
+        } else if let Some(s) = start.take() {
+            match out.last_mut() {
+                Some(last) if s - last.1 < gap => last.1 = y,
+                _ => out.push((s, y)),
+            }
+        }
+    }
+    if let Some(s) = start {
+        match out.last_mut() {
+            Some(last) if s - last.1 < gap => last.1 = y1,
+            _ => out.push((s, y1)),
+        }
+    }
+    out
+}

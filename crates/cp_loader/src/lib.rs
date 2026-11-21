@@ -318,6 +318,13 @@ impl Host for LoaderHost {
     ) -> isize {
         let Some(r) = REAPER.get() else { return 0 };
         // Aucun verrou tenu : Windows envoie des messages pendant la creation.
+        log(
+            LOG_INFO,
+            &format!(
+                "vue : creation ({})",
+                if docked { "ancree" } else { "flottante" }
+            ),
+        );
         let Some(hwnd) = win::create_view(title, x, y, w, h, r.main_hwnd(), docked) else {
             log(
                 LOG_ERROR,
@@ -327,11 +334,14 @@ impl Host for LoaderHost {
         };
         lock(&WINDOWS).push(hwnd);
         if docked {
+            log(LOG_INFO, "vue : ajout au docker");
             r.dock_add(hwnd, title, ident);
+            log(LOG_INFO, "vue : onglet active");
             r.dock_activate(hwnd);
         } else {
             win::show(hwnd);
         }
+        log(LOG_INFO, "vue : prete");
         hwnd.0
     }
 
@@ -344,13 +354,29 @@ impl Host for LoaderHost {
         // Retirer du docker AVANT de detruire : dans l'autre sens, REAPER
         // garde une reference vers une fenetre morte.
         if let Some(r) = REAPER.get() {
+            log(LOG_INFO, "vue : retrait du docker");
             r.dock_remove(h);
         }
+        log(LOG_INFO, "vue : destruction");
         win::destroy_window(h);
+        log(LOG_INFO, "vue : detruite");
     }
 
     fn frames(&self, hwnd: isize, on: bool) {
-        if lock(&WINDOWS).contains(&Hwnd(hwnd)) {
+        let known = lock(&WINDOWS).contains(&Hwnd(hwnd));
+        log(
+            LOG_INFO,
+            &format!(
+                "cadence {} pour {hwnd:#x}{}",
+                if on { "demandee" } else { "rendue" },
+                if known {
+                    ""
+                } else {
+                    " (fenetre inconnue : ignoree)"
+                }
+            ),
+        );
+        if known {
             views::frames(Hwnd(hwnd), on);
         }
     }
@@ -761,7 +787,7 @@ fn wnd_proc(m: &WinMsg) -> isize {
         let t0 = cp_sys::ui::qpc();
         let r = hot.call(|api| (api.wnd_proc)(m.hwnd.0, m.msg, m.wp, m.lp, &mut out));
         if let Some(vb) = frame_vblank {
-            views::record(t0 - vb, cp_sys::ui::qpc() - t0);
+            views::record(m.hwnd, t0 - vb, cp_sys::ui::qpc() - t0);
         }
         match r {
             Some(1) => return out,

@@ -70,6 +70,21 @@ impl Browser {
         self.draw_status(cv, g, rate);
     }
 
+    /// Le bas seulement : la forme d'onde et la ligne d'etat (la tete de
+    /// lecture qui avance ne redessine pas la liste).
+    pub fn draw_wave_band(&mut self, cv: &mut Canvas<'_>, g: &mut Gfx<'_>, h: &mut dyn Host) {
+        let th = g.th;
+        let l = self.lay;
+        cv.fill_rect(0.0, l.wave_y - 1.0, l.w, 1.0, th.seam);
+        self.draw_wave(cv, g, h);
+        let rate = self
+            .sync_rate(h)
+            .zip(crate::v2::bpm_from_name(&crate::model::display_name(
+                std::path::Path::new(&self.wave.path),
+            )));
+        self.draw_status(cv, g, rate);
+    }
+
     fn draw_bar(&mut self, cv: &mut Canvas<'_>, g: &mut Gfx<'_>) {
         let th = g.th;
         let l = self.lay;
