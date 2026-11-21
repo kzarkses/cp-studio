@@ -26,6 +26,11 @@ debug = "line-tables-only"
 [profile.dev.package."*"]
 opt-level = 3
 
+# Le reseau de Guitar Tab : des millions de multiplications par seconde de son.
+# Optimise meme en developpement (le module, lui, reste en opt-level 1).
+[profile.dev.package.cp_tab]
+opt-level = 3
+
 [profile.release]
 opt-level = 3
 debug = "line-tables-only"

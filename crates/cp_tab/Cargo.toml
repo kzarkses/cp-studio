@@ -1,0 +1,12 @@
+[package]
+name = "cp_tab"
+description = "CP Guitar Tab : de l'audio d'une guitare a une tablature (Basic Pitch porte en Rust, doigte, MusicXML), sans Windows"
+edition.workspace = true
+version.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+
+[lints]
+workspace = true

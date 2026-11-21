@@ -1,0 +1,12 @@
+cp_tab contains the weights of the Basic Pitch model (src/bp_weights.bin),
+extracted from basic_pitch/saved_models/icassp_2022/nmp.onnx.
+
+Basic Pitch
+Copyright 2022 Spotify AB
+Licensed under the Apache License, Version 2.0
+https://github.com/spotify/basic-pitch
+https://www.apache.org/licenses/LICENSE-2.0
+
+The network (model.rs) and the note decoding (notes.rs) follow the Basic
+Pitch reference implementation (Apache-2.0). The weights are unchanged; the
+file format is our own (see tools/gen_weights.py).
