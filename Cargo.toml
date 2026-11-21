@@ -1,0 +1,31 @@
+[workspace]
+resolver = "3"
+members = ["crates/*", "xtask"]
+
+[workspace.package]
+edition = "2024"
+version = "0.1.0"
+rust-version = "1.85"
+publish = false
+
+# Une seule porte vers REAPER et Windows : cp_sys. Partout ailleurs, `unsafe` est
+# refuse par le compilateur. Les deux seules exceptions sont les points d'entree
+# exportes (une ligne chacun, generes par les macros de cp_sys).
+[workspace.lints.rust]
+unsafe_code = "deny"
+
+[workspace.lints.clippy]
+undocumented_unsafe_blocks = "warn"
+
+# Le module se recompile a chaque retouche : opt-level 1 garde la compilation
+# rapide sans rendre le code debug dix fois plus lent qu'en release.
+[profile.dev]
+opt-level = 1
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+opt-level = 3
+
+[profile.release]
+opt-level = 3
+debug = "line-tables-only"

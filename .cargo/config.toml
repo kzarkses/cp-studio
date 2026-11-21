@@ -1,0 +1,7 @@
+[alias]
+xtask = "run -q -p xtask --"
+
+# Le runtime C est lie dans la DLL (comme /MT avant) : rien a installer chez
+# l'utilisateur. Pas de target-cpu=native : la cible est un PC de 2005 (SSE2).
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]

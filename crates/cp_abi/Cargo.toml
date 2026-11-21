@@ -1,0 +1,10 @@
+[package]
+name = "cp_abi"
+description = "Le contrat binaire entre le chargeur fixe et le module rechargeable"
+edition.workspace = true
+version.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true

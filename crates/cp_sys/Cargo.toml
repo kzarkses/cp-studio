@@ -1,0 +1,15 @@
+[package]
+name = "cp_sys"
+description = "La seule porte vers REAPER et Windows : tout le code unsafe du projet vit ici"
+edition.workspace = true
+version.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+cp_abi = { path = "../cp_abi" }
+
+# Pas de `[lints] workspace = true` : c'est le seul crate qui a le droit d'ecrire
+# `unsafe`. Chaque bloc porte un commentaire SAFETY (verifie par clippy).
+[lints.clippy]
+undocumented_unsafe_blocks = "warn"

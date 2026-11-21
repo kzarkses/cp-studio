@@ -1,0 +1,20 @@
+[package]
+name = "cp_loader"
+description = "reaper_cp_studio.dll : la petite DLL fixe que REAPER charge au demarrage"
+edition.workspace = true
+version.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[lib]
+# REAPER ne charge que les DLL de UserPlugins dont le nom commence par reaper_.
+name = "reaper_cp_studio"
+crate-type = ["cdylib"]
+
+[dependencies]
+cp_abi = { path = "../cp_abi" }
+cp_hot = { path = "../cp_hot" }
+cp_sys = { path = "../cp_sys" }
+
+[lints]
+workspace = true

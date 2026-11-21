@@ -1,0 +1,209 @@
+//! Cote module : le trait [`Module`], la table [`ModuleApi`] et la macro
+//! [`export_module!`].
+//!
+//! Chaque copie chargee du module a SES statics (ceux de ce fichier compris) :
+//! un rechargement repart de zero, et seul l'etat range par `shutdown` passe a
+//! la generation suivante.
+//!
+//! Regles pour un module, a cause du dechargement :
+//! - ne jamais lancer de fil qui survive a `shutdown` (son code disparaitrait
+//!   sous lui) ;
+//! - ne jamais confier a REAPER ou a Windows un pointeur vers son propre code :
+//!   les actions, le battement et les fenetres passent par le chargeur.
+
+use std::ffi::{CStr, c_void};
+use std::sync::{Mutex, OnceLock, TryLockError};
+
+use cp_abi::{ABI, BUSY, FAULT, HostApi, LOG_ERROR, LOG_INFO, LOG_WARN, ModuleApi, OK};
+
+use crate::guard;
+use crate::win::{Hwnd, WinMsg};
+
+/// Ce qu'un module rechargeable implemente.
+pub trait Module: Send + 'static {
+    /// `state` = ce que la generation precedente a range (vide au premier
+    /// chargement).
+    fn init(host: HostRef, state: &[u8]) -> Self
+    where
+        Self: Sized;
+    /// Ranger son etat (`HostRef::store_state`) avant d'etre decharge.
+    fn shutdown(&mut self) {}
+    fn tick(&mut self) {}
+    fn on_action(&mut self, _cmd: i32) -> bool {
+        false
+    }
+    /// `Some(resultat)` si le message est traite.
+    fn wnd_proc(&mut self, _msg: &WinMsg) -> Option<isize> {
+        None
+    }
+}
+
+/// L'hote vu du module : des methodes sures autour de [`HostApi`].
+#[derive(Clone, Copy)]
+pub struct HostRef(&'static HostApi);
+
+impl HostRef {
+    pub fn log(&self, level: u32, msg: &str) {
+        (self.0.log)(level, msg.as_ptr(), msg.len());
+    }
+    pub fn info(&self, msg: &str) {
+        self.log(LOG_INFO, msg);
+    }
+    pub fn warn(&self, msg: &str) {
+        self.log(LOG_WARN, msg);
+    }
+    pub fn error(&self, msg: &str) {
+        self.log(LOG_ERROR, msg);
+    }
+    /// `GetFunc` de REAPER (nul si absente).
+    pub fn get_func(&self, name: &CStr) -> *mut c_void {
+        (self.0.get_func)(name.as_ptr())
+    }
+    pub fn register_action(&self, id: &str, name: &str) -> i32 {
+        (self.0.register_action)(id.as_ptr(), id.len(), name.as_ptr(), name.len())
+    }
+    pub fn create_window(&self, kind: u32, title: &str, w: i32, h: i32) -> Option<Hwnd> {
+        let r = (self.0.create_window)(kind, title.as_ptr(), title.len(), w, h);
+        (r != 0).then_some(Hwnd(r))
+    }
+    pub fn store_state(&self, data: &[u8]) {
+        (self.0.store_state)(data.as_ptr(), data.len());
+    }
+    pub fn generation(&self) -> u32 {
+        (self.0.generation)()
+    }
+}
+
+type Ctor = fn(HostRef, &[u8]) -> Box<dyn Module>;
+
+static INSTANCE: Mutex<Option<Box<dyn Module>>> = Mutex::new(None);
+static CTOR: OnceLock<Ctor> = OnceLock::new();
+static HOST: OnceLock<HostRef> = OnceLock::new();
+
+static API: ModuleApi = ModuleApi {
+    abi: ABI,
+    init: t_init,
+    shutdown: t_shutdown,
+    tick: t_tick,
+    on_action: t_on_action,
+    wnd_proc: t_wnd_proc,
+};
+
+fn ctor<T: Module>(h: HostRef, s: &[u8]) -> Box<dyn Module> {
+    Box::new(T::init(h, s))
+}
+
+/// Corps de `cp_module_entry` (voir [`export_module!`]).
+#[doc(hidden)]
+pub fn entry<T: Module>(abi: u32) -> *const ModuleApi {
+    if abi != ABI {
+        return std::ptr::null();
+    }
+    let _ = CTOR.set(ctor::<T>);
+    &API
+}
+
+/// Exporte `cp_module_entry` pour le type `$t: Module`.
+#[macro_export]
+macro_rules! export_module {
+    ($t:ty) => {
+        #[allow(unsafe_code)]
+        #[unsafe(no_mangle)]
+        pub extern "C" fn cp_module_entry(abi: u32) -> *const $crate::abi::ModuleApi {
+            $crate::module::entry::<$t>(abi)
+        }
+    };
+}
+
+/// Appelle le module sans jamais attendre : un appel reentrant rend BUSY au
+/// lieu de se bloquer sur lui-meme.
+fn with_instance(f: impl FnOnce(&mut dyn Module) -> i32) -> i32 {
+    let mut g = match INSTANCE.try_lock() {
+        Ok(g) => g,
+        Err(TryLockError::WouldBlock) => return BUSY,
+        Err(TryLockError::Poisoned(_)) => return FAULT,
+    };
+    let Some(m) = g.as_mut() else { return OK };
+    guard(|| f(m.as_mut())).unwrap_or(FAULT)
+}
+
+fn install_panic_hook() {
+    std::panic::set_hook(Box::new(|info| {
+        if let Some(h) = HOST.get() {
+            h.error(&format!("panique dans le module : {info}"));
+        }
+    }));
+}
+
+extern "C" fn t_init(host: *const HostApi, state: *const u8, len: usize) -> i32 {
+    if host.is_null() {
+        return FAULT;
+    }
+    // SAFETY: le chargeur passe sa table, qui vit aussi longtemps que REAPER.
+    let h = HostRef(unsafe { &*host });
+    let _ = HOST.set(h);
+    install_panic_hook();
+    let st: &[u8] = if state.is_null() || len == 0 {
+        &[]
+    } else {
+        // SAFETY: le chargeur passe une tranche valide pendant l'appel.
+        unsafe { std::slice::from_raw_parts(state, len) }
+    };
+    let Some(make) = CTOR.get() else { return FAULT };
+    let Some(m) = guard(|| make(h, st)) else {
+        return FAULT;
+    };
+    match INSTANCE.try_lock() {
+        Ok(mut g) => {
+            *g = Some(m);
+            OK
+        }
+        Err(_) => FAULT,
+    }
+}
+
+extern "C" fn t_shutdown() -> i32 {
+    let taken = match INSTANCE.try_lock() {
+        Ok(mut g) => g.take(),
+        Err(TryLockError::WouldBlock) => return BUSY,
+        Err(TryLockError::Poisoned(_)) => return FAULT,
+    };
+    let Some(mut m) = taken else { return OK };
+    match guard(move || {
+        m.shutdown();
+        drop(m);
+    }) {
+        Some(()) => OK,
+        None => FAULT,
+    }
+}
+
+extern "C" fn t_tick() -> i32 {
+    with_instance(|m| {
+        m.tick();
+        OK
+    })
+}
+
+extern "C" fn t_on_action(cmd: i32) -> i32 {
+    with_instance(|m| m.on_action(cmd) as i32)
+}
+
+extern "C" fn t_wnd_proc(hwnd: isize, msg: u32, wp: usize, lp: isize, out: *mut isize) -> i32 {
+    let m = WinMsg {
+        hwnd: Hwnd(hwnd),
+        msg,
+        wp,
+        lp,
+    };
+    with_instance(|x| match x.wnd_proc(&m) {
+        Some(r) => {
+            if !out.is_null() {
+                // SAFETY: le chargeur passe l'adresse d'un isize a lui.
+                unsafe { *out = r };
+            }
+            1
+        }
+        None => 0,
+    })
+}

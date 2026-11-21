@@ -1,0 +1,23 @@
+//! La seule porte vers REAPER et Windows.
+//!
+//! Tout le code `unsafe` du projet vit dans ce crate. Les autres crates le
+//! refusent a la compilation (`unsafe_code = "deny"` dans le Cargo.toml racine) :
+//! ils ne voient que des fonctions sures.
+//!
+//! - [`reaper`] : le point d'entree de l'extension, `Register`, `GetFunc`.
+//! - [`win`] : fenetres, peinture GDI, horloge locale.
+//! - [`dylib`] : charger / decharger le module rechargeable.
+//! - [`host`] : cote chargeur, la table offerte au module.
+//! - [`module`] : cote module, la table offerte au chargeur et la macro
+//!   [`export_module!`].
+
+pub use cp_abi as abi;
+
+pub mod dylib;
+pub mod guard;
+pub mod host;
+pub mod module;
+pub mod reaper;
+pub mod win;
+
+pub use guard::guard;

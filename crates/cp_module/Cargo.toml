@@ -1,0 +1,18 @@
+[package]
+name = "cp_module"
+description = "cp_module.dll : tout le code de CP Studio, recharge a chaud"
+edition.workspace = true
+version.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+build = "build.rs"
+
+[lib]
+name = "cp_module"
+crate-type = ["cdylib"]
+
+[dependencies]
+cp_sys = { path = "../cp_sys" }
+
+[lints]
+workspace = true
