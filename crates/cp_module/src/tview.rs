@@ -43,6 +43,7 @@ const M_PLACE_ARRANGE: u32 = 10;
 const M_PLACE_DOCK: u32 = 11;
 const M_PLACE_FLOAT: u32 = 12;
 const M_VIEW_CLOSE: u32 = 13;
+const M_GTAB_SETTINGS: u32 = 14;
 
 /// La fenetre du transport.
 pub(crate) struct TView {
@@ -563,7 +564,12 @@ impl App {
             .unwrap_or_default();
         let run = format!("Run: {name}");
         let n = self.tp.cfg.len();
-        let items = [
+        let is_gtab = self
+            .tp
+            .cfg
+            .get(ci)
+            .is_some_and(|c| c.id == "_CPSTUDIO_GUITARTAB");
+        let mut items = vec![
             Some(MenuItem {
                 id: M_RUN,
                 text: &run,
@@ -597,8 +603,20 @@ impl App {
                 enabled: true,
             }),
         ];
+        if is_gtab {
+            items.insert(
+                1,
+                Some(MenuItem {
+                    id: M_GTAB_SETTINGS,
+                    text: "Guitar Tab settings...",
+                    checked: false,
+                    enabled: true,
+                }),
+            );
+        }
         match self.menu_at(x, y, &items) {
             M_RUN => self.transport_act(Act::Item(i)),
+            M_GTAB_SETTINGS => self.gtab_edit_settings(),
             M_LEFT if ci > 0 => {
                 self.tp.cfg.swap(ci, ci - 1);
                 self.save_items();

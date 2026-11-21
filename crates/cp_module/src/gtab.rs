@@ -27,6 +27,110 @@ use cp_tab::{Note, NoteParams, Progress, analyze, make_notes};
 
 use crate::{App, SECTION};
 
+/// Les reglages de Guitar Tab (ExtState `gtab_settings`, persistant).
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct Settings {
+    /// Le seuil d'une attaque (0..1) : plus bas, plus de notes.
+    pub onset: f32,
+    /// Le seuil d'une note qui sonne (0..1).
+    pub frame: f32,
+    /// La plus courte note gardee, en ms.
+    pub min_ms: f64,
+    /// La grille : cases par noire (4 = double croche, 2 = croche, 8 =
+    /// triple croche).
+    pub grid: u32,
+    /// L'accordage, de la corde grave a l'aigue (MIDI).
+    pub tuning: Vec<i32>,
+}
+
+impl Default for Settings {
+    fn default() -> Self {
+        Settings {
+            onset: 0.5,
+            frame: 0.3,
+            min_ms: 127.7,
+            grid: 4,
+            tuning: vec![40, 45, 50, 55, 59, 64],
+        }
+    }
+}
+
+impl Settings {
+    fn to_csv(&self) -> String {
+        let t: Vec<String> = self.tuning.iter().map(|p| p.to_string()).collect();
+        format!(
+            "{},{},{},{},{}",
+            self.onset,
+            self.frame,
+            self.min_ms,
+            self.grid,
+            t.join(" ")
+        )
+    }
+
+    /// Relit « onset,frame,ms,grille,accordage » ; une valeur hors bornes
+    /// garde la valeur par defaut.
+    fn from_csv(s: &str) -> Settings {
+        let d = Settings::default();
+        let f: Vec<&str> = s.split(',').map(str::trim).collect();
+        let num = |i: usize| {
+            f.get(i)
+                .and_then(|v| v.replace(' ', "").parse::<f64>().ok())
+        };
+        let tuning: Vec<i32> = f
+            .get(4)
+            .map(|v| {
+                v.split_whitespace()
+                    .filter_map(|x| x.parse::<i32>().ok())
+                    .filter(|p| (20..=90).contains(p))
+                    .collect()
+            })
+            .unwrap_or_default();
+        Settings {
+            onset: num(0)
+                .filter(|v| (0.05..=0.95).contains(v))
+                .map_or(d.onset, |v| v as f32),
+            frame: num(1)
+                .filter(|v| (0.05..=0.95).contains(v))
+                .map_or(d.frame, |v| v as f32),
+            min_ms: num(2)
+                .filter(|v| (20.0..=1000.0).contains(v))
+                .unwrap_or(d.min_ms),
+            grid: num(3)
+                .map(|v| v as u32)
+                .filter(|g| [2, 4, 8].contains(g))
+                .unwrap_or(d.grid),
+            tuning: if (4..=8).contains(&tuning.len()) {
+                tuning
+            } else {
+                d.tuning
+            },
+        }
+    }
+
+    pub fn tuning(&self) -> Tuning {
+        Tuning {
+            strings: self.tuning.clone(),
+            frets: 22,
+        }
+    }
+
+    /// Les seuils du decodage, et les hauteurs bornees a l'instrument : une
+    /// note plus grave que la corde grave est une erreur d'octave du reseau.
+    pub fn note_params(&self) -> NoteParams {
+        let t = self.tuning();
+        let (lo, hi) = t.range();
+        NoteParams {
+            onset_thresh: self.onset,
+            frame_thresh: self.frame,
+            min_len: cp_tab::notes::min_len_frames(self.min_ms),
+            min_pitch: lo,
+            max_pitch: hi,
+            ..NoteParams::default()
+        }
+    }
+}
+
 /// Ce que rend le fil : la source (detruite sur le fil principal) et les notes.
 struct Out {
     src: Option<CppSource>,
@@ -42,7 +146,7 @@ pub(crate) struct Job {
     last_pct: i32,
 }
 
-fn work(mut src: CppSource, item: ItemAudio, progress: Arc<Progress>) -> Out {
+fn work(mut src: CppSource, item: ItemAudio, progress: Arc<Progress>, prm: NoteParams) -> Out {
     let sr = src.sample_rate();
     let nch = src.channels().max(1) as usize;
     if sr <= 0.0 {
@@ -91,7 +195,7 @@ fn work(mut src: CppSource, item: ItemAudio, progress: Arc<Progress>) -> Out {
             secs,
         };
     };
-    let notes = make_notes(&post, &NoteParams::default());
+    let notes = make_notes(&post, &prm);
     Out {
         src: Some(src),
         result: Ok(notes),
@@ -135,6 +239,37 @@ impl App {
         self.gtab.is_some()
     }
 
+    pub(crate) fn gtab_settings(&self) -> Settings {
+        self.r
+            .ext_get(SECTION, "gtab_settings")
+            .map(|s| Settings::from_csv(&s))
+            .unwrap_or_default()
+    }
+
+    /// La petite boite de REAPER pour les reglages.
+    pub(crate) fn gtab_edit_settings(&mut self) {
+        let cur = self.gtab_settings();
+        let captions = "Onset threshold (0.05-0.95; lower = more notes),\
+                        Note threshold (0.05-0.95),\
+                        Shortest note (ms),\
+                        Grid (4 = 16th 2 = 8th 8 = 32nd),\
+                        Tuning (MIDI low to high; 40 = E2),\
+                        extrawidth=160";
+        let captions: String = captions.split_whitespace().collect::<Vec<_>>().join(" ");
+        let captions = captions.replace(", ", ",");
+        if let Some(v) = self
+            .r
+            .user_inputs("CP Guitar Tab - settings", 5, &captions, &cur.to_csv())
+        {
+            let s = Settings::from_csv(&v);
+            self.r.ext_set(SECTION, "gtab_settings", &s.to_csv(), true);
+            self.r.show_console_msg(&format!(
+                "CP Guitar Tab settings: onset {}, note {}, shortest {} ms, grid {} per quarter, tuning {:?}\n",
+                s.onset, s.frame, s.min_ms, s.grid, s.tuning
+            ));
+        }
+    }
+
     /// L'action : lancer (ou annuler) la transcription de l'item choisi.
     pub(crate) fn gtab_start(&mut self) {
         if let Some(j) = &self.gtab {
@@ -159,9 +294,10 @@ impl App {
         let progress = Arc::new(Progress::default());
         let p2 = progress.clone();
         let it2 = item.clone();
+        let prm = self.gtab_settings().note_params();
         let handle = std::thread::Builder::new()
             .name("cp_guitar_tab".into())
-            .spawn(move || work(src, it2, p2))
+            .spawn(move || work(src, it2, p2, prm))
             .ok();
         if handle.is_none() {
             self.host
@@ -281,13 +417,14 @@ impl App {
                 pitch: n.pitch,
             })
             .collect();
+        let set = self.gtab_settings();
         let spec = ScoreSpec {
             title: name.clone(),
             origin_qn,
             sig,
             bpm,
-            grid: 4,
-            tuning: Tuning::standard(),
+            grid: set.grid,
+            tuning: set.tuning(),
         };
         let (xml, st) = musicxml(&tab, &spec);
         // Jamais MuseScore ni le dossier de Cedric pendant l'auto-test.
@@ -351,5 +488,26 @@ impl App {
             msg += &format!("  Score: could not write {}\n", path.display());
         }
         self.r.show_console_msg(&msg);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn les_reglages_se_relisent_et_se_bornent() {
+        let d = Settings::default();
+        assert_eq!(Settings::from_csv(&d.to_csv()), d);
+        let s = Settings::from_csv("0.35, 0.2, 80, 8, 38 45 50 55 59 64");
+        assert_eq!(s.onset, 0.35);
+        assert_eq!(s.grid, 8);
+        assert_eq!(s.tuning[0], 38);
+        // Hors bornes : la valeur par defaut.
+        let s = Settings::from_csv("7, -1, 5, 3, 40");
+        assert_eq!(s, d);
+        // Les hauteurs bornees a l'instrument (drop D : jusqu'a D2).
+        let p = Settings::from_csv("0.5,0.3,127.7,4,38 45 50 55 59 64").note_params();
+        assert_eq!((p.min_pitch, p.max_pitch), (38, 64 + 22));
     }
 }

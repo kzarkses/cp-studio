@@ -320,6 +320,7 @@ pub(crate) struct App {
     cmd_place_dock: i32,
     cmd_place_float: i32,
     cmd_gtab: i32,
+    cmd_gtab_set: i32,
     /// Une transcription Guitar Tab en cours.
     gtab: Option<gtab::Job>,
     browser: Browser,
@@ -1112,6 +1113,10 @@ impl Module for App {
             "CPSTUDIO_GUITARTAB",
             "CP Studio: Guitar Tab - transcribe the selected item",
         );
+        let cmd_gtab_set = host.register_action(
+            "CPSTUDIO_GUITARTAB_SETTINGS",
+            "CP Studio: Guitar Tab - settings",
+        );
         let tp = tview::TPart::new(&r);
         let mut app = App {
             host,
@@ -1127,6 +1132,7 @@ impl Module for App {
             cmd_place_dock,
             cmd_place_float,
             cmd_gtab,
+            cmd_gtab_set,
             gtab: None,
             browser,
             view: None,
@@ -1297,6 +1303,9 @@ impl Module for App {
             true
         } else if cmd == self.cmd_gtab {
             self.gtab_start();
+            true
+        } else if cmd == self.cmd_gtab_set {
+            self.gtab_edit_settings();
             true
         } else {
             false
