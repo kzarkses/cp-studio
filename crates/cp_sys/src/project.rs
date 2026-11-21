@@ -142,3 +142,103 @@ impl Reaper {
         }
     }
 }
+
+impl Reaper {
+    /// Apres un glisser-deposer : rogne a la section [a, b) (secondes) les
+    /// items choisis qui viennent d'etre poses depuis `path` (decalage nul).
+    /// Rend le nombre d'items rognes.
+    pub fn trim_dropped(&self, path: &str, a: f64, b: f64) -> usize {
+        type Count = unsafe extern "C" fn(P) -> i32;
+        type SelItem = unsafe extern "C" fn(P, i32) -> P;
+        type ActTake = unsafe extern "C" fn(P) -> P;
+        type TakeSrc = unsafe extern "C" fn(P) -> P;
+        type SrcName = unsafe extern "C" fn(P, *mut c_char, i32);
+        type GetVal = unsafe extern "C" fn(P, *const c_char) -> f64;
+        type SetVal = unsafe extern "C" fn(P, *const c_char, f64) -> bool;
+        type UndoBegin = unsafe extern "C" fn(P);
+        type UndoEnd = unsafe extern "C" fn(P, *const c_char, i32);
+        type Void = unsafe extern "C" fn();
+        // SAFETY: signatures de reaper_plugin_functions.h :
+        // int CountSelectedMediaItems(ReaProject*) ; MediaItem* GetSelectedMediaItem(ReaProject*, int) ;
+        // MediaItem_Take* GetActiveTake(MediaItem*) ; PCM_source* GetMediaItemTake_Source(MediaItem_Take*) ;
+        // void GetMediaSourceFileName(PCM_source*, char*, int) ;
+        // double GetMediaItemTakeInfo_Value(MediaItem_Take*, const char*) ;
+        // bool Set...Info_Value(ptr, const char*, double) ; Undo_BeginBlock2 / Undo_EndBlock2 ; UpdateArrange.
+        let fns = unsafe {
+            (
+                self.api::<Count>(c"CountSelectedMediaItems"),
+                self.api::<SelItem>(c"GetSelectedMediaItem"),
+                self.api::<ActTake>(c"GetActiveTake"),
+                self.api::<TakeSrc>(c"GetMediaItemTake_Source"),
+                self.api::<SrcName>(c"GetMediaSourceFileName"),
+                self.api::<GetVal>(c"GetMediaItemTakeInfo_Value"),
+                self.api::<SetVal>(c"SetMediaItemTakeInfo_Value"),
+                self.api::<SetVal>(c"SetMediaItemInfo_Value"),
+                self.api::<UndoBegin>(c"Undo_BeginBlock2"),
+                self.api::<UndoEnd>(c"Undo_EndBlock2"),
+                self.api::<Void>(c"UpdateArrange"),
+            )
+        };
+        let (
+            Some(count),
+            Some(sel),
+            Some(act),
+            Some(tsrc),
+            Some(name),
+            Some(gt),
+            Some(st),
+            Some(si),
+        ) = (fns.0, fns.1, fns.2, fns.3, fns.4, fns.5, fns.6, fns.7)
+        else {
+            return 0;
+        };
+        let want = path.to_lowercase().replace('/', "\\");
+        let mut done = 0;
+        // SAFETY: pointeurs rendus par REAPER, verifies non nuls ; tampon de
+        // 4096 octets annonce ; fil principal.
+        unsafe {
+            let n = count(null_mut());
+            let mut hits = Vec::new();
+            for i in 0..n {
+                let item = sel(null_mut(), i);
+                if item.is_null() {
+                    continue;
+                }
+                let take = act(item);
+                if take.is_null() {
+                    continue;
+                }
+                let src = tsrc(take);
+                if src.is_null() {
+                    continue;
+                }
+                let mut buf = vec![0u8; 4096];
+                name(src, buf.as_mut_ptr() as *mut c_char, 4096);
+                let f = CStr::from_ptr(buf.as_ptr() as *const c_char)
+                    .to_string_lossy()
+                    .to_lowercase();
+                if f.replace('/', "\\") == want && gt(take, c"D_STARTOFFS".as_ptr()).abs() < 1e-9 {
+                    hits.push((item, take));
+                }
+            }
+            if hits.is_empty() {
+                return 0;
+            }
+            if let Some(f) = fns.8 {
+                f(null_mut());
+            }
+            for (item, take) in hits {
+                st(take, c"D_STARTOFFS".as_ptr(), a);
+                si(item, c"D_LENGTH".as_ptr(), (b - a).max(0.0));
+                done += 1;
+            }
+            if let Some(f) = fns.10 {
+                f();
+            }
+            if let Some(f) = fns.9 {
+                f(null_mut(), c"CP Studio: trim dropped section".as_ptr(), -1);
+            }
+        }
+        done
+    }
+}

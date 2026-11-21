@@ -77,12 +77,14 @@ impl Host for Fake {
         }
     }
     fn info(&mut self, clip: u32) -> Option<ClipInfo> {
+        let decoded = self.a.clip_decoded(ClipH(clip));
         self.a
             .clip_info(ClipH(clip))
             .map(|(frames, nch, srate)| ClipInfo {
                 frames,
                 nch: nch as u32,
                 srate,
+                decoded: decoded.unwrap_or(frames),
             })
     }
     fn release(&mut self, clip: u32) {

@@ -25,6 +25,7 @@ pub use cp_abi as abi;
 pub mod audio;
 pub mod dylib;
 pub mod font;
+pub mod grow;
 pub mod guard;
 pub mod host;
 pub mod module;
@@ -33,6 +34,7 @@ pub mod project;
 pub mod reaper;
 pub mod rt;
 pub mod rui;
+pub mod shell;
 pub mod ui;
 pub mod win;
 

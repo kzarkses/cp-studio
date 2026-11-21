@@ -154,6 +154,60 @@ impl Peaks {
     }
 }
 
+/// Les pics d'un clip qui se remplit encore : lus a la volee sur ce qui est
+/// deja decode, en au plus 64 lectures par pixel (une approximation qui ne
+/// dure que le temps du decodage). Au-dela du decode : 0.
+pub fn approx(
+    clip: &ClipData,
+    ch: Option<usize>,
+    start: f64,
+    fpp: f64,
+    out_min: &mut [f32],
+    out_max: &mut [f32],
+) -> usize {
+    let n = out_min.len().min(out_max.len());
+    let nch = clip.nch().max(1);
+    let data = clip.samples();
+    let avail = data.len() / nch;
+    let total = clip.frames() as f64;
+    let (c0, c1) = match ch {
+        Some(c) if c < nch => (c, c + 1),
+        _ => (0, nch),
+    };
+    let mut valid = 0;
+    for i in 0..n {
+        out_min[i] = 0.0;
+        out_max[i] = 0.0;
+        let a = start + i as f64 * fpp;
+        let b = a + fpp.max(1.0);
+        if fpp <= 0.0 || b <= 0.0 || a >= total {
+            continue;
+        }
+        valid += 1;
+        let fa = a.max(0.0).floor() as usize;
+        let fb = (b.ceil() as usize).min(avail);
+        if fa >= fb {
+            continue;
+        }
+        let step = ((fb - fa) / 64).max(1);
+        let (mut lo, mut hi) = (f32::MAX, f32::MIN);
+        let mut f = fa;
+        while f < fb {
+            for c in c0..c1 {
+                let v = data[f * nch + c];
+                lo = lo.min(v);
+                hi = hi.max(v);
+            }
+            f += step;
+        }
+        if lo <= hi {
+            out_min[i] = lo;
+            out_max[i] = hi;
+        }
+    }
+    valid
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

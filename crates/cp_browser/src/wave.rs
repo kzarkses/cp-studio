@@ -10,6 +10,14 @@ pub struct ClipInfo {
     pub frames: i64,
     pub nch: u32,
     pub srate: f64,
+    /// Frames deja decodes (le fichier se decode pendant qu'on l'ecoute).
+    pub decoded: i64,
+}
+
+impl ClipInfo {
+    pub fn complete(&self) -> bool {
+        self.decoded >= self.frames
+    }
 }
 
 #[derive(Clone, Debug, Default)]
@@ -178,6 +186,7 @@ mod tests {
                 frames: 48000,
                 nch: 2,
                 srate: 48000.0,
+                decoded: 48000,
             },
             "a.wav",
         );

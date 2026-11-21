@@ -21,6 +21,7 @@ use cp_gfx::{Canvas, Scratch, Surface};
 use cp_sys::font::GdiGlyphs;
 use cp_sys::module::{AudioLoad, HostRef, Module, key_event};
 use cp_sys::reaper::Reaper;
+use cp_sys::shell::DragResult;
 use cp_sys::ui::{self, Cursor, MenuItem};
 use cp_sys::win::{self, Hwnd, WinMsg};
 use cp_ui::{Button, Ev, IconCache, Mods, Theme};
@@ -104,6 +105,7 @@ impl BrowserHost for Adapter<'_> {
             frames: i.frames,
             nch: i.nch,
             srate: i.srate,
+            decoded: i.decoded,
         })
     }
     fn release(&mut self, clip: u32) {
@@ -134,6 +136,20 @@ impl BrowserHost for Adapter<'_> {
     }
     fn insert(&mut self, path: &str, section: Option<(f64, f64)>) -> Result<(), String> {
         self.r.insert_media(path, section)
+    }
+    fn drag_out(&mut self, path: &str, section: Option<(f64, f64)>) -> bool {
+        // Le geste appartient desormais au shell : on lui laisse la souris.
+        ui::release_capture();
+        match cp_sys::shell::drag_file(self.hwnd, path) {
+            DragResult::Dropped => {
+                if let Some((a, b)) = section {
+                    self.r.trim_dropped(path, a, b);
+                }
+                true
+            }
+            DragResult::Cancelled => true,
+            DragResult::Failed => false,
+        }
     }
     fn set_clipboard(&mut self, s: &str) {
         ui::set_clipboard_text(self.hwnd, s);

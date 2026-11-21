@@ -120,3 +120,51 @@ fn la_boucle_de_test_tourne_sans_rupture() {
         assert_eq!(got[i], s[i % (frames * 2)] as f64, "echantillon {i}");
     }
 }
+
+#[test]
+fn un_long_fichier_s_ecoute_avant_d_etre_decode() {
+    let mut h = AudioHost::new(None, 48000.0);
+    let frames = 48000 * 90; // une minute et demie
+    let t = h.load_reader(Box::new(Fake {
+        frames,
+        nch: 2,
+        srate: 48000.0,
+    }));
+    let t0 = std::time::Instant::now();
+    let c = loop {
+        h.poll();
+        match h.ticket(t) {
+            Load::Pending => {}
+            Load::Ready(c) => break c,
+            Load::Failed(e) => panic!("{e}"),
+        }
+        assert!(t0.elapsed().as_secs() < 10);
+        std::thread::yield_now();
+    };
+    // La longueur annoncee est la vraie des le debut.
+    assert_eq!(h.clip_info(c).map(|i| i.0), Some(frames as i64));
+    block(&mut h, 0, 64);
+    h.play(0, c, 0, 0, false, 1.0).unwrap();
+    let mut got = Vec::new();
+    for _ in 0..40 {
+        got.extend(block(&mut h, 0, 512));
+    }
+    // Ce qu'on entend est le fichier, echantillon pour echantillon.
+    for (i, x) in got.iter().enumerate() {
+        let (f, ch) = (i / 2, i % 2);
+        let want = ((f * 4 + ch) as f64 / 1e7) as f32;
+        assert_eq!(*x, want as f64, "echantillon {i}");
+    }
+    // La fin du decodage pose les pics exacts.
+    while !h.clip_complete(c) || h.stats().decoding > 0 {
+        h.poll();
+        std::thread::yield_now();
+        assert!(t0.elapsed().as_secs() < 30);
+    }
+    let (mut lo, mut hi) = (vec![0.0; 4], vec![0.0; 4]);
+    assert_eq!(
+        h.peaks(c, Some(0), 0.0, frames as f64 / 4.0, &mut lo, &mut hi),
+        4
+    );
+    assert!(hi[3] > hi[0]);
+}

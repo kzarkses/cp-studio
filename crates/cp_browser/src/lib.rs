@@ -196,6 +196,8 @@ struct Cached {
 }
 
 const CACHE_MAX: usize = 12;
+/// Au plus 1,5 Go de fichiers gardes en memoire.
+const CACHE_BYTES: i64 = 1_500_000_000;
 
 pub struct Browser {
     pub tree: Tree,
@@ -302,6 +304,7 @@ impl Browser {
             || self.pending.is_some()
             || self.db_job.is_some()
             || self.grab != Grab::None
+            || (self.wave.has() && !self.wave.info.complete())
     }
 
     // -----------------------------------------------------------------------
@@ -473,7 +476,14 @@ impl Browser {
     fn remember(&mut self, h: &mut dyn Host, c: Cached) {
         self.cache.retain(|x| x.path != c.path);
         self.cache.push(c);
-        while self.cache.len() > CACHE_MAX {
+        let bytes = |v: &Vec<Cached>| {
+            v.iter()
+                .map(|c| c.info.frames * c.info.nch as i64 * 4)
+                .sum::<i64>()
+        };
+        while self.cache.len() > CACHE_MAX
+            || (self.cache.len() > 1 && bytes(&self.cache) > CACHE_BYTES)
+        {
             let old = self.cache.remove(0);
             if old.clip != self.wave.clip {
                 h.release(old.clip);
@@ -613,6 +623,20 @@ impl Browser {
                     self.wave.playhead = None;
                     self.dirty = true;
                 }
+            }
+        }
+        // Un fichier qui se decode encore : sa forme d'onde se complete.
+        if self.wave.has() && !self.wave.info.complete() {
+            if let Some(i) = h.info(self.wave.clip) {
+                if i.decoded != self.wave.info.decoded {
+                    self.wave.info = i;
+                    if let Some(c) = self.cache.iter_mut().find(|c| c.clip == self.wave.clip) {
+                        c.info = i;
+                    }
+                    self.dirty = true;
+                }
+            } else {
+                self.wave.info.decoded = self.wave.info.frames;
             }
         }
         if self.db_job.as_ref().is_some_and(|j| j.is_finished()) {
@@ -1300,7 +1324,7 @@ impl Browser {
         };
         self.stop(h);
         if !h.drag_out(&p, sec) {
-            self.status = "Drag and drop is not available yet: press Enter to insert".into();
+            self.error = Some("this file cannot be dragged (press Enter to insert it)".into());
         }
         self.dirty = true;
     }

@@ -12,24 +12,51 @@
 
 use std::sync::Arc;
 
+use cp_sys::grow::{GrowBuf, GrowWriter};
+
 use crate::types::{Frame, MAX_CHANS, MAX_CLIP_FRAMES, MAX_CLIPS};
 
 /// La matiere d'un clip : entrelacee, `nch` canaux, au taux `srate`.
-#[derive(Debug)]
+///
+/// Elle peut se REMPLIR pendant qu'on la joue (un long fichier s'ecoute des
+/// sa premiere seconde decodee) : `samples` est le debut deja publie, `frames`
+/// la longueur annoncee. Une voix qui lit au-dela du publie entend du silence.
 pub struct ClipData {
-    samples: Box<[f32]>,
+    buf: Arc<GrowBuf>,
     frames: Frame,
     nch: usize,
     srate: f64,
     id: i32,
 }
 
-impl ClipData {
-    pub fn samples(&self) -> &[f32] {
-        &self.samples
+impl std::fmt::Debug for ClipData {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ClipData")
+            .field("frames", &self.frames)
+            .field("nch", &self.nch)
+            .field("srate", &self.srate)
+            .field("id", &self.id)
+            .field("filled", &self.buf.filled().len())
+            .finish()
     }
+}
+
+impl ClipData {
+    /// Le debut deja publie (toute la matiere d'un clip complet).
+    pub fn samples(&self) -> &[f32] {
+        self.buf.filled()
+    }
+    /// La longueur : annoncee pendant le remplissage, reelle une fois fini.
     pub fn frames(&self) -> Frame {
-        self.frames
+        if self.buf.is_done() {
+            (self.buf.filled().len() / self.nch) as Frame
+        } else {
+            self.frames
+        }
+    }
+    /// Toute la matiere est la.
+    pub fn complete(&self) -> bool {
+        self.buf.is_done()
     }
     pub fn nch(&self) -> usize {
         self.nch
@@ -99,7 +126,7 @@ impl Pool {
         self.bytes += samples.len() * size_of::<f32>();
         self.slots[id] = Some(Slot {
             clip: Arc::new(ClipData {
-                samples: samples.into_boxed_slice(),
+                buf: Arc::new(GrowBuf::full(samples)),
                 frames,
                 nch,
                 srate,
@@ -108,6 +135,44 @@ impl Pool {
             retire_wanted: false,
         });
         Ok(id as i32)
+    }
+
+    /// Un clip qui se remplira : `frames` annonces (au plus `max_frames`).
+    /// Rend l'emplacement et l'unique ecrivain.
+    pub fn add_growing(
+        &mut self,
+        frames: Frame,
+        nch: usize,
+        srate: f64,
+        max_frames: Frame,
+    ) -> Result<(i32, GrowWriter), PoolError> {
+        if !(1..=MAX_CHANS).contains(&nch) {
+            return Err(PoolError::BadChannels);
+        }
+        if frames <= 0 {
+            return Err(PoolError::Empty);
+        }
+        if frames > max_frames {
+            return Err(PoolError::TooLong);
+        }
+        let id = self
+            .slots
+            .iter()
+            .position(Option::is_none)
+            .ok_or(PoolError::Full)?;
+        let (buf, w) = GrowBuf::growing(frames as usize * nch);
+        self.bytes += buf.capacity() * size_of::<f32>();
+        self.slots[id] = Some(Slot {
+            clip: Arc::new(ClipData {
+                buf,
+                frames,
+                nch,
+                srate,
+                id: id as i32,
+            }),
+            retire_wanted: false,
+        });
+        Ok((id as i32, w))
     }
 
     /// Un clip LANCABLE (pas retire).
@@ -120,6 +185,8 @@ impl Pool {
     pub fn retire(&mut self, id: i32) {
         if let Some(Some(s)) = usize::try_from(id).ok().and_then(|i| self.slots.get_mut(i)) {
             s.retire_wanted = true;
+            // Un remplissage en cours peut s'arreter : plus personne n'en veut.
+            s.clip.buf.abandon();
         }
     }
 
@@ -141,7 +208,7 @@ impl Pool {
                 .is_some_and(|s| s.retire_wanted && Arc::strong_count(&s.clip) == 1);
             if free {
                 if let Some(s) = slot.take() {
-                    self.bytes -= s.clip.samples.len() * size_of::<f32>();
+                    self.bytes -= s.clip.buf.capacity() * size_of::<f32>();
                 }
                 n += 1;
             }

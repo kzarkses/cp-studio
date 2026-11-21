@@ -46,6 +46,7 @@ struct TestFile {
     srate: f64,
     ticket: u32,
     clip: Option<ClipH>,
+    done: bool,
 }
 
 #[derive(PartialEq, Eq, Debug)]
@@ -164,6 +165,7 @@ impl SelfTest {
                         srate: srate as f64,
                         ticket,
                         clip: None,
+                        done: false,
                     });
                 }
                 self.phase = Phase::Decoding;
@@ -172,20 +174,30 @@ impl SelfTest {
                 let mut pending = false;
                 let mut results = Vec::new();
                 for (i, f) in self.files.iter_mut().enumerate() {
-                    if f.clip.is_some() || f.ticket == 0 {
-                        continue;
+                    if f.ticket != 0 {
+                        match a.ticket(f.ticket) {
+                            Load::Pending => {}
+                            Load::Ready(c) => {
+                                f.clip = Some(c);
+                                f.ticket = 0;
+                            }
+                            Load::Failed(e) => {
+                                f.ticket = 0;
+                                f.done = true;
+                                results.push((i, Err(e)));
+                            }
+                        }
                     }
-                    match a.ticket(f.ticket) {
-                        Load::Pending => pending = true,
-                        Load::Ready(c) => {
-                            f.clip = Some(c);
-                            f.ticket = 0;
+                    // Le clip est jouable des sa premiere seconde ; on ne le
+                    // compare qu'une fois ENTIEREMENT decode.
+                    if let (Some(c), false) = (f.clip, f.done) {
+                        if a.clip_complete(c) {
+                            f.done = true;
                             results.push((i, Ok(c)));
                         }
-                        Load::Failed(e) => {
-                            f.ticket = 0;
-                            results.push((i, Err(e)));
-                        }
+                    }
+                    if !f.done {
+                        pending = true;
                     }
                 }
                 for (i, r) in results {

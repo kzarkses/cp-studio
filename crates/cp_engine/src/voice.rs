@@ -642,6 +642,13 @@ fn read_at(
     let last = frames - 1;
     let i0 = p as Frame;
     let at = |i: Frame| i.clamp(0, last) as usize * cnch;
+    // Un clip qui se remplit encore : au-dela du publie, le silence. (Un clip
+    // complet ne passe jamais ici : le calcul reste celui de l'ancien C++.)
+    let avail = (data.len() / cnch.max(1)) as Frame;
+    let partial = avail < frames;
+    if partial && i0.clamp(0, last) + if unity { 0 } else { 2 } >= avail {
+        return (0.0, 0.0);
+    }
     if unity {
         let s = at(i0);
         let l = data[s];

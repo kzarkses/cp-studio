@@ -19,7 +19,7 @@ pub mod testloop;
 
 use std::sync::{Arc, OnceLock};
 
-use cp_engine::types::{MAX_CHANS, MAX_CLIP_FRAMES, MAX_PORTS, state};
+use cp_engine::types::{MAX_CHANS, MAX_PORTS, state};
 use cp_engine::{At, ClipData, Core, Ctl, Param, PlayMode, Pool, VoiceOp};
 use cp_sys::audio::{AudioHook, Preview};
 use cp_sys::pcm::PortSource;
@@ -58,7 +58,20 @@ pub enum Load {
 
 struct ClipEntry {
     generation: u16,
-    peaks: Arc<Peaks>,
+    /// Les pics exacts, une fois le clip complet. Avant : approximes a la
+    /// volee sur ce qui est deja decode.
+    peaks: Option<Arc<Peaks>>,
+}
+
+/// Un fichier ne depasse pas 1,5 Go en memoire (23 min en stereo a 48 kHz).
+const MAX_FILE_BYTES: usize = 1_500_000_000;
+
+/// Un ticket : en attente, pret, ou en echec.
+#[derive(Clone, Debug)]
+enum Ticket {
+    Pending(ClipH),
+    Ready(ClipH),
+    Failed(String),
 }
 
 struct PortOut {
@@ -123,7 +136,9 @@ pub struct AudioHost {
     clip_gens: Vec<u16>,
     ports: Vec<PortOut>,
     decoder: Decoder,
-    tickets: Vec<(u32, Load)>,
+    tickets: Vec<(u32, Ticket)>,
+    /// Les decodages en cours : ticket -> clip (pour y poser les pics).
+    in_flight: Vec<(u32, ClipH)>,
     next_ticket: u32,
     decoding: usize,
     /// Les voix lancees par `play`, rendues des qu'elles ont fini de sonner.
@@ -162,11 +177,12 @@ impl AudioHost {
                 .collect(),
             decoder: Decoder::new(),
             tickets: Vec::new(),
+            in_flight: Vec::new(),
             next_ticket: 1,
             decoding: 0,
             voices: Vec::new(),
             hook,
-            max_frames: MAX_CLIP_FRAMES as usize,
+            max_frames: usize::MAX,
             preview_srate: 0.0,
         }
     }
@@ -260,9 +276,18 @@ impl AudioHost {
         let generation = *g;
         self.clips[id as usize] = Some(ClipEntry {
             generation,
-            peaks: Arc::new(peaks),
+            peaks: Some(Arc::new(peaks)),
         });
         Ok(ClipH::new(id, generation))
+    }
+
+    fn new_generation(&mut self, id: i32) -> u16 {
+        let g = &mut self.clip_gens[id as usize];
+        *g = match g.wrapping_add(1) {
+            0 => 1,
+            n => n,
+        };
+        *g
     }
 
     /// Range une matiere deja en memoire (le son de test, les tests).
@@ -294,6 +319,12 @@ impl AudioHost {
         self.clip(h).map(|(c, _)| (c.frames(), c.nch(), c.srate()))
     }
 
+    /// Frames deja decodes d'un clip vivant.
+    pub fn clip_decoded(&self, h: ClipH) -> Option<i64> {
+        self.clip(h)
+            .map(|(c, _)| (c.samples().len() / c.nch().max(1)) as i64)
+    }
+
     /// Plus aucun lancement ; la matiere part quand plus rien ne la joue.
     pub fn release(&mut self, h: ClipH) {
         if self.clip(h).is_some() {
@@ -312,7 +343,10 @@ impl AudioHost {
         out_max: &mut [f32],
     ) -> usize {
         match self.clip(h) {
-            Some((c, e)) => e.peaks.query(c, ch, start, fpp, out_min, out_max),
+            Some((c, e)) => match &e.peaks {
+                Some(p) => p.query(c, ch, start, fpp, out_min, out_max),
+                None => peaks::approx(c, ch, start, fpp, out_min, out_max),
+            },
             None => 0,
         }
     }
@@ -338,7 +372,7 @@ impl AudioHost {
             Some(s) => self.submit(t, Box::new(s)),
             None => self
                 .tickets
-                .push((t, Load::Failed("REAPER cannot open this file".into()))),
+                .push((t, Ticket::Failed("REAPER cannot open this file".into()))),
         }
         t
     }
@@ -350,18 +384,67 @@ impl AudioHost {
         t
     }
 
-    fn submit(&mut self, t: u32, src: Box<dyn Reader>) {
+    /// Lit la forme (fil principal), prepare un clip qui se remplira, et
+    /// confie le decodage au fil de travail.
+    fn submit(&mut self, t: u32, mut src: Box<dyn Reader>) {
+        // On ne garde que les derniers tickets : un ticket jamais relu ne
+        // s'accumule pas.
+        if self.tickets.len() > 64 {
+            let n = self.tickets.len() - 64;
+            self.tickets.drain(..n);
+        }
+        let sh = match decode::shape(src.as_mut()) {
+            Ok(sh) => sh,
+            Err(e) => {
+                self.tickets.push((t, Ticket::Failed(e)));
+                return;
+            }
+        };
+        let max_frames = (MAX_FILE_BYTES / 4 / sh.nch).min(self.max_frames);
+        let added = self
+            .pool
+            .add_growing(sh.frames as i64, sh.nch, sh.srate, max_frames as i64);
+        let (id, w) = match added {
+            Ok(x) => x,
+            Err(cp_engine::PoolError::TooLong) => {
+                self.tickets.push((
+                    t,
+                    Ticket::Failed(format!(
+                        "file too long for now ({:.0} min, the limit is {:.0} min)",
+                        sh.frames as f64 / sh.srate / 60.0,
+                        max_frames as f64 / sh.srate / 60.0
+                    )),
+                ));
+                return;
+            }
+            Err(e) => {
+                self.tickets.push((t, Ticket::Failed(format!("{e:?}"))));
+                return;
+            }
+        };
+        let generation = self.new_generation(id);
+        self.clips[id as usize] = Some(ClipEntry {
+            generation,
+            peaks: None,
+        });
+        let h = ClipH::new(id, generation);
         let job = Job {
             ticket: t,
             src,
-            max_frames: self.max_frames,
+            shape: sh,
+            w,
         };
-        if self.decoder.submit(job) {
-            self.decoding += 1;
-            self.tickets.push((t, Load::Pending));
-        } else {
-            self.tickets
-                .push((t, Load::Failed("decoder thread is gone".into())));
+        match self.decoder.submit(job) {
+            Ok(()) => {
+                self.decoding += 1;
+                self.in_flight.push((t, h));
+                self.tickets.push((t, Ticket::Pending(h)));
+            }
+            Err(_) => {
+                self.release(h);
+                self.tickets
+                    .push((t, Ticket::Failed("decoder thread is gone".into())));
+            }
         }
     }
 
@@ -372,29 +455,64 @@ impl AudioHost {
             return Load::Failed("unknown ticket".into());
         };
         match &self.tickets[i].1 {
-            Load::Pending => Load::Pending,
-            _ => self.tickets.remove(i).1,
+            Ticket::Pending(_) => Load::Pending,
+            _ => match self.tickets.remove(i).1 {
+                Ticket::Ready(h) => Load::Ready(h),
+                Ticket::Failed(e) => Load::Failed(e),
+                Ticket::Pending(_) => Load::Pending,
+            },
         }
+    }
+
+    /// Le clip est-il entierement decode ?
+    pub fn clip_complete(&self, h: ClipH) -> bool {
+        self.clip(h).is_some_and(|(c, _)| c.complete())
     }
 
     /// Le battement du fil principal : les decodages finis entrent au vivier,
     /// les voix finies sont rendues, la memoire liberable est liberee.
     pub fn poll(&mut self) {
-        while let Some(done) = self.decoder.try_done() {
-            self.decoding = self.decoding.saturating_sub(1);
-            let state = match done.result {
-                Ok(d) => match self.store(d.samples, d.nch, d.srate, d.peaks) {
-                    Ok(h) => Load::Ready(h),
-                    Err(e) => Load::Failed(e),
-                },
-                Err(e) => Load::Failed(e),
-            };
-            // La source est detruite ICI, sur le fil principal.
-            drop(done.src);
-            if let Some(e) = self.tickets.iter_mut().find(|(k, _)| *k == done.ticket) {
-                e.1 = state;
-            } else if let Load::Ready(h) = state {
-                self.release(h); // plus personne ne l'attend
+        while let Some(m) = self.decoder.try_msg() {
+            match m {
+                decode::Msg::First { ticket } => {
+                    if let Some(e) = self.tickets.iter_mut().find(|(k, _)| *k == ticket) {
+                        if let Ticket::Pending(h) = e.1 {
+                            e.1 = Ticket::Ready(h);
+                        }
+                    }
+                }
+                decode::Msg::Done {
+                    ticket,
+                    src,
+                    peaks,
+                    error,
+                } => {
+                    self.decoding = self.decoding.saturating_sub(1);
+                    // La source est detruite ICI, sur le fil principal.
+                    drop(src);
+                    let h = self
+                        .in_flight
+                        .iter()
+                        .position(|(k, _)| *k == ticket)
+                        .map(|i| self.in_flight.remove(i).1);
+                    if let Some(e) = error {
+                        if let Some(t) = self.tickets.iter_mut().find(|(k, _)| *k == ticket) {
+                            t.1 = Ticket::Failed(e);
+                        }
+                        if let Some(h) = h {
+                            self.release(h);
+                        }
+                        continue;
+                    }
+                    // Les pics exacts rejoignent le clip, s'il vit encore.
+                    if let (Some(p), Some(h)) = (peaks, h) {
+                        if let Some(Some(e)) = self.clips.get_mut(h.id() as usize) {
+                            if e.generation == h.generation() {
+                                e.peaks = Some(Arc::new(p));
+                            }
+                        }
+                    }
+                }
             }
         }
         let core = self.ctl.core().clone();

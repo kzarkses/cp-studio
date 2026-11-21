@@ -13,7 +13,7 @@ use core::ffi::{c_char, c_void};
 
 /// Version du contrat. Un entier : jamais de mineure (le piege du double de
 /// l'ancien moteur, ou `1.10` valait `1.1`).
-pub const ABI: u32 = 3;
+pub const ABI: u32 = 4;
 
 /// Le symbole exporte par le module.
 pub const ENTRY_SYMBOL: &[u8] = b"cp_module_entry\0";
@@ -131,6 +131,8 @@ pub struct ClipInfo {
     pub frames: i64,
     pub nch: u32,
     pub srate: f64,
+    /// Frames deja decodes (= `frames` quand le clip est complet). ABI 4.
+    pub decoded: i64,
 }
 
 /// Le moteur audio vu du module. Les clips et les voix sont des entiers a

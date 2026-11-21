@@ -215,10 +215,21 @@ impl Host for LoaderHost {
     }
 
     fn audio_info(&self, clip: u32) -> Option<ClipInfo> {
-        audio(None, |a| a.clip_info(ClipH(clip))).map(|(frames, nch, srate)| ClipInfo {
+        audio(None, |a| {
+            a.clip_info(ClipH(clip)).map(|(frames, nch, srate)| {
+                (
+                    frames,
+                    nch,
+                    srate,
+                    a.clip_decoded(ClipH(clip)).unwrap_or(frames),
+                )
+            })
+        })
+        .map(|(frames, nch, srate, decoded)| ClipInfo {
             frames,
             nch: nch as u32,
             srate,
+            decoded,
         })
     }
 

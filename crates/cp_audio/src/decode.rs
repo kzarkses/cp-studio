@@ -1,14 +1,22 @@
-//! Le decodage des fichiers, sur un fil de travail.
+//! Le decodage des fichiers, sur un fil de travail, EN FLUX.
 //!
 //! La source est OUVERTE par le fil principal (`cp_sys::audio::open_file`),
-//! LUE ici, et rendue au fil principal pour etre DETRUITE : on n'appelle de
-//! REAPER hors du fil principal que la lecture d'une source, ce que REAPER fait
+//! qui lit sa forme (canaux, taux, longueur) et prepare un clip qui se
+//! remplira ; elle est LUE ici, une seconde a la fois, dans l'ecrivain du clip ;
+//! puis rendue au fil principal pour etre DETRUITE. On n'appelle de REAPER
+//! hors du fil principal que la lecture d'une source, ce que REAPER fait
 //! lui-meme depuis ses fils.
+//!
+//! L'ordre : TOUJOURS la demande la plus recente d'abord. En descendant une
+//! liste au clavier, le fichier ou l'on s'arrete passe avant ceux qu'on a
+//! survoles ; un clip dont plus personne ne veut s'arrete de se remplir.
 
-use std::sync::mpsc::{Receiver, Sender, channel};
+use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender, channel};
 use std::thread::JoinHandle;
+use std::time::Duration;
 
 use cp_engine::types::MAX_CHANS;
+use cp_sys::grow::GrowWriter;
 use cp_sys::pcm::CppSource;
 
 use crate::peaks::Peaks;
@@ -36,19 +44,16 @@ impl Reader for CppSource {
     }
 }
 
-pub struct Decoded {
-    pub samples: Vec<f32>,
+/// La forme d'un fichier, lue sur le fil principal avant le decodage.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Shape {
     pub nch: usize,
     pub srate: f64,
-    pub peaks: Peaks,
+    pub frames: usize,
 }
 
-/// Lit tout le fichier, a son propre taux, en au plus [`MAX_CHANS`] canaux.
-///
-/// Les morceaux font une seconde quand le taux est entier : chaque lecture
-/// commence alors a un temps ENTIER, que `time_s * srate` retombe exactement
-/// sur l'echantillon, quel que soit l'arrondi de la source.
-pub fn decode(r: &mut dyn Reader, max_frames: usize) -> Result<Decoded, String> {
+/// Lit la forme ; refuse ce qui n'est pas de l'audio.
+pub fn shape(r: &mut dyn Reader) -> Result<Shape, String> {
     let srate = r.sample_rate();
     if srate.is_nan() || srate < 1.0 {
         return Err("no audio in this file".into());
@@ -58,83 +63,165 @@ pub fn decode(r: &mut dyn Reader, max_frames: usize) -> Result<Decoded, String> 
     if len.is_nan() || len <= 0.0 {
         return Err("empty file".into());
     }
-    let total = (len * srate).round() as usize;
-    if total > max_frames {
-        return Err(format!(
-            "file too long for now ({:.0} s, the limit is {:.0} s)",
-            len,
-            max_frames as f64 / srate
-        ));
-    }
-    let chunk = if srate.fract() == 0.0 {
-        srate as usize
-    } else {
-        65536
-    };
-    let mut buf = vec![0.0f64; chunk * nch];
-    let mut out: Vec<f32> = Vec::with_capacity(total * nch);
-    let mut pos = 0usize;
-    while pos < total {
-        let want = chunk.min(total - pos);
-        let got = r.read(pos as f64 / srate, srate, nch, &mut buf[..want * nch]);
-        out.extend(buf[..got * nch].iter().map(|&v| v as f32));
-        pos += got;
-        if got < want {
-            break;
-        }
-    }
-    if out.is_empty() {
-        return Err("the file returned no samples".into());
-    }
-    let peaks = Peaks::build(&out, nch);
-    Ok(Decoded {
-        samples: out,
+    Ok(Shape {
         nch,
         srate,
-        peaks,
+        frames: (len * srate).round() as usize,
     })
 }
 
+/// Un decodage en cours.
 pub struct Job {
     pub ticket: u32,
     pub src: Box<dyn Reader>,
-    pub max_frames: usize,
+    pub shape: Shape,
+    pub w: GrowWriter,
 }
 
-pub struct Done {
-    pub ticket: u32,
-    pub result: Result<Decoded, String>,
-    /// La source revient au fil principal, qui la detruit.
-    pub src: Box<dyn Reader>,
+struct Active {
+    job: Job,
+    pos: usize,
+    buf: Vec<f64>,
+    tmp: Vec<f32>,
+    first_sent: bool,
+}
+
+/// Les morceaux font une seconde quand le taux est entier : chaque lecture
+/// commence alors a un temps ENTIER, que `time_s * srate` retombe exactement
+/// sur l'echantillon, quel que soit l'arrondi de la source.
+fn chunk_frames(srate: f64) -> usize {
+    if srate.fract() == 0.0 {
+        srate as usize
+    } else {
+        65536
+    }
+}
+
+/// Ce que le fil dit au fil principal.
+pub enum Msg {
+    /// Le debut est la : on peut jouer.
+    First { ticket: u32 },
+    /// Fini (ou abandonne) : la source revient pour etre detruite, avec les
+    /// pics si le clip est complet.
+    Done {
+        ticket: u32,
+        src: Box<dyn Reader>,
+        peaks: Option<Peaks>,
+        error: Option<String>,
+    },
+}
+
+impl Active {
+    /// Un morceau. Rend vrai si c'est fini.
+    fn step(&mut self, out: &Sender<Msg>) -> bool {
+        let sh = self.job.shape;
+        if self.job.w.buf().is_abandoned() {
+            return true;
+        }
+        let chunk = chunk_frames(sh.srate);
+        let want = chunk.min(sh.frames - self.pos.min(sh.frames));
+        if want == 0 {
+            return true;
+        }
+        self.buf.resize(chunk * sh.nch, 0.0);
+        let got = self.job.src.read(
+            self.pos as f64 / sh.srate,
+            sh.srate,
+            sh.nch,
+            &mut self.buf[..want * sh.nch],
+        );
+        self.tmp.clear();
+        self.tmp
+            .extend(self.buf[..got * sh.nch].iter().map(|&v| v as f32));
+        self.job.w.push(&self.tmp);
+        self.pos += got;
+        if !self.first_sent && got > 0 {
+            self.first_sent = true;
+            let _ = out.send(Msg::First {
+                ticket: self.job.ticket,
+            });
+        }
+        got < want || self.pos >= sh.frames
+    }
+}
+
+fn finish(a: Active, out: &Sender<Msg>) {
+    let Active {
+        job, first_sent, ..
+    } = a;
+    let abandoned = job.w.buf().is_abandoned();
+    let empty = job.w.is_empty();
+    let peaks = (!abandoned && !empty).then(|| Peaks::build(job.w.buf().filled(), job.shape.nch));
+    let error = if empty && !abandoned {
+        Some("the file returned no samples".to_string())
+    } else {
+        None
+    };
+    let ticket = job.ticket;
+    let src = job.src;
+    job.w.finish();
+    if !first_sent && error.is_none() && !abandoned {
+        let _ = out.send(Msg::First { ticket });
+    }
+    let _ = out.send(Msg::Done {
+        ticket,
+        src,
+        peaks,
+        error,
+    });
+}
+
+fn worker(jobs: Receiver<Job>, out: Sender<Msg>) {
+    let mut active: Vec<Active> = Vec::new();
+    loop {
+        // Recevoir : attendre s'il n'y a rien a faire, sinon juste regarder.
+        let next = if active.is_empty() {
+            match jobs.recv() {
+                Ok(j) => Some(j),
+                Err(_) => return,
+            }
+        } else {
+            match jobs.recv_timeout(Duration::ZERO) {
+                Ok(j) => Some(j),
+                Err(RecvTimeoutError::Timeout) => None,
+                Err(RecvTimeoutError::Disconnected) => return,
+            }
+        };
+        if let Some(j) = next {
+            active.push(Active {
+                job: j,
+                pos: 0,
+                buf: Vec::new(),
+                tmp: Vec::new(),
+                first_sent: false,
+            });
+            continue; // d'abord tout recevoir : le plus recent passe devant
+        }
+        // Le plus recent d'abord.
+        let Some(mut a) = active.pop() else { continue };
+        let done = cp_sys::guard(|| a.step(&out)).unwrap_or(true);
+        if done {
+            finish(a, &out);
+        } else {
+            active.push(a);
+        }
+    }
 }
 
 /// Le fil de travail. Il s'arrete quand le `Decoder` est lache.
 pub struct Decoder {
     tx: Option<Sender<Job>>,
-    rx: Receiver<Done>,
+    rx: Receiver<Msg>,
     thread: Option<JoinHandle<()>>,
 }
 
 impl Decoder {
     pub fn new() -> Decoder {
         let (tx, jobs) = channel::<Job>();
-        let (done_tx, rx) = channel::<Done>();
+        let (out, rx) = channel::<Msg>();
         let thread = std::thread::Builder::new()
             .name("cp_decode".into())
-            .spawn(move || {
-                for mut job in jobs {
-                    let result = cp_sys::guard(|| decode(job.src.as_mut(), job.max_frames))
-                        .unwrap_or_else(|| Err("decoder panicked".into()));
-                    let d = Done {
-                        ticket: job.ticket,
-                        result,
-                        src: job.src,
-                    };
-                    if done_tx.send(d).is_err() {
-                        break;
-                    }
-                }
-            })
+            .spawn(move || worker(jobs, out))
             .ok();
         Decoder {
             tx: Some(tx),
@@ -143,11 +230,15 @@ impl Decoder {
         }
     }
 
-    pub fn submit(&self, job: Job) -> bool {
-        self.tx.as_ref().is_some_and(|t| t.send(job).is_ok())
+    /// Rend le travail s'il n'a pas pu etre confie.
+    pub fn submit(&self, job: Job) -> Result<(), Box<Job>> {
+        match &self.tx {
+            Some(t) => t.send(job).map_err(|e| Box::new(e.0)),
+            None => Err(Box::new(job)),
+        }
     }
 
-    pub fn try_done(&self) -> Option<Done> {
+    pub fn try_msg(&self) -> Option<Msg> {
         self.rx.try_recv().ok()
     }
 }
@@ -170,6 +261,7 @@ impl Drop for Decoder {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+    use cp_sys::grow::GrowBuf;
 
     /// Une source synthetique : la valeur d'un echantillon dit sa place, et la
     /// source arrondit `time_s * srate` comme elle veut (ici : vers le bas, le
@@ -203,58 +295,118 @@ pub(crate) mod tests {
         }
     }
 
+    fn job(f: Fake, ticket: u32) -> (Job, std::sync::Arc<GrowBuf>) {
+        let mut f = f;
+        let sh = shape(&mut f).unwrap();
+        let (buf, w) = GrowBuf::growing(sh.frames * sh.nch);
+        (
+            Job {
+                ticket,
+                src: Box::new(f),
+                shape: sh,
+                w,
+            },
+            buf,
+        )
+    }
+
     #[test]
     fn le_decodage_rend_chaque_echantillon_a_sa_place() {
         for &srate in &[44100.0, 48000.0, 96000.0] {
             let frames = (srate as usize) * 3 + 777;
-            let mut f = Fake {
-                frames,
-                nch: 2,
-                srate,
-            };
-            let d = decode(&mut f, 10_000_000).unwrap();
-            assert_eq!(d.nch, 2);
-            assert_eq!(d.samples.len(), frames * 2);
+            let (j, buf) = job(
+                Fake {
+                    frames,
+                    nch: 2,
+                    srate,
+                },
+                1,
+            );
+            let d = Decoder::new();
+            assert!(d.submit(j).is_ok());
+            let t0 = std::time::Instant::now();
+            let (mut first, mut done) = (false, false);
+            while !done {
+                match d.try_msg() {
+                    Some(Msg::First { .. }) => first = true,
+                    Some(Msg::Done { peaks, error, .. }) => {
+                        assert!(error.is_none() && peaks.is_some());
+                        done = true;
+                    }
+                    None => std::thread::yield_now(),
+                }
+                assert!(t0.elapsed().as_secs() < 10);
+            }
+            assert!(first && buf.is_done());
+            let got = buf.filled();
+            assert_eq!(got.len(), frames * 2);
             for i in 0..frames {
                 for c in 0..2 {
                     let want = ((i * 4 + c) as f64 / 1e7) as f32;
-                    assert_eq!(d.samples[i * 2 + c], want, "srate {srate} frame {i}");
+                    assert_eq!(got[i * 2 + c], want, "srate {srate} frame {i}");
                 }
             }
         }
     }
 
     #[test]
-    fn trop_long_est_refuse_sans_lire() {
-        let mut f = Fake {
-            frames: 1000,
-            nch: 1,
-            srate: 48000.0,
-        };
-        assert!(decode(&mut f, 999).is_err());
+    fn la_demande_la_plus_recente_passe_devant() {
+        // Un long fichier, puis un court : le court est fini avant le long.
+        let d = Decoder::new();
+        let (jl, _bl) = job(
+            Fake {
+                frames: 48000 * 120,
+                nch: 1,
+                srate: 48000.0,
+            },
+            1,
+        );
+        let (js, _bs) = job(
+            Fake {
+                frames: 4800,
+                nch: 1,
+                srate: 48000.0,
+            },
+            2,
+        );
+        assert!(d.submit(jl).is_ok());
+        assert!(d.submit(js).is_ok());
+        let mut order = Vec::new();
+        while order.len() < 2 {
+            if let Some(Msg::Done { ticket, .. }) = d.try_msg() {
+                order.push(ticket);
+            }
+        }
+        assert_eq!(order, vec![2, 1]);
     }
 
     #[test]
-    fn le_fil_rend_la_source() {
+    fn un_clip_abandonne_s_arrete() {
         let d = Decoder::new();
-        assert!(d.submit(Job {
-            ticket: 7,
-            src: Box::new(Fake {
-                frames: 5000,
+        let frames = 48000 * 400;
+        let (j, b) = job(
+            Fake {
+                frames,
                 nch: 1,
-                srate: 48000.0
-            }),
-            max_frames: 1 << 20,
-        }));
-        let t0 = std::time::Instant::now();
+                srate: 48000.0,
+            },
+            1,
+        );
+        assert!(d.submit(j).is_ok());
         loop {
-            if let Some(done) = d.try_done() {
-                assert_eq!(done.ticket, 7);
-                assert_eq!(done.result.unwrap().samples.len(), 5000);
+            if let Some(Msg::First { .. }) = d.try_msg() {
                 break;
             }
-            assert!(t0.elapsed().as_secs() < 5);
-            std::thread::yield_now();
         }
+        b.abandon();
+        let t0 = std::time::Instant::now();
+        loop {
+            if let Some(Msg::Done { peaks, .. }) = d.try_msg() {
+                assert!(peaks.is_none());
+                break;
+            }
+            assert!(t0.elapsed().as_secs() < 5, "l'abandon arrete le decodage");
+        }
+        assert!(b.filled().len() < frames);
     }
 }
