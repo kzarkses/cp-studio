@@ -8,6 +8,7 @@ publish.workspace = true
 
 [dependencies]
 cp_abi = { path = "../cp_abi" }
+cp_gfx = { path = "../cp_gfx" }
 
 # Pas de `[lints] workspace = true` : c'est le seul crate qui a le droit d'ecrire
 # `unsafe`. Chaque bloc porte un commentaire SAFETY (verifie par clippy).

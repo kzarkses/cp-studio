@@ -1,0 +1,13 @@
+[package]
+name = "cp_ui"
+description = "Le toolkit : theme, icones vectorielles, champs, barres de defilement, evenements"
+edition.workspace = true
+version.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+cp_gfx = { path = "../cp_gfx" }
+
+[lints]
+workspace = true

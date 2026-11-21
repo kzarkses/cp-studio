@@ -12,7 +12,11 @@ name = "cp_module"
 crate-type = ["cdylib"]
 
 [dependencies]
+cp_abi = { path = "../cp_abi" }
+cp_browser = { path = "../cp_browser" }
+cp_gfx = { path = "../cp_gfx" }
 cp_sys = { path = "../cp_sys" }
+cp_ui = { path = "../cp_ui" }
 
 [lints]
 workspace = true

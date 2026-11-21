@@ -1,0 +1,12 @@
+[package]
+name = "cp_gfx"
+description = "Le moteur de dessin : un rasteriseur a couverture exacte, en Rust sur, sans Windows"
+edition.workspace = true
+version.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+
+[lints]
+workspace = true

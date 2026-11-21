@@ -15,6 +15,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "cp_browser"
+version = "0.1.0"
+dependencies = [
+ "cp_audio",
+ "cp_gfx",
+ "cp_sys",
+ "cp_ui",
+]
+
+[[package]]
 name = "cp_engine"
 version = "0.1.0"
 dependencies = [
@@ -27,6 +37,10 @@ version = "0.1.0"
 dependencies = [
  "cp_sys",
 ]
+
+[[package]]
+name = "cp_gfx"
+version = "0.1.0"
 
 [[package]]
 name = "cp_hot"
@@ -51,7 +65,11 @@ dependencies = [
 name = "cp_module"
 version = "0.1.0"
 dependencies = [
+ "cp_abi",
+ "cp_browser",
+ "cp_gfx",
  "cp_sys",
+ "cp_ui",
 ]
 
 [[package]]
@@ -67,6 +85,14 @@ name = "cp_sys"
 version = "0.1.0"
 dependencies = [
  "cp_abi",
+ "cp_gfx",
+]
+
+[[package]]
+name = "cp_ui"
+version = "0.1.0"
+dependencies = [
+ "cp_gfx",
 ]
 
 [[package]]

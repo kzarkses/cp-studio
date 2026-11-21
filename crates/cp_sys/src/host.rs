@@ -7,7 +7,9 @@ use std::ffi::{CStr, c_char, c_void};
 use std::ptr::null_mut;
 use std::sync::OnceLock;
 
-use cp_abi::{ABI, AudioApi, ClipInfo, HostApi, LOAD_FAILED, LOAD_PENDING, LOAD_READY};
+use cp_abi::{
+    ABI, AudioApi, ClipInfo, FrameInfo, HostApi, LOAD_FAILED, LOAD_PENDING, LOAD_READY, ViewSpec,
+};
 
 use crate::guard;
 
@@ -67,6 +69,26 @@ pub trait Host: Send + Sync {
     fn audio_srate(&self) -> f64 {
         0.0
     }
+
+    // --- les vues (ABI 3)
+    #[allow(clippy::too_many_arguments)]
+    fn create_view(
+        &self,
+        _title: &str,
+        _ident: &str,
+        _x: i32,
+        _y: i32,
+        _w: i32,
+        _h: i32,
+        _docked: bool,
+    ) -> isize {
+        0
+    }
+    fn destroy_window(&self, _hwnd: isize) {}
+    fn frames(&self, _hwnd: isize, _on: bool) {}
+    fn frame_info(&self) -> FrameInfo {
+        FrameInfo::default()
+    }
 }
 
 /// Ou en est un chargement de fichier.
@@ -99,6 +121,10 @@ static API: HostApi = HostApi {
         set: a_set,
         srate: a_srate,
     },
+    create_view: v_create,
+    destroy_window: v_destroy,
+    frames: v_frames,
+    frame_info: v_frame_info,
 };
 
 /// Installe l'implementation (une seule par processus ; un second appel est
@@ -300,4 +326,38 @@ extern "C" fn a_set(voice: u32, param: u32, value: f64) -> i32 {
 
 extern "C" fn a_srate() -> f64 {
     with(0.0, |h| h.audio_srate())
+}
+
+// ---------------------------------------------------------------------------
+// Les vues
+// ---------------------------------------------------------------------------
+
+extern "C" fn v_create(spec: *const ViewSpec) -> isize {
+    if spec.is_null() {
+        return 0;
+    }
+    // SAFETY: le module passe une ViewSpec valide pendant l'appel.
+    let sp = unsafe { &*spec };
+    // SAFETY: tranches decrites par la ViewSpec, valides pendant l'appel.
+    let (t, i) = unsafe { (bytes(sp.title, sp.title_len), bytes(sp.ident, sp.ident_len)) };
+    let (t, i) = (String::from_utf8_lossy(t), String::from_utf8_lossy(i));
+    with(0, |h| {
+        h.create_view(&t, &i, sp.x, sp.y, sp.w, sp.h, sp.docked != 0)
+    })
+}
+
+extern "C" fn v_destroy(hwnd: isize) {
+    with((), |h| h.destroy_window(hwnd));
+}
+
+extern "C" fn v_frames(hwnd: isize, on: i32) {
+    with((), |h| h.frames(hwnd, on != 0));
+}
+
+extern "C" fn v_frame_info(out: *mut FrameInfo) {
+    let fi = with(FrameInfo::default(), |h| h.frame_info());
+    if !out.is_null() {
+        // SAFETY: l'adresse d'un FrameInfo du module.
+        unsafe { *out = fi };
+    }
 }

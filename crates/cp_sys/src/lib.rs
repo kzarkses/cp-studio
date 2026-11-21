@@ -14,17 +14,26 @@
 //! - [`pcm`] : `PCM_source` dans les deux sens (notre source tiree par REAPER,
 //!   une source de REAPER lue par nous).
 //! - [`audio`] : le crochet de bloc, l'apercu permanent, l'ouverture de fichiers.
+//! - [`ui`] : afficher une image, souris, clavier, curseurs, menus,
+//!   presse-papiers, l'heure exacte et la cadence de l'ecran.
+//! - [`font`] : les lettres par GDI, pour le cache de `cp_gfx`.
+//! - [`rui`] : REAPER cote interface (dockers, crochet clavier, actions a
+//!   bascule, ExtState, crochet souris).
 
 pub use cp_abi as abi;
 
 pub mod audio;
 pub mod dylib;
+pub mod font;
 pub mod guard;
 pub mod host;
 pub mod module;
 pub mod pcm;
+pub mod project;
 pub mod reaper;
 pub mod rt;
+pub mod rui;
+pub mod ui;
 pub mod win;
 
 pub use guard::guard;

@@ -20,11 +20,12 @@ pub mod testloop;
 use std::sync::{Arc, OnceLock};
 
 use cp_engine::types::{MAX_CHANS, MAX_CLIP_FRAMES, MAX_PORTS, state};
-use cp_engine::{At, ClipData, Core, Ctl, Param, PlayMode, Pool, VoiceH, VoiceOp};
+use cp_engine::{At, ClipData, Core, Ctl, Param, PlayMode, Pool, VoiceOp};
 use cp_sys::audio::{AudioHook, Preview};
 use cp_sys::pcm::PortSource;
 use cp_sys::reaper::Reaper;
 
+pub use cp_engine::VoiceH;
 use decode::{Decoder, Job, Reader};
 use feed::{FeedStats, PortFeed};
 use peaks::Peaks;

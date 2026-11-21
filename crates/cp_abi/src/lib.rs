@@ -13,7 +13,7 @@ use core::ffi::{c_char, c_void};
 
 /// Version du contrat. Un entier : jamais de mineure (le piege du double de
 /// l'ancien moteur, ou `1.10` valait `1.1`).
-pub const ABI: u32 = 2;
+pub const ABI: u32 = 3;
 
 /// Le symbole exporte par le module.
 pub const ENTRY_SYMBOL: &[u8] = b"cp_module_entry\0";
@@ -30,6 +30,59 @@ pub const BUSY: i32 = -2;
 pub const LOG_INFO: u32 = 0;
 pub const LOG_WARN: u32 = 1;
 pub const LOG_ERROR: u32 = 2;
+
+/// Une image de l'ecran : envoye a chaque vue qui l'a demande (`frames`),
+/// juste apres une composition de l'ecran. `wp` = numero de l'image.
+pub const WM_CP_FRAME: u32 = 0x8000 + 0x100;
+/// Une touche vue par le crochet clavier, AVANT REAPER. `lp` pointe un
+/// [`KeyEvent`]. Le module rend dans `out` : 1 = mangee (traitee), 0 = pas a
+/// lui (REAPER la traite : ses raccourcis), -1 = a livrer normalement a la
+/// fenetre (WM_KEYDOWN puis WM_CHAR : la saisie de texte).
+pub const WM_CP_ACCEL: u32 = 0x8000 + 0x101;
+
+/// La touche telle que Windows l'a mise en file.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct KeyEvent {
+    pub message: u32,
+    pub wp: usize,
+    pub lp: isize,
+    /// Vrai si elle visait une AUTRE fenetre (REAPER avait repris le focus) et
+    /// qu'elle nous revient parce que le dernier clic etait chez nous.
+    pub redirected: u32,
+}
+
+/// Une vue a creer.
+#[repr(C)]
+pub struct ViewSpec {
+    pub title: *const u8,
+    pub title_len: usize,
+    /// La cle sous laquelle REAPER retient le docker de la vue.
+    pub ident: *const u8,
+    pub ident_len: usize,
+    /// Position et taille si flottante (`x < 0` : place par defaut).
+    pub x: i32,
+    pub y: i32,
+    pub w: i32,
+    pub h: i32,
+    /// 1 = dans un docker.
+    pub docked: i32,
+}
+
+/// La cadence de l'ecran.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct FrameInfo {
+    /// Images de l'ecran comptees depuis le demarrage de l'horloge.
+    pub count: u64,
+    /// L'instant de la derniere composition (QueryPerformanceCounter).
+    pub vblank_qpc: i64,
+    /// La periode mesuree d'une image, en unites de compteur.
+    pub period_qpc: i64,
+    pub qpc_freq: i64,
+    /// Images ou une vue n'avait pas fini la precedente (elle en a saute une).
+    pub missed: u64,
+}
 
 /// `cp_module_entry(abi)` rend la table du module, ou nul si l'ABI differe.
 pub type EntryFn = extern "C" fn(abi: u32) -> *const ModuleApi;
@@ -57,6 +110,13 @@ pub struct HostApi {
     /// Le moteur audio (ABI 2). Il vit dans le chargeur : un rechargement du
     /// module ne coupe jamais le son.
     pub audio: AudioApi,
+    /// Une vue flottante ou ancree (ABI 3). Rend le HWND (0 = echec).
+    pub create_view: extern "C" fn(spec: *const ViewSpec) -> isize,
+    /// Retire du docker PUIS detruit.
+    pub destroy_window: extern "C" fn(hwnd: isize),
+    /// Demande (1) ou non (0) un WM_CP_FRAME a chaque image de l'ecran.
+    pub frames: extern "C" fn(hwnd: isize, on: i32),
+    pub frame_info: extern "C" fn(out: *mut FrameInfo),
 }
 
 /// Etats d'un chargement de fichier.
@@ -137,4 +197,7 @@ pub struct ModuleApi {
     /// 1 = message traite (resultat dans `out`), 0 = traitement par defaut.
     pub wnd_proc:
         extern "C" fn(hwnd: isize, msg: u32, wp: usize, lp: isize, out: *mut isize) -> i32,
+    /// L'etat d'une action a bascule (coche des menus) : 1, 0, ou -1 si
+    /// l'action n'a pas d'etat (ABI 3).
+    pub toggle_state: extern "C" fn(cmd: i32) -> i32,
 }

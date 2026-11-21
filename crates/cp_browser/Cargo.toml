@@ -1,0 +1,18 @@
+[package]
+name = "cp_browser"
+description = "Le navigateur de fichiers : arbre, ecoute, forme d'onde, recherche, favoris (sans Windows)"
+edition.workspace = true
+version.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+cp_gfx = { path = "../cp_gfx" }
+cp_ui = { path = "../cp_ui" }
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+cp_audio = { path = "../cp_audio" }
+cp_sys = { path = "../cp_sys" }

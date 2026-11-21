@@ -328,7 +328,7 @@ fn le_vrai_chargeur_dans_un_faux_reaper() {
         assert!(ids.contains(&"_CPSTUDIO_RELOAD"));
         assert!(ids.contains(&"_CPSTUDIO_STATUS"));
         assert!(
-            ids.contains(&"_CPSTUDIO_TEST_WINDOW"),
+            ids.contains(&"_CPSTUDIO_BROWSER"),
             "le module a enregistre son action"
         );
     }
@@ -425,13 +425,13 @@ fn le_vrai_chargeur_dans_un_faux_reaper() {
     let delay = t0.elapsed();
     assert!(delay < Duration::from_millis(1500), "pris en {delay:?}");
     assert!(read_log(&res).contains("module pret : generation 2"));
-    let cmd_after = cmd_of("_CPSTUDIO_TEST_WINDOW");
+    let cmd_after = cmd_of("_CPSTUDIO_BROWSER");
     assert_eq!(
         FAKE.lock()
             .unwrap()
             .actions
             .iter()
-            .filter(|a| a.0 == "_CPSTUDIO_TEST_WINDOW")
+            .filter(|a| a.0 == "_CPSTUDIO_BROWSER")
             .count(),
         1,
         "l'action du module n'est enregistree qu'une fois ({cmd_after})"

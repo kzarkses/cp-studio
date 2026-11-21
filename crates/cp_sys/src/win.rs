@@ -31,8 +31,10 @@ pub const WM_LBUTTONUP: u32 = 0x0202;
 const WS_OVERLAPPEDWINDOW: u32 = 0x00CF_0000;
 const WS_VISIBLE: u32 = 0x1000_0000;
 const CW_USEDEFAULT: i32 = 0x8000_0000_u32 as i32;
-const CS_VREDRAW: u32 = 0x0001;
-const CS_HREDRAW: u32 = 0x0002;
+const CS_DBLCLKS: u32 = 0x0008;
+const WS_CHILD: u32 = 0x4000_0000;
+const WS_CLIPCHILDREN: u32 = 0x0200_0000;
+const WS_CLIPSIBLINGS: u32 = 0x0400_0000;
 const IDC_ARROW: usize = 32512;
 const TRANSPARENT: i32 = 1;
 const DEFAULT_GUI_FONT: i32 = 17;
@@ -141,7 +143,7 @@ unsafe extern "system" {
 pub struct Hwnd(pub isize);
 
 impl Hwnd {
-    fn raw(self) -> Raw {
+    pub(crate) fn raw(self) -> Raw {
         self.0 as Raw
     }
 }
@@ -218,7 +220,10 @@ pub fn register_class(instance: isize, handler: fn(&WinMsg) -> isize) -> Result<
     let cursor = unsafe { LoadCursorW(null_mut(), IDC_ARROW as *const u16) };
     let wc = WndClassExW {
         cb_size: size_of::<WndClassExW>() as u32,
-        style: CS_HREDRAW | CS_VREDRAW,
+        // Le double-clic est DEMANDE par la classe : sans lui, Windows n'envoie
+        // que des appuis (et une fenetre ancree, dont le docker porte
+        // CS_DBLCLKS, en recevait sans que personne les traite).
+        style: CS_DBLCLKS,
         wnd_proc: Some(trampoline),
         cls_extra: 0,
         wnd_extra: 0,
@@ -236,6 +241,52 @@ pub fn register_class(instance: isize, handler: fn(&WinMsg) -> isize) -> Result<
         return Err(format!("RegisterClassExW a echoue ({})", last_error()));
     }
     Ok(())
+}
+
+/// Une vue : flottante (fenetre a elle, possedee par `owner`, a `x, y` ou a
+/// la place par defaut si `x < 0`) ou enfant (`child` : pour un docker, cachee
+/// jusqu'a ce que REAPER l'y place).
+#[allow(clippy::too_many_arguments)]
+pub fn create_view(
+    title: &str,
+    x: i32,
+    y: i32,
+    w: i32,
+    h: i32,
+    owner: Hwnd,
+    child: bool,
+) -> Option<Hwnd> {
+    let (inst, name) = CLASS.get()?;
+    let t = wide(title);
+    let (style, x, y) = if child {
+        (WS_CHILD | WS_CLIPCHILDREN | WS_CLIPSIBLINGS, 0, 0)
+    } else if x < 0 {
+        (
+            WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
+            CW_USEDEFAULT,
+            CW_USEDEFAULT,
+        )
+    } else {
+        (WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN, x, y)
+    };
+    // SAFETY: comme `create_window`.
+    let h = unsafe {
+        CreateWindowExW(
+            0,
+            name.as_ptr(),
+            t.as_ptr(),
+            style,
+            x,
+            y,
+            w,
+            h,
+            owner.raw(),
+            null_mut(),
+            *inst as Raw,
+            null_mut(),
+        )
+    };
+    (!h.is_null()).then_some(Hwnd(h as isize))
 }
 
 /// Cree une fenetre de la classe du chargeur, possedee par `owner`.
@@ -289,7 +340,6 @@ pub fn show(h: Hwnd) {
     }
 }
 
-/// Demande un nouveau WM_PAINT.
 /// Depose un message dans la file de la fenetre (il sera traite APRES le
 /// retour de l'appelant).
 pub fn post_message(h: Hwnd, msg: u32, wp: usize, lp: isize) -> bool {
@@ -297,6 +347,7 @@ pub fn post_message(h: Hwnd, msg: u32, wp: usize, lp: isize) -> bool {
     unsafe { PostMessageW(h.0 as Raw, msg, wp, lp) != 0 }
 }
 
+/// Demande un nouveau WM_PAINT.
 pub fn invalidate(h: Hwnd) {
     // SAFETY: rectangle nul = toute la fenetre ; sans effet si invalide.
     unsafe {

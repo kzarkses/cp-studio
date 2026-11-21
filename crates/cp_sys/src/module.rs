@@ -15,8 +15,8 @@ use std::ffi::{CStr, c_void};
 use std::sync::{Mutex, OnceLock, TryLockError};
 
 use cp_abi::{
-    ABI, BUSY, ClipInfo, FAULT, HostApi, LOAD_PENDING, LOAD_READY, LOG_ERROR, LOG_INFO, LOG_WARN,
-    ModuleApi, OK,
+    ABI, BUSY, ClipInfo, FAULT, FrameInfo, HostApi, LOAD_PENDING, LOAD_READY, LOG_ERROR, LOG_INFO,
+    LOG_WARN, ModuleApi, OK, ViewSpec,
 };
 
 pub use crate::host::AudioLoad;
@@ -39,6 +39,10 @@ pub trait Module: Send + 'static {
     }
     /// `Some(resultat)` si le message est traite.
     fn wnd_proc(&mut self, _msg: &WinMsg) -> Option<isize> {
+        None
+    }
+    /// L'etat d'une action a bascule (`None` : pas d'etat).
+    fn toggle_state(&mut self, _cmd: i32) -> Option<bool> {
         None
     }
 }
@@ -76,6 +80,11 @@ impl HostRef {
     }
     pub fn generation(&self) -> u32 {
         (self.0.generation)()
+    }
+
+    /// L'API de REAPER, par la table du chargeur (sans `Register`).
+    pub fn reaper(&self) -> crate::reaper::Reaper {
+        crate::reaper::Reaper::from_get_func(self.0.get_func)
     }
 
     // --- le moteur audio (il vit dans le chargeur)
@@ -142,6 +151,48 @@ impl HostRef {
     pub fn audio_srate(&self) -> f64 {
         (self.0.audio.srate)()
     }
+
+    // --- les vues
+
+    /// Une vue flottante ou ancree (`ident` : la cle du docker chez REAPER).
+    #[allow(clippy::too_many_arguments)]
+    pub fn create_view(
+        &self,
+        title: &str,
+        ident: &str,
+        x: i32,
+        y: i32,
+        w: i32,
+        h: i32,
+        docked: bool,
+    ) -> Option<Hwnd> {
+        let spec = ViewSpec {
+            title: title.as_ptr(),
+            title_len: title.len(),
+            ident: ident.as_ptr(),
+            ident_len: ident.len(),
+            x,
+            y,
+            w,
+            h,
+            docked: docked as i32,
+        };
+        let r = (self.0.create_view)(&spec);
+        (r != 0).then_some(Hwnd(r))
+    }
+    /// Retire du docker puis detruit.
+    pub fn destroy_window(&self, h: Hwnd) {
+        (self.0.destroy_window)(h.0)
+    }
+    /// Un WM_CP_FRAME a chaque image de l'ecran, ou plus.
+    pub fn frames(&self, h: Hwnd, on: bool) {
+        (self.0.frames)(h.0, on as i32)
+    }
+    pub fn frame_info(&self) -> FrameInfo {
+        let mut f = FrameInfo::default();
+        (self.0.frame_info)(&mut f);
+        f
+    }
 }
 
 type Ctor = fn(HostRef, &[u8]) -> Box<dyn Module>;
@@ -157,6 +208,7 @@ static API: ModuleApi = ModuleApi {
     tick: t_tick,
     on_action: t_on_action,
     wnd_proc: t_wnd_proc,
+    toggle_state: t_toggle_state,
 };
 
 fn ctor<T: Module>(h: HostRef, s: &[u8]) -> Box<dyn Module> {
@@ -276,4 +328,26 @@ extern "C" fn t_wnd_proc(hwnd: isize, msg: u32, wp: usize, lp: isize, out: *mut 
         }
         None => 0,
     })
+}
+
+extern "C" fn t_toggle_state(cmd: i32) -> i32 {
+    match with_instance(|m| match m.toggle_state(cmd) {
+        Some(true) => 1,
+        Some(false) => 0,
+        None => 2,
+    }) {
+        0 => 0,
+        1 => 1,
+        _ => -1,
+    }
+}
+
+/// La touche d'un WM_CP_ACCEL (le chargeur passe son adresse dans `lp`).
+pub fn key_event(m: &WinMsg) -> Option<cp_abi::KeyEvent> {
+    if m.msg != cp_abi::WM_CP_ACCEL || m.lp == 0 {
+        return None;
+    }
+    // SAFETY: pour WM_CP_ACCEL, le chargeur passe l'adresse d'un KeyEvent a
+    // lui, valide pendant l'appel ; on le copie.
+    Some(unsafe { *(m.lp as *const cp_abi::KeyEvent) })
 }

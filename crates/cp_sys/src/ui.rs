@@ -1,0 +1,549 @@
+//! Ce dont une interface a besoin de Windows : afficher une image, la souris,
+//! le clavier, les curseurs, les menus, le presse-papiers, l'heure exacte.
+//!
+//! Tout est sur : les fonctions prennent des `Hwnd` et des tranches, et ne
+//! supposent rien d'un handle (Windows echoue proprement sur un handle mort).
+
+use std::ffi::c_void;
+use std::ptr::{null, null_mut};
+
+use crate::win::{Hwnd, Rect, wide};
+
+type Raw = *mut c_void;
+
+#[repr(C)]
+struct BitmapInfoHeader {
+    size: u32,
+    width: i32,
+    height: i32,
+    planes: u16,
+    bit_count: u16,
+    compression: u32,
+    size_image: u32,
+    x_ppm: i32,
+    y_ppm: i32,
+    clr_used: u32,
+    clr_important: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct Point {
+    pub x: i32,
+    pub y: i32,
+}
+
+#[repr(C)]
+struct TrackMouseEvent {
+    size: u32,
+    flags: u32,
+    hwnd: Raw,
+    hover_time: u32,
+}
+
+#[link(name = "user32")]
+unsafe extern "system" {
+    fn GetDC(h: Raw) -> Raw;
+    fn ReleaseDC(h: Raw, dc: Raw) -> i32;
+    fn GetClientRect(h: Raw, r: *mut Rect) -> i32;
+    fn GetWindowRect(h: Raw, r: *mut Rect) -> i32;
+    fn SetWindowPos(h: Raw, after: Raw, x: i32, y: i32, w: i32, h2: i32, flags: u32) -> i32;
+    fn ScreenToClient(h: Raw, p: *mut Point) -> i32;
+    fn ClientToScreen(h: Raw, p: *mut Point) -> i32;
+    fn GetCursorPos(p: *mut Point) -> i32;
+    fn SetCapture(h: Raw) -> Raw;
+    fn ReleaseCapture() -> i32;
+    fn GetCapture() -> Raw;
+    fn SetCursor(c: Raw) -> Raw;
+    fn LoadCursorW(inst: Raw, name: *const u16) -> Raw;
+    fn TrackMouseEvent(t: *mut TrackMouseEvent) -> i32;
+    fn GetKeyState(vk: i32) -> i16;
+    fn GetKeyboardState(state: *mut u8) -> i32;
+    fn ToUnicode(vk: u32, scan: u32, state: *const u8, buf: *mut u16, n: i32, flags: u32) -> i32;
+    fn SetFocus(h: Raw) -> Raw;
+    fn GetFocus() -> Raw;
+    fn GetParent(h: Raw) -> Raw;
+    fn GetAncestor(h: Raw, flags: u32) -> Raw;
+    fn IsChild(parent: Raw, h: Raw) -> i32;
+    fn IsWindowVisible(h: Raw) -> i32;
+    fn IsIconic(h: Raw) -> i32;
+    fn CreatePopupMenu() -> Raw;
+    fn AppendMenuW(m: Raw, flags: u32, id: usize, text: *const u16) -> i32;
+    fn TrackPopupMenu(m: Raw, flags: u32, x: i32, y: i32, res: i32, h: Raw, r: *const Rect) -> i32;
+    fn DestroyMenu(m: Raw) -> i32;
+    fn OpenClipboard(h: Raw) -> i32;
+    fn EmptyClipboard() -> i32;
+    fn SetClipboardData(fmt: u32, mem: Raw) -> Raw;
+    fn GetClipboardData(fmt: u32) -> Raw;
+    fn CloseClipboard() -> i32;
+    fn GetDpiForWindow(h: Raw) -> u32;
+    fn SetWindowTextW(h: Raw, s: *const u16) -> i32;
+    fn GetClassNameW(h: Raw, buf: *mut u16, n: i32) -> i32;
+    fn GetDoubleClickTime() -> u32;
+}
+
+#[link(name = "gdi32")]
+unsafe extern "system" {
+    fn SetDIBitsToDevice(
+        dc: Raw,
+        x: i32,
+        y: i32,
+        w: u32,
+        h: u32,
+        xs: i32,
+        ys: i32,
+        start: u32,
+        lines: u32,
+        bits: *const c_void,
+        bmi: *const BitmapInfoHeader,
+        usage: u32,
+    ) -> i32;
+}
+
+#[link(name = "kernel32")]
+unsafe extern "system" {
+    fn QueryPerformanceCounter(c: *mut i64) -> i32;
+    fn QueryPerformanceFrequency(f: *mut i64) -> i32;
+    fn GlobalAlloc(flags: u32, n: usize) -> Raw;
+    fn GlobalLock(m: Raw) -> Raw;
+    fn GlobalUnlock(m: Raw) -> i32;
+    fn GlobalFree(m: Raw) -> Raw;
+}
+
+#[link(name = "dwmapi")]
+unsafe extern "system" {
+    fn DwmFlush() -> i32;
+}
+
+// ---------------------------------------------------------------------------
+// L'image
+// ---------------------------------------------------------------------------
+
+/// Copie des rectangles de `px` (`w x h`, BGRA, haut en premier) dans la zone
+/// client. Chaque rectangle est recopie dans `scratch` (contigu) puis envoye :
+/// aucune ambiguite d'origine des DIB, et seul ce qui a change part.
+pub fn present(
+    hwnd: Hwnd,
+    px: &[u32],
+    w: i32,
+    h: i32,
+    rects: &[(i32, i32, i32, i32)],
+    scratch: &mut Vec<u32>,
+) {
+    if w <= 0 || h <= 0 || px.len() < (w * h) as usize {
+        return;
+    }
+    // SAFETY: GetDC accepte un handle mort (rend nul).
+    let dc = unsafe { GetDC(hwnd.raw()) };
+    if dc.is_null() {
+        return;
+    }
+    for &(rx, ry, rw, rh) in rects {
+        let x0 = rx.max(0);
+        let y0 = ry.max(0);
+        let x1 = (rx + rw).min(w);
+        let y1 = (ry + rh).min(h);
+        if x0 >= x1 || y0 >= y1 {
+            continue;
+        }
+        let (cw, ch) = (x1 - x0, y1 - y0);
+        scratch.clear();
+        for y in y0..y1 {
+            let row = (y * w) as usize;
+            scratch.extend_from_slice(&px[row + x0 as usize..row + x1 as usize]);
+        }
+        let bmi = BitmapInfoHeader {
+            size: size_of::<BitmapInfoHeader>() as u32,
+            width: cw,
+            height: -ch, // haut en premier
+            planes: 1,
+            bit_count: 32,
+            compression: 0,
+            size_image: 0,
+            x_ppm: 0,
+            y_ppm: 0,
+            clr_used: 0,
+            clr_important: 0,
+        };
+        // SAFETY: `scratch` tient cw * ch pixels de 32 bits, decrits par `bmi`.
+        unsafe {
+            SetDIBitsToDevice(
+                dc,
+                x0,
+                y0,
+                cw as u32,
+                ch as u32,
+                0,
+                0,
+                0,
+                ch as u32,
+                scratch.as_ptr() as *const c_void,
+                &bmi,
+                0,
+            );
+        }
+    }
+    // SAFETY: le DC obtenu ci-dessus.
+    unsafe { ReleaseDC(hwnd.raw(), dc) };
+}
+
+// ---------------------------------------------------------------------------
+// Le temps
+// ---------------------------------------------------------------------------
+
+pub fn qpc() -> i64 {
+    let mut c = 0i64;
+    // SAFETY: ecrit un i64.
+    unsafe { QueryPerformanceCounter(&mut c) };
+    c
+}
+
+pub fn qpc_freq() -> i64 {
+    let mut f = 0i64;
+    // SAFETY: ecrit un i64.
+    unsafe { QueryPerformanceFrequency(&mut f) };
+    f.max(1)
+}
+
+/// Attend la prochaine composition de l'ecran (DWM). Faux si DWM refuse.
+pub fn dwm_flush() -> bool {
+    // SAFETY: aucune precondition.
+    unsafe { DwmFlush() >= 0 }
+}
+
+pub fn double_click_ms() -> u32 {
+    // SAFETY: aucune precondition.
+    unsafe { GetDoubleClickTime() }
+}
+
+// ---------------------------------------------------------------------------
+// Les fenetres
+// ---------------------------------------------------------------------------
+
+pub fn client_rect(h: Hwnd) -> Rect {
+    let mut r = Rect::default();
+    // SAFETY: ecrit un RECT.
+    unsafe { GetClientRect(h.raw(), &mut r) };
+    r
+}
+
+pub fn window_rect(h: Hwnd) -> Rect {
+    let mut r = Rect::default();
+    // SAFETY: ecrit un RECT.
+    unsafe { GetWindowRect(h.raw(), &mut r) };
+    r
+}
+
+pub fn move_window(h: Hwnd, x: i32, y: i32, w: i32, hh: i32) {
+    const SWP_NOZORDER: u32 = 0x0004;
+    const SWP_NOACTIVATE: u32 = 0x0010;
+    // SAFETY: sans effet sur un handle mort.
+    unsafe {
+        SetWindowPos(
+            h.raw(),
+            null_mut(),
+            x,
+            y,
+            w,
+            hh,
+            SWP_NOZORDER | SWP_NOACTIVATE,
+        )
+    };
+}
+
+pub fn set_title(h: Hwnd, s: &str) {
+    let w = wide(s);
+    // SAFETY: chaine terminee par zero.
+    unsafe { SetWindowTextW(h.raw(), w.as_ptr()) };
+}
+
+pub fn screen_to_client(h: Hwnd, x: i32, y: i32) -> (i32, i32) {
+    let mut p = Point { x, y };
+    // SAFETY: ecrit un POINT.
+    unsafe { ScreenToClient(h.raw(), &mut p) };
+    (p.x, p.y)
+}
+
+pub fn client_to_screen(h: Hwnd, x: i32, y: i32) -> (i32, i32) {
+    let mut p = Point { x, y };
+    // SAFETY: ecrit un POINT.
+    unsafe { ClientToScreen(h.raw(), &mut p) };
+    (p.x, p.y)
+}
+
+pub fn cursor_pos() -> (i32, i32) {
+    let mut p = Point::default();
+    // SAFETY: ecrit un POINT.
+    unsafe { GetCursorPos(&mut p) };
+    (p.x, p.y)
+}
+
+/// Visible pour de vrai : ni cachee (onglet de docker inactif, ancetre cache),
+/// ni dans une fenetre principale reduite.
+pub fn is_shown(h: Hwnd) -> bool {
+    const GA_ROOT: u32 = 2;
+    // SAFETY: aucune precondition.
+    unsafe {
+        if IsWindowVisible(h.raw()) == 0 {
+            return false;
+        }
+        let root = GetAncestor(h.raw(), GA_ROOT);
+        root.is_null() || IsIconic(root) == 0
+    }
+}
+
+pub fn parent(h: Hwnd) -> Hwnd {
+    // SAFETY: aucune precondition.
+    Hwnd(unsafe { GetParent(h.raw()) } as isize)
+}
+
+pub fn is_child(parent: Hwnd, h: Hwnd) -> bool {
+    // SAFETY: aucune precondition.
+    unsafe { IsChild(parent.raw(), h.raw()) != 0 }
+}
+
+pub fn focus() -> Hwnd {
+    // SAFETY: aucune precondition.
+    Hwnd(unsafe { GetFocus() } as isize)
+}
+
+pub fn set_focus(h: Hwnd) {
+    // SAFETY: sans effet sur un handle mort.
+    unsafe { SetFocus(h.raw()) };
+}
+
+pub fn class_name(h: Hwnd) -> String {
+    let mut buf = [0u16; 128];
+    // SAFETY: tampon de 128 caracteres.
+    let n = unsafe { GetClassNameW(h.raw(), buf.as_mut_ptr(), 128) };
+    String::from_utf16_lossy(&buf[..n.max(0) as usize])
+}
+
+/// Points par pouce de l'ecran de la fenetre (96 = 100 %).
+pub fn dpi(h: Hwnd) -> u32 {
+    // SAFETY: rend 0 sur un handle invalide.
+    let d = unsafe { GetDpiForWindow(h.raw()) };
+    if d == 0 { 96 } else { d }
+}
+
+// ---------------------------------------------------------------------------
+// La souris
+// ---------------------------------------------------------------------------
+
+pub fn capture(h: Hwnd) {
+    // SAFETY: aucune precondition.
+    unsafe { SetCapture(h.raw()) };
+}
+
+pub fn release_capture() {
+    // SAFETY: aucune precondition.
+    unsafe { ReleaseCapture() };
+}
+
+pub fn has_capture(h: Hwnd) -> bool {
+    // SAFETY: aucune precondition.
+    unsafe { GetCapture() as isize == h.0 }
+}
+
+/// Demande un WM_MOUSELEAVE quand la souris quitte la fenetre.
+pub fn track_leave(h: Hwnd) {
+    const TME_LEAVE: u32 = 2;
+    let mut t = TrackMouseEvent {
+        size: size_of::<TrackMouseEvent>() as u32,
+        flags: TME_LEAVE,
+        hwnd: h.raw(),
+        hover_time: 0,
+    };
+    // SAFETY: structure complete.
+    unsafe { TrackMouseEvent(&mut t) };
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Cursor {
+    Arrow,
+    Hand,
+    IBeam,
+    SizeWE,
+    SizeNS,
+    SizeAll,
+    No,
+    Wait,
+    Cross,
+}
+
+pub fn set_cursor(c: Cursor) {
+    let id: usize = match c {
+        Cursor::Arrow => 32512,
+        Cursor::IBeam => 32513,
+        Cursor::Wait => 32514,
+        Cursor::Cross => 32515,
+        Cursor::SizeWE => 32644,
+        Cursor::SizeNS => 32645,
+        Cursor::SizeAll => 32646,
+        Cursor::No => 32648,
+        Cursor::Hand => 32649,
+    };
+    // SAFETY: curseur systeme partage, rien a liberer.
+    unsafe { SetCursor(LoadCursorW(null_mut(), id as *const u16)) };
+}
+
+// ---------------------------------------------------------------------------
+// Le clavier
+// ---------------------------------------------------------------------------
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Mods {
+    pub shift: bool,
+    pub ctrl: bool,
+    pub alt: bool,
+}
+
+pub fn mods() -> Mods {
+    // SAFETY: aucune precondition.
+    let down = |vk: i32| unsafe { GetKeyState(vk) } < 0;
+    Mods {
+        shift: down(0x10),
+        ctrl: down(0x11),
+        alt: down(0x12),
+    }
+}
+
+/// Le texte que produirait la touche `vk` (clavier courant, AZERTY compris),
+/// sans toucher a l'etat des touches mortes.
+pub fn key_text(vk: u32, scan: u32) -> Option<String> {
+    let mut state = [0u8; 256];
+    let mut buf = [0u16; 8];
+    // SAFETY: tampons de la taille annoncee ; drapeau 4 = ne pas modifier
+    // l'etat du clavier (Windows 10 1607+).
+    let n = unsafe {
+        GetKeyboardState(state.as_mut_ptr());
+        ToUnicode(vk, scan, state.as_ptr(), buf.as_mut_ptr(), 8, 4)
+    };
+    (n > 0).then(|| String::from_utf16_lossy(&buf[..n as usize]))
+}
+
+// ---------------------------------------------------------------------------
+// Les menus
+// ---------------------------------------------------------------------------
+
+/// Une ligne de menu : `None` = separateur.
+pub struct MenuItem<'a> {
+    pub id: u32,
+    pub text: &'a str,
+    pub checked: bool,
+    pub enabled: bool,
+}
+
+/// Un menu contextuel a l'ecran (x, y). Rend l'identifiant choisi (0 = rien).
+/// Modal : il tourne sa propre boucle jusqu'au choix.
+pub fn popup_menu(owner: Hwnd, x: i32, y: i32, items: &[Option<MenuItem<'_>>]) -> u32 {
+    const MF_STRING: u32 = 0;
+    const MF_SEPARATOR: u32 = 0x800;
+    const MF_CHECKED: u32 = 0x8;
+    const MF_GRAYED: u32 = 0x1;
+    const TPM_RETURNCMD: u32 = 0x100;
+    const TPM_RIGHTBUTTON: u32 = 0x2;
+    // SAFETY: menu cree puis detruit ici.
+    let m = unsafe { CreatePopupMenu() };
+    if m.is_null() {
+        return 0;
+    }
+    for it in items {
+        match it {
+            None => {
+                // SAFETY: menu vivant.
+                unsafe { AppendMenuW(m, MF_SEPARATOR, 0, null()) };
+            }
+            Some(i) => {
+                let w = wide(i.text);
+                let mut f = MF_STRING;
+                if i.checked {
+                    f |= MF_CHECKED;
+                }
+                if !i.enabled {
+                    f |= MF_GRAYED;
+                }
+                // SAFETY: chaine terminee par zero, vivante pendant l'appel.
+                unsafe { AppendMenuW(m, f, i.id as usize, w.as_ptr()) };
+            }
+        }
+    }
+    // SAFETY: menu vivant ; TPM_RETURNCMD rend le choix au lieu de le poster.
+    let r = unsafe {
+        TrackPopupMenu(
+            m,
+            TPM_RETURNCMD | TPM_RIGHTBUTTON,
+            x,
+            y,
+            0,
+            owner.raw(),
+            null(),
+        )
+    };
+    // SAFETY: le menu cree ci-dessus.
+    unsafe { DestroyMenu(m) };
+    r.max(0) as u32
+}
+
+// ---------------------------------------------------------------------------
+// Le presse-papiers
+// ---------------------------------------------------------------------------
+
+const CF_UNICODETEXT: u32 = 13;
+
+pub fn set_clipboard_text(owner: Hwnd, s: &str) -> bool {
+    const GMEM_MOVEABLE: u32 = 2;
+    let w = wide(s);
+    let bytes = w.len() * 2;
+    // SAFETY: memoire globale allouee, remplie, puis confiee au presse-papiers
+    // (qui la possede alors) ; liberee nous-memes en cas d'echec.
+    unsafe {
+        if OpenClipboard(owner.raw()) == 0 {
+            return false;
+        }
+        EmptyClipboard();
+        let mem = GlobalAlloc(GMEM_MOVEABLE, bytes);
+        if mem.is_null() {
+            CloseClipboard();
+            return false;
+        }
+        let p = GlobalLock(mem) as *mut u16;
+        if p.is_null() {
+            GlobalFree(mem);
+            CloseClipboard();
+            return false;
+        }
+        std::ptr::copy_nonoverlapping(w.as_ptr(), p, w.len());
+        GlobalUnlock(mem);
+        let ok = !SetClipboardData(CF_UNICODETEXT, mem).is_null();
+        if !ok {
+            GlobalFree(mem);
+        }
+        CloseClipboard();
+        ok
+    }
+}
+
+pub fn clipboard_text(owner: Hwnd) -> Option<String> {
+    // SAFETY: le presse-papiers est ouvert le temps de copier la chaine.
+    unsafe {
+        if OpenClipboard(owner.raw()) == 0 {
+            return None;
+        }
+        let mem = GetClipboardData(CF_UNICODETEXT);
+        let mut out = None;
+        if !mem.is_null() {
+            let p = GlobalLock(mem) as *const u16;
+            if !p.is_null() {
+                let mut n = 0usize;
+                while *p.add(n) != 0 && n < 1 << 20 {
+                    n += 1;
+                }
+                out = Some(String::from_utf16_lossy(std::slice::from_raw_parts(p, n)));
+                GlobalUnlock(mem);
+            }
+        }
+        CloseClipboard();
+        out
+    }
+}

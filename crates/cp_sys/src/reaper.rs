@@ -40,7 +40,8 @@ struct CustomAction {
 /// des pointeurs vers REAPER, valides tant que REAPER tourne.
 #[derive(Clone, Copy)]
 pub struct Reaper {
-    register: RegisterFn,
+    /// Absent cote module : seul le chargeur enregistre aupres de REAPER.
+    register: Option<RegisterFn>,
     get_func: GetFuncFn,
     main: isize,
 }
@@ -70,7 +71,7 @@ pub unsafe fn plugin_entry(
         return 0;
     }
     let r = Reaper {
-        register,
+        register: Some(register),
         get_func,
         main: raw.hwnd_main as isize,
     };
@@ -130,9 +131,35 @@ fn fn_ptr(f: *const ()) -> *mut c_void {
 impl Reaper {
     fn reg(&self, name: &str, info: *mut c_void) -> i32 {
         let Ok(c) = CString::new(name) else { return 0 };
-        // SAFETY: `Register` de REAPER ; nom termine par zero, `info` du type
-        // que ce nom attend (garanti par les appelants de ce module).
-        unsafe { (self.register)(c.as_ptr(), info) }
+        match self.register {
+            // SAFETY: `Register` de REAPER ; nom termine par zero, `info` du
+            // type que ce nom attend (garanti par les appelants de ce module).
+            Some(f) => unsafe { f(c.as_ptr(), info) },
+            None => 0,
+        }
+    }
+
+    /// L'API vue du module : `GetFunc` seulement (par la table du chargeur),
+    /// et la fenetre principale demandee a REAPER.
+    pub fn from_get_func(get_func: extern "C" fn(*const c_char) -> *mut c_void) -> Reaper {
+        let mut r = Reaper {
+            register: None,
+            get_func,
+            main: 0,
+        };
+        let p = r.get_func(c"GetMainHwnd");
+        if !p.is_null() {
+            // SAFETY: HWND GetMainHwnd().
+            let f: unsafe extern "C" fn() -> *mut c_void = unsafe { std::mem::transmute(p) };
+            // SAFETY: appel sans argument.
+            r.main = unsafe { f() } as isize;
+        }
+        r
+    }
+
+    /// `Register` brut (pour les autres modules de ce crate).
+    pub(crate) fn register_raw(&self, name: &str, info: *mut c_void) -> bool {
+        self.reg(name, info) != 0
     }
 
     pub fn main_hwnd(&self) -> Hwnd {

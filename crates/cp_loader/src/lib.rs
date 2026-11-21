@@ -17,6 +17,7 @@
 //! `cp_studio.prev.log`).
 
 mod selftest;
+mod views;
 
 use std::ffi::{CStr, c_void};
 use std::fs::{self, File};
@@ -25,7 +26,9 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard, OnceLock};
 use std::time::{Duration, Instant};
 
-use cp_abi::{ClipInfo, FAULT, HostApi, LOG_ERROR, LOG_INFO, LOG_WARN};
+use cp_abi::{
+    ClipInfo, FAULT, FrameInfo, HostApi, KeyEvent, LOG_ERROR, LOG_INFO, LOG_WARN, WM_CP_FRAME,
+};
 use cp_audio::{AudioHost, ClipH, Load};
 use cp_engine::VoiceH;
 use cp_hot::{Hot, Report};
@@ -90,7 +93,7 @@ fn audio<T>(default: T, f: impl FnOnce(&mut AudioHost) -> T) -> T {
     }
 }
 
-fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
+pub(crate) fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|e| e.into_inner())
 }
 
@@ -268,6 +271,84 @@ impl Host for LoaderHost {
     fn audio_srate(&self) -> f64 {
         audio(0.0, |a| a.core().srate())
     }
+
+    fn create_view(
+        &self,
+        title: &str,
+        ident: &str,
+        x: i32,
+        y: i32,
+        w: i32,
+        h: i32,
+        docked: bool,
+    ) -> isize {
+        let Some(r) = REAPER.get() else { return 0 };
+        // Aucun verrou tenu : Windows envoie des messages pendant la creation.
+        let Some(hwnd) = win::create_view(title, x, y, w, h, r.main_hwnd(), docked) else {
+            log(
+                LOG_ERROR,
+                &format!("creation de la vue refusee ({})", win::last_error()),
+            );
+            return 0;
+        };
+        lock(&WINDOWS).push(hwnd);
+        if docked {
+            r.dock_add(hwnd, title, ident);
+            r.dock_activate(hwnd);
+        } else {
+            win::show(hwnd);
+        }
+        hwnd.0
+    }
+
+    fn destroy_window(&self, hwnd: isize) {
+        let h = Hwnd(hwnd);
+        if !lock(&WINDOWS).contains(&h) {
+            return;
+        }
+        views::forget(h);
+        // Retirer du docker AVANT de detruire : dans l'autre sens, REAPER
+        // garde une reference vers une fenetre morte.
+        if let Some(r) = REAPER.get() {
+            r.dock_remove(h);
+        }
+        win::destroy_window(h);
+    }
+
+    fn frames(&self, hwnd: isize, on: bool) {
+        if lock(&WINDOWS).contains(&Hwnd(hwnd)) {
+            views::frames(Hwnd(hwnd), on);
+        }
+    }
+
+    fn frame_info(&self) -> FrameInfo {
+        views::frame_info()
+    }
+}
+
+/// Une touche du crochet clavier, demandee au module. Rend le code du crochet.
+fn ask_module_key(h: Hwnd, ev: &KeyEvent) -> i32 {
+    let Some(hot) = HOT.get() else { return 0 };
+    let mut out: isize = 0;
+    let lp = ev as *const KeyEvent as isize;
+    match hot.call(|api| (api.wnd_proc)(h.0, views::ACCEL_MSG, ev.message as usize, lp, &mut out)) {
+        Some(1) => out as i32,
+        _ => 0,
+    }
+}
+
+/// La coche d'une action du module.
+fn toggle_state(cmd: i32) -> i32 {
+    let mine = lock(&ACTIONS)
+        .by_cmd
+        .iter()
+        .any(|&(c, o)| c == cmd && o == Owner::Module);
+    if !mine {
+        return -1;
+    }
+    HOT.get()
+        .and_then(|h| h.call(|api| (api.toggle_state)(cmd)))
+        .unwrap_or(-1)
 }
 
 fn param_from(n: u32) -> Option<cp_engine::Param> {
@@ -607,6 +688,10 @@ fn paint_placeholder(h: Hwnd) {
 fn wnd_proc(m: &WinMsg) -> isize {
     if m.msg == win::WM_NCDESTROY {
         lock(&WINDOWS).retain(|h| *h != m.hwnd);
+        views::forget(m.hwnd);
+    }
+    if m.msg == WM_CP_FRAME {
+        views::frame_done(m.hwnd);
     }
     if let Some(hot) = HOT.get() {
         let sane = hot.fault().is_none();
@@ -709,6 +794,16 @@ fn on_load(instance: isize, r: Reaper) -> bool {
     if !r.register_timer(on_timer) {
         log(LOG_ERROR, "timer refuse");
     }
+    views::init_keys(|| lock(&WINDOWS).clone(), ask_module_key);
+    if !r.register_accelerator(views::on_key) {
+        log(LOG_ERROR, "crochet clavier refuse");
+    }
+    if !cp_sys::rui::install_mouse_hook(views::on_mouse) {
+        log(LOG_ERROR, "crochet souris refuse");
+    }
+    if !r.register_toggle_state(toggle_state) {
+        log(LOG_ERROR, "toggleaction refuse");
+    }
     reload(true);
     true
 }
@@ -721,7 +816,11 @@ fn on_unload() {
     if let Some(r) = REAPER.get() {
         r.unregister_timer();
         r.unregister_command_hook();
+        r.unregister_accelerator();
+        r.unregister_toggle_state();
     }
+    cp_sys::rui::remove_mouse_hook();
+    views::stop_clock();
     if let Some(hot) = HOT.get() {
         hot.unload();
     }
