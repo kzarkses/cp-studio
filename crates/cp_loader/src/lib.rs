@@ -430,7 +430,7 @@ fn invalidate_all() {
     }
 }
 
-fn reload(force: bool) -> Option<Result<Report, String>> {
+pub(crate) fn reload(force: bool) -> Option<Result<Report, String>> {
     let (hot, api) = (HOT.get()?, HOST_API.get()?);
     let r = hot.poll(Instant::now(), api, force)?;
     match &r {
@@ -600,6 +600,10 @@ fn on_command(cmd: i32) -> bool {
 // ---------------------------------------------------------------------------
 // Les sons de test
 // ---------------------------------------------------------------------------
+
+pub(crate) fn module_generation() -> u32 {
+    HOT.get().map_or(0, |h| h.generation())
+}
 
 pub(crate) fn views_count() -> usize {
     lock(&WINDOWS).len()

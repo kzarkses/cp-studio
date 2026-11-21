@@ -1564,6 +1564,10 @@ impl Browser {
         if let Some(p) = self.selected_path() {
             s += &format!("sel\t{}\n", p.to_string_lossy());
         }
+        // Une ligne sans chemin (un titre de section) : son rang.
+        if let Some(i) = self.sel {
+            s += &format!("selrow\t{i}\n");
+        }
         s += &format!("scroll\t{}\n", self.scroll.pos);
         s += &format!("search\t{}\n", self.search.text);
         s
@@ -1571,6 +1575,7 @@ impl Browser {
 
     pub fn restore_state(&mut self, s: &str) {
         let mut sel = None;
+        let mut selrow: Option<usize> = None;
         let mut scroll = 0.0;
         for line in s.lines() {
             let Some((k, v)) = line.split_once('\t') else {
@@ -1583,6 +1588,7 @@ impl Browser {
                     self.tree.nodes[f].expanded = true;
                 }
                 "sel" => sel = Some(PathBuf::from(v)),
+                "selrow" => selrow = v.parse().ok(),
                 "scroll" => scroll = v.parse().unwrap_or(0.0),
                 "search" => self.search.set(v),
                 _ => {}
@@ -1592,12 +1598,14 @@ impl Browser {
             self.run_search();
         }
         self.rebuild();
-        if let Some(p) = sel {
-            self.sel = self
+        self.sel = match sel {
+            Some(p) => self
                 .rows
                 .iter()
-                .position(|&r| self.row_path(r) == Some(p.as_path()));
+                .position(|&r| self.row_path(r) == Some(p.as_path())),
+            None => None,
         }
+        .or(selrow.filter(|&i| i < self.rows.len()));
         self.scroll.pos = scroll;
         self.scroll.clamp();
     }

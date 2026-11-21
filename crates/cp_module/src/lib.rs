@@ -242,6 +242,7 @@ struct App {
     cmd_browser: i32,
     cmd_perf: i32,
     cmd_dock: i32,
+    cmd_state: i32,
     browser: Browser,
     view: Option<View>,
     text: TextCache,
@@ -759,12 +760,17 @@ impl Module for App {
         );
         let cmd_dock =
             host.register_action("CPSTUDIO_BROWSER_DOCK", "CP Studio: Browser - dock/undock");
+        let cmd_state = host.register_action(
+            "CPSTUDIO_BROWSER_STATE",
+            "CP Studio: (test) Browser state to ExtState",
+        );
         let mut app = App {
             host,
             r,
             cmd_browser,
             cmd_perf,
             cmd_dock,
+            cmd_state,
             browser,
             view: None,
             text: TextCache::new(Box::new(GdiGlyphs::new(&["Segoe UI", "Consolas"]))),
@@ -848,6 +854,21 @@ impl Module for App {
             self.show_perf = !self.show_perf;
             self.browser.mark();
             self.want_frames();
+            true
+        } else if cmd == self.cmd_state {
+            // Pour l'auto-test : ce que le navigateur montre, lisible par
+            // GetExtState (non persistant).
+            let st = format!(
+                "sel={} rows={} focus={}",
+                self.browser.sel.map_or(-1, |s| s as i64),
+                self.browser.rows.len(),
+                if self.browser.focus == Focus::Search {
+                    "search"
+                } else {
+                    "list"
+                }
+            );
+            self.r.ext_set(SECTION, "selftest_state", &st, false);
             true
         } else if cmd == self.cmd_dock {
             if self.view.is_some() {

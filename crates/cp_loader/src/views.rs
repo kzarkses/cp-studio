@@ -232,6 +232,11 @@ fn owner_view(h: Hwnd) -> Option<Hwnd> {
     views.into_iter().find(|&v| v == h || ui::is_child(v, h))
 }
 
+/// Pose la revendication du clavier (l'auto-test, qui ne clique pas).
+pub fn set_claim(h: Hwnd) {
+    *lock(&CLAIM) = h.0;
+}
+
 /// Crochet souris : le dernier clic decide a qui va le clavier.
 pub fn on_mouse(h: Hwnd, msg: u32) {
     const DOWNS: [u32; 6] = [0x201, 0x204, 0x207, 0xA1, 0xA4, 0xA7];

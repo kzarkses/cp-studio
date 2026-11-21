@@ -22,6 +22,7 @@ use std::time::{Duration, Instant};
 
 use cp_audio::{AudioHost, ClipH, Load};
 use cp_engine::VoiceH;
+use cp_sys::win::{self, Hwnd};
 
 pub struct SelfTest {
     quit: bool,
@@ -34,6 +35,7 @@ pub struct SelfTest {
     loop_clip: Option<ClipH>,
     played_at: Option<Instant>,
     ui_at: Option<Instant>,
+    keys_step: u8,
     frames0: cp_abi::FrameInfo,
     snapped: bool,
 }
@@ -59,6 +61,7 @@ enum Phase {
     OpenUi,
     Watch,
     Dock,
+    Keys,
     Done,
 }
 
@@ -76,6 +79,7 @@ pub fn requested() -> Option<SelfTest> {
         loop_clip: None,
         played_at: None,
         ui_at: None,
+        keys_step: 0,
         frames0: cp_abi::FrameInfo::default(),
         snapped: false,
     })
@@ -233,7 +237,12 @@ impl SelfTest {
                     self.phase = Phase::Insert;
                 }
             }
-            Phase::Insert | Phase::OpenUi | Phase::Watch | Phase::Dock | Phase::Done => {}
+            Phase::Insert
+            | Phase::OpenUi
+            | Phase::Watch
+            | Phase::Dock
+            | Phase::Keys
+            | Phase::Done => {}
         }
         false
     }
@@ -389,6 +398,74 @@ impl SelfTest {
                     }
                     let floating = crate::first_view().is_some_and(|h| r.dock_of(h).is_none());
                     self.say(floating, "et redevient flottante".into());
+                    // Puis le clavier, par le vrai chemin des touches.
+                    if let Some(h) = crate::first_view() {
+                        const WM_KEYDOWN: u32 = 0x100;
+                        const WM_KEYUP: u32 = 0x101;
+                        for vk in [0x24usize, 0x28, 0x28] {
+                            // Debut, Bas, Bas : des dossiers, aucun son.
+                            win::post_message(h, WM_KEYDOWN, vk, 1);
+                            win::post_message(h, WM_KEYUP, vk, 1);
+                        }
+                    }
+                    self.ui_at = Some(Instant::now());
+                    self.keys_step = 0;
+                    self.phase = Phase::Keys;
+                }
+            }
+            Phase::Keys => {
+                let t = self.ui_at.map_or(0.0, |t| t.elapsed().as_secs_f64());
+                let state = |r: &cp_sys::reaper::Reaper| {
+                    let c = r.named_command("_CPSTUDIO_BROWSER_STATE");
+                    if c != 0 {
+                        r.main_on_command(c);
+                    }
+                    r.ext_get("CP_Studio", "selftest_state").unwrap_or_default()
+                };
+                if self.keys_step == 0 && t > 0.5 {
+                    let st = state(r);
+                    self.say(
+                        st.starts_with("sel=2 "),
+                        format!("touches remises a la fenetre (Debut, Bas, Bas) : {st}"),
+                    );
+                    // La porte du focus vole : REAPER a le focus, le dernier
+                    // clic etait chez nous. Une touche qui vise REAPER nous
+                    // revient.
+                    if let Some(h) = crate::first_view() {
+                        crate::views::set_claim(h);
+                        win::post_message(r.main_hwnd(), 0x100, 0x28, 1);
+                        win::post_message(r.main_hwnd(), 0x101, 0x28, 1);
+                    }
+                    self.keys_step = 1;
+                    self.ui_at = Some(Instant::now());
+                } else if self.keys_step == 1 && t > 0.5 {
+                    let st = state(r);
+                    self.say(
+                        st.starts_with("sel=3 "),
+                        format!(
+                            "touche adressee a REAPER, revenue au navigateur (dernier clic) : {st}"
+                        ),
+                    );
+                    crate::views::set_claim(Hwnd(0));
+                    // Le rechargement a chaud, navigateur ouvert : la fenetre
+                    // reste, l'etat revient.
+                    let before = crate::first_view();
+                    let gen0 = crate::module_generation();
+                    let ok = matches!(crate::reload(true), Some(Ok(_)));
+                    let gen1 = crate::module_generation();
+                    let after = crate::first_view();
+                    self.say(
+                        ok && gen1 == gen0 + 1 && before.is_some() && before == after,
+                        format!("rechargement a chaud navigateur ouvert : generation {gen0} -> {gen1}, meme fenetre : {}", before == after),
+                    );
+                    self.keys_step = 2;
+                    self.ui_at = Some(Instant::now());
+                } else if self.keys_step == 2 && t > 0.5 {
+                    let st = state(r);
+                    self.say(
+                        st.starts_with("sel=3 "),
+                        format!("etat du navigateur apres le rechargement : {st}"),
+                    );
                     self.finish_report();
                     return true;
                 }
