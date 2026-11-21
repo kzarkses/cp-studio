@@ -255,6 +255,22 @@ pub fn stop_clock() {
 
 /// La vue du dernier clic (0 = le dernier clic etait ailleurs).
 static CLAIM: Mutex<isize> = Mutex::new(0);
+/// Les vues qui ne prennent jamais le clavier (le transport) : un clic n'y
+/// revendique rien, et REAPER garde ses raccourcis (Espace apres un clic sur
+/// Loop).
+static KEYLESS: Mutex<Vec<isize>> = Mutex::new(Vec::new());
+
+pub fn set_keyless(h: Hwnd, on: bool) {
+    let mut k = lock(&KEYLESS);
+    k.retain(|&x| x != h.0);
+    if on {
+        k.push(h.0);
+    }
+}
+
+fn is_keyless(h: Hwnd) -> bool {
+    lock(&KEYLESS).contains(&h.0)
+}
 /// Les vues, pour savoir a qui appartient une fenetre.
 static VIEWS: OnceLock<fn() -> Vec<Hwnd>> = OnceLock::new();
 /// Appel du module : (vue, touche) -> code du crochet.
@@ -283,7 +299,7 @@ pub fn set_claim(h: Hwnd) {
 pub fn on_mouse(h: Hwnd, msg: u32) {
     const DOWNS: [u32; 6] = [0x201, 0x204, 0x207, 0xA1, 0xA4, 0xA7];
     if DOWNS.contains(&msg) {
-        *lock(&CLAIM) = owner_view(h).map_or(0, |v| v.0);
+        *lock(&CLAIM) = owner_view(h).filter(|&v| !is_keyless(v)).map_or(0, |v| v.0);
     }
 }
 
@@ -298,7 +314,7 @@ pub fn on_key(m: &mut Msg) -> i32 {
     if !KEYS.contains(&m.message) {
         return accel::NOT_OURS;
     }
-    let (target, redirected) = match owner_view(Hwnd(m.hwnd)) {
+    let (target, redirected) = match owner_view(Hwnd(m.hwnd)).filter(|&v| !is_keyless(v)) {
         Some(v) => (v, false),
         None => {
             let claim = Hwnd(*lock(&CLAIM));
@@ -325,6 +341,16 @@ pub fn on_key(m: &mut Msg) -> i32 {
     if r == accel::PASS_TO_WINDOW && redirected {
         // Readressee : Windows la traduira (WM_CHAR) et la livrera a la vue.
         m.hwnd = target.0;
+    }
+    if r == accel::PASS_TO_WINDOW && crate::places::is_placed(target) {
+        // Une vue posee a la place de l'arrangement est une fille directe de
+        // la fenetre principale, la ou REAPER range ses propres panneaux : il
+        // ne lui rend pas ses touches (mesure dans l'ancienne suite). On la
+        // livre nous-memes (WM_CHAR compris), puis on la mange pour REAPER.
+        let mut copy = *m;
+        copy.hwnd = target.0;
+        cp_sys::rui::deliver(&copy);
+        return accel::EAT;
     }
     r
 }

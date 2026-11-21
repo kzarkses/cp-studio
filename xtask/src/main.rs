@@ -157,12 +157,18 @@ fn reaper_test() -> ExitCode {
         }
     };
     // Les photos demandees par l'auto-test : snap.txt (flottante), snap2.txt
-    // (ancree).
-    let snaps = [("snap.txt", ""), ("snap2.txt", "_docked")];
+    // (ancree), snap3.txt (CP Transport a la place du transport de REAPER),
+    // snap4.txt (le navigateur a la place de l'arrangement).
+    let snaps = [
+        ("snap.txt", ""),
+        ("snap2.txt", "_docked"),
+        ("snap3.txt", "_transport"),
+        ("snap4.txt", "_band"),
+    ];
     for (f, _) in snaps {
         let _ = fs::remove_file(dir.join(f));
     }
-    let mut done = [false; 2];
+    let mut done = [false; 4];
     while !result.exists() && t0.elapsed() < Duration::from_secs(90) {
         for (i, (f, suffix)) in snaps.iter().enumerate() {
             let p = dir.join(f);

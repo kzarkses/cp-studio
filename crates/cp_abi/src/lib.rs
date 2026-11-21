@@ -13,7 +13,7 @@ use core::ffi::{c_char, c_void};
 
 /// Version du contrat. Un entier : jamais de mineure (le piege du double de
 /// l'ancien moteur, ou `1.10` valait `1.1`).
-pub const ABI: u32 = 5;
+pub const ABI: u32 = 6;
 
 /// Le symbole exporte par le module.
 pub const ENTRY_SYMBOL: &[u8] = b"cp_module_entry\0";
@@ -65,9 +65,36 @@ pub struct ViewSpec {
     pub y: i32,
     pub w: i32,
     pub h: i32,
-    /// 1 = dans un docker.
+    /// [`VIEW_FLOAT`], [`VIEW_DOCK`] ou [`VIEW_PLACED`].
     pub docked: i32,
 }
+
+/// Une fenetre a elle, flottante.
+pub const VIEW_FLOAT: i32 = 0;
+/// Dans un docker de REAPER.
+pub const VIEW_DOCK: i32 = 1;
+/// Fille cachee de la fenetre principale, pour prendre une place native
+/// ([`HostApi::place_take`]). ABI 6.
+pub const VIEW_PLACED: i32 = 2;
+
+/// Les places natives de REAPER qu'une de nos vues peut prendre (ABI 6) :
+/// la vue native est MASQUEE (REAPER continue de calculer son rectangle, qui
+/// sert d'oracle de disposition) et la notre est posee dans ce rectangle.
+/// La bande de l'arrangement : regle, pistes, panneau des pistes.
+pub const PLACE_ARRANGE: u32 = 1;
+/// Le transport de REAPER, ancre en haut de la fenetre principale.
+pub const PLACE_TRANSPORT: u32 = 2;
+
+/// L'etat d'une place (`place_state`).
+/// Personne ne la tient : la vue native est la.
+pub const PLACE_FREE: i32 = 0;
+/// Une de nos vues l'occupe.
+pub const PLACE_HELD: i32 = 1;
+/// Rendue a REAPER d'elle-meme : le transport natif a ete rallume (par
+/// Cedric), ou la place a disparu. La vue qui l'occupait est cachee.
+pub const PLACE_YIELDED: i32 = 2;
+/// Introuvable (pas de transport en haut de la fenetre, pas d'arrangement).
+pub const PLACE_MISSING: i32 = -1;
 
 /// La cadence de l'ecran.
 #[repr(C)]
@@ -117,6 +144,19 @@ pub struct HostApi {
     /// Demande (1) ou non (0) un WM_CP_FRAME a chaque image de l'ecran.
     pub frames: extern "C" fn(hwnd: isize, on: i32),
     pub frame_info: extern "C" fn(out: *mut FrameInfo),
+    /// Pose la vue `hwnd` (creee en [`VIEW_PLACED`]) a la place native
+    /// `place`. `show` = 0 : seulement la mettre a la taille de la place, cachee
+    /// (pour la dessiner avant de la montrer) ; 1 : masquer la vue native et
+    /// montrer la notre. `hwnd` = 0 : rendre la place a REAPER (la vue qui
+    /// l'occupait est cachee, pas detruite). 1 = fait, 0 = place introuvable.
+    /// Le chargeur tient ensuite la place a chaque battement, et la rend de
+    /// lui-meme si le module tombe ou si REAPER s'arrete. ABI 6.
+    pub place_take: extern "C" fn(place: u32, hwnd: isize, show: i32) -> i32,
+    /// L'etat d'une place (`PLACE_*`) et la vue qui l'occupe (0 = aucune).
+    pub place_state: extern "C" fn(place: u32, hwnd: *mut isize) -> i32,
+    /// Une fenetre qui ne prend pas le clavier : un clic n'y pose ni focus ni
+    /// revendication, et REAPER garde ses raccourcis (un transport). ABI 6.
+    pub set_keyless: extern "C" fn(hwnd: isize, on: i32),
 }
 
 /// Etats d'un chargement de fichier.

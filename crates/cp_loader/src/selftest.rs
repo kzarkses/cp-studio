@@ -41,6 +41,10 @@ pub struct SelfTest {
     max_gap_ms: f64,
     throttled0: u64,
     docked0: bool,
+    /// CP Transport etait-il pose avant le test (on le rend tel quel).
+    transport0: bool,
+    /// La place du navigateur avant le test.
+    place0: String,
     frames0: cp_abi::FrameInfo,
     snapped: bool,
 }
@@ -67,6 +71,10 @@ enum Phase {
     Watch,
     Dock,
     Keys,
+    /// CP Transport a la place du transport de REAPER.
+    Transport,
+    /// Le navigateur a la place de l'arrangement.
+    Band,
     Done,
 }
 
@@ -90,6 +98,8 @@ pub fn requested() -> Option<SelfTest> {
         max_gap_ms: 0.0,
         throttled0: 0,
         docked0: false,
+        transport0: false,
+        place0: String::new(),
         frames0: cp_abi::FrameInfo::default(),
         snapped: false,
     })
@@ -252,6 +262,8 @@ impl SelfTest {
             | Phase::Watch
             | Phase::Dock
             | Phase::Keys
+            | Phase::Transport
+            | Phase::Band
             | Phase::Done => {}
         }
         false
@@ -560,13 +572,244 @@ impl SelfTest {
                                     crate::views::throttled() - self.throttled0
                                 ),
                             );
-                            self.finish_report();
-                            return true;
+                            self.keys_step = 0;
+                            self.ui_at = Some(Instant::now());
+                            self.phase = Phase::Transport;
                         }
                     }
                 }
             }
+            Phase::Transport => {
+                if self.places_tick(r, true) {
+                    self.keys_step = 0;
+                    self.ui_at = Some(Instant::now());
+                    self.phase = Phase::Band;
+                }
+            }
+            Phase::Band => {
+                if self.places_tick(r, false) {
+                    self.finish_report();
+                    return true;
+                }
+            }
             Phase::Done => return true,
+            _ => {}
+        }
+        false
+    }
+
+    /// Une etape des places natives ; vrai quand la phase est finie.
+    fn places_tick(&mut self, r: &cp_sys::reaper::Reaper, transport: bool) -> bool {
+        use cp_abi::{PLACE_ARRANGE, PLACE_HELD, PLACE_TRANSPORT};
+        let t = self.ui_at.map_or(0.0, |t| t.elapsed().as_secs_f64());
+        let act = |name: &str| {
+            let c = r.named_command(name);
+            if c != 0 {
+                r.main_on_command(c);
+            }
+            c != 0
+        };
+        let rect_eq = |a: win::Rect, b: win::Rect| {
+            (a.left - b.left).abs() <= 1
+                && (a.top - b.top).abs() <= 1
+                && (a.right - b.right).abs() <= 1
+                && (a.bottom - b.bottom).abs() <= 1
+        };
+        if transport {
+            match self.keys_step {
+                0 => {
+                    // Les actions que pilote le transport, par leur nom.
+                    let want = [
+                        (40042, "start"),
+                        (1007, "play"),
+                        (1016, "stop"),
+                        (1008, "pause"),
+                        (1013, "record"),
+                        (1068, "repeat"),
+                        (40364, "metronome"),
+                        (1134, "tap"),
+                        (40021, "project settings"),
+                        (40259, "transport"),
+                    ];
+                    let mut bad = Vec::new();
+                    for (c, k) in want {
+                        let n = r.command_text(c);
+                        if !n.to_lowercase().contains(k) {
+                            bad.push(format!("{c} = {n:?}"));
+                        }
+                    }
+                    self.say(
+                        bad.is_empty(),
+                        if bad.is_empty() {
+                            "les actions du transport portent les noms attendus".into()
+                        } else {
+                            format!("actions du transport inattendues : {}", bad.join(", "))
+                        },
+                    );
+                    self.transport0 = crate::places::state(PLACE_TRANSPORT).0 == PLACE_HELD;
+                    if !self.transport0 && !act("_CPSTUDIO_TRANSPORT") {
+                        self.say(false, "l'action de CP Transport n'existe pas".into());
+                        return true;
+                    }
+                    self.keys_step = 1;
+                    self.ui_at = Some(Instant::now());
+                }
+                1 if t > 1.2 => {
+                    match crate::places::probe(r, PLACE_TRANSPORT) {
+                        Some((shown, want, ours, visible, _)) => self.say(
+                            shown && rect_eq(want, ours) && visible == 0,
+                            format!(
+                                "CP Transport a la place du transport de REAPER : pose {shown}, rectangle {}x{} en {},{} (le notre {}x{} en {},{}), transport natif visible : {visible}",
+                                want.right - want.left,
+                                want.bottom - want.top,
+                                want.left,
+                                want.top,
+                                ours.right - ours.left,
+                                ours.bottom - ours.top,
+                                ours.left,
+                                ours.top
+                            ),
+                        ),
+                        None => self.say(false, "le transport de REAPER est introuvable".into()),
+                    }
+                    let h = crate::view_titled("CP Transport").map_or(0, |h| h.0);
+                    let _ = fs::write(dir().join("snap3.txt"), format!("{h}\n"));
+                    self.keys_step = 2;
+                    self.ui_at = Some(Instant::now());
+                }
+                2 if t > 1.5 => {
+                    // Cedric rallume le transport de REAPER : on lui cede.
+                    r.main_on_command(40259);
+                    self.keys_step = 3;
+                    self.ui_at = Some(Instant::now());
+                }
+                3 if t > 1.0 => {
+                    let st = crate::places::state(PLACE_TRANSPORT).0;
+                    let gone = crate::view_titled("CP Transport").is_none();
+                    let native = crate::places::probe(r, PLACE_TRANSPORT).is_some_and(|p| p.3 == 1);
+                    self.say(
+                        st != PLACE_HELD && gone && native,
+                        format!(
+                            "transport de REAPER rallume : CP Transport lui cede la place (etat {st}, fenetre fermee {gone}, natif visible {native})"
+                        ),
+                    );
+                    if self.transport0 {
+                        act("_CPSTUDIO_TRANSPORT");
+                    }
+                    self.keys_step = 4;
+                    self.ui_at = Some(Instant::now());
+                }
+                4 if t > 1.0 => return true,
+                _ => {}
+            }
+            return false;
+        }
+        match self.keys_step {
+            0 => {
+                self.place0 = r.ext_get("CP_Studio", "browser_place").unwrap_or_else(|| {
+                    if r.ext_get("CP_Studio", "browser_docked").as_deref() == Some("1") {
+                        "dock".into()
+                    } else {
+                        "float".into()
+                    }
+                });
+                act("_CPSTUDIO_BROWSER_IN_ARRANGE");
+                self.keys_step = 1;
+                self.ui_at = Some(Instant::now());
+            }
+            1 if t > 1.5 => {
+                match crate::places::probe(r, PLACE_ARRANGE) {
+                    Some((shown, want, ours, visible, _)) => self.say(
+                        shown && rect_eq(want, ours) && visible == 0,
+                        format!(
+                            "le navigateur a la place de l'arrangement : pose {shown}, bande {}x{} en {},{} (le notre {}x{}), vues natives encore visibles : {visible}",
+                            want.right - want.left,
+                            want.bottom - want.top,
+                            want.left,
+                            want.top,
+                            ours.right - ours.left,
+                            ours.bottom - ours.top
+                        ),
+                    ),
+                    None => self.say(false, "l'arrangement est introuvable".into()),
+                }
+                let h = crate::first_view().map_or(0, |h| h.0);
+                let _ = fs::write(dir().join("snap4.txt"), format!("{h}\n"));
+                if let Some(h) = crate::first_view() {
+                    // Debut, Bas : les touches arrivent a la vue posee.
+                    for vk in [0x24usize, 0x28] {
+                        win::post_message(h, 0x100, vk, 1);
+                        win::post_message(h, 0x101, vk, 1);
+                    }
+                }
+                self.keys_step = 2;
+                self.ui_at = Some(Instant::now());
+            }
+            2 if t > 1.5 => {
+                let c = r.named_command("_CPSTUDIO_BROWSER_STATE");
+                if c != 0 {
+                    r.main_on_command(c);
+                }
+                let st = r.ext_get("CP_Studio", "selftest_state").unwrap_or_default();
+                self.say(
+                    st.starts_with("sel=1 ") && st.contains("band=1"),
+                    format!("touches de la vue posee (Debut, Bas) : {st}"),
+                );
+                // Le rechargement a chaud : la vue reste a sa place.
+                let before = crate::first_view();
+                let ok = matches!(crate::reload(true), Some(Ok(_)));
+                let held = crate::places::state(PLACE_ARRANGE);
+                self.say(
+                    ok && before.is_some_and(|h| held.0 == PLACE_HELD && held.1 == h.0),
+                    "rechargement a chaud : le navigateur reste a la place de l'arrangement".into(),
+                );
+                act("_CPSTUDIO_VIEW_ARRANGE");
+                self.keys_step = 3;
+                self.ui_at = Some(Instant::now());
+            }
+            3 if t > 1.0 => {
+                let p = crate::places::probe(r, PLACE_ARRANGE);
+                let parked = crate::first_view().is_some_and(|h| !cp_sys::ui::is_visible(h));
+                self.say(
+                    p.is_some_and(|p| !p.0 && p.3 > 0) && parked,
+                    format!(
+                        "« Arrange » : l'arrangement revient ({} vues natives visibles), le navigateur est gare : {parked}",
+                        p.map_or(0, |p| p.3)
+                    ),
+                );
+                act("_CPSTUDIO_VIEW_BROWSER");
+                self.keys_step = 4;
+                self.ui_at = Some(Instant::now());
+            }
+            4 if t > 1.0 => {
+                let held = crate::places::state(PLACE_ARRANGE).0 == PLACE_HELD;
+                self.say(
+                    held,
+                    "« Browser » : le navigateur gare revient a sa place".into(),
+                );
+                // Rendre a Cedric sa place d'origine.
+                match self.place0.as_str() {
+                    "dock" => {
+                        act("_CPSTUDIO_BROWSER_DOCKED");
+                    }
+                    "float" => {
+                        act("_CPSTUDIO_BROWSER_FLOATING");
+                    }
+                    _ => {}
+                }
+                self.keys_step = 6;
+                self.ui_at = Some(Instant::now());
+            }
+            6 if t > 1.5 => {
+                let p = crate::places::probe(r, PLACE_ARRANGE);
+                let place = r.ext_get("CP_Studio", "browser_place").unwrap_or_default();
+                let back = place == self.place0;
+                self.say(
+                    back && (self.place0 == "arrange" || p.is_some_and(|p| !p.0 && p.3 > 0)),
+                    format!("le navigateur retrouve sa place ({place}), l'arrangement est rendu"),
+                );
+                return true;
+            }
             _ => {}
         }
         false

@@ -69,6 +69,7 @@ dependencies = [
  "cp_browser",
  "cp_gfx",
  "cp_sys",
+ "cp_transport",
  "cp_ui",
 ]
 
@@ -86,6 +87,15 @@ version = "0.1.0"
 dependencies = [
  "cp_abi",
  "cp_gfx",
+]
+
+[[package]]
+name = "cp_transport"
+version = "0.1.0"
+dependencies = [
+ "cp_gfx",
+ "cp_sys",
+ "cp_ui",
 ]
 
 [[package]]

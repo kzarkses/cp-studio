@@ -165,7 +165,8 @@ impl HostRef {
 
     // --- les vues
 
-    /// Une vue flottante ou ancree (`ident` : la cle du docker chez REAPER).
+    /// Une vue flottante, ancree ou a placer (`mode` : `cp_abi::VIEW_*` ;
+    /// `ident` : la cle du docker chez REAPER).
     #[allow(clippy::too_many_arguments)]
     pub fn create_view(
         &self,
@@ -175,7 +176,7 @@ impl HostRef {
         y: i32,
         w: i32,
         h: i32,
-        docked: bool,
+        mode: i32,
     ) -> Option<Hwnd> {
         let spec = ViewSpec {
             title: title.as_ptr(),
@@ -186,7 +187,7 @@ impl HostRef {
             y,
             w,
             h,
-            docked: docked as i32,
+            docked: mode,
         };
         let r = (self.0.create_view)(&spec);
         (r != 0).then_some(Hwnd(r))
@@ -203,6 +204,24 @@ impl HostRef {
         let mut f = FrameInfo::default();
         (self.0.frame_info)(&mut f);
         f
+    }
+
+    // --- les places natives (ABI 6)
+
+    /// Pose `h` a la place native (`show` faux : a la taille, cachee), ou la
+    /// rend a REAPER (`h` = None).
+    pub fn place_take(&self, place: u32, h: Option<Hwnd>, show: bool) -> bool {
+        (self.0.place_take)(place, h.map_or(0, |h| h.0), show as i32) != 0
+    }
+    /// (etat `cp_abi::PLACE_*`, la vue qui l'occupe).
+    pub fn place_state(&self, place: u32) -> (i32, Option<Hwnd>) {
+        let mut w = 0isize;
+        let st = (self.0.place_state)(place, &mut w);
+        (st, (w != 0).then_some(Hwnd(w)))
+    }
+    /// Une vue qui ne prend jamais le clavier.
+    pub fn set_keyless(&self, h: Hwnd, on: bool) {
+        (self.0.set_keyless)(h.0, on as i32)
     }
 }
 

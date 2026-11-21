@@ -16,6 +16,7 @@
 //! Journal : `<ressources REAPER>/cp_studio.log` (la session precedente dans
 //! `cp_studio.prev.log`).
 
+pub(crate) mod places;
 mod selftest;
 pub(crate) mod views;
 
@@ -111,7 +112,7 @@ fn open_log(r: &Reaper) {
     }
 }
 
-fn log(level: u32, msg: &str) {
+pub(crate) fn log(level: u32, msg: &str) {
     let (h, m, s, ms) = win::local_time();
     let tag = match level {
         LOG_WARN => "attention",
@@ -314,18 +315,27 @@ impl Host for LoaderHost {
         y: i32,
         w: i32,
         h: i32,
-        docked: bool,
+        mode: i32,
     ) -> isize {
         let Some(r) = REAPER.get() else { return 0 };
+        let docked = mode == cp_abi::VIEW_DOCK;
+        let placed = mode == cp_abi::VIEW_PLACED;
         // Aucun verrou tenu : Windows envoie des messages pendant la creation.
         log(
             LOG_INFO,
             &format!(
-                "vue : creation ({})",
-                if docked { "ancree" } else { "flottante" }
+                "vue : creation de {title} ({})",
+                if docked {
+                    "ancree"
+                } else if placed {
+                    "a placer"
+                } else {
+                    "flottante"
+                }
             ),
         );
-        let Some(hwnd) = win::create_view(title, x, y, w, h, r.main_hwnd(), docked) else {
+        let Some(hwnd) = win::create_view(title, x, y, w, h, r.main_hwnd(), docked || placed)
+        else {
             log(
                 LOG_ERROR,
                 &format!("creation de la vue refusee ({})", win::last_error()),
@@ -338,7 +348,7 @@ impl Host for LoaderHost {
             r.dock_add(hwnd, title, ident);
             log(LOG_INFO, "vue : onglet active");
             r.dock_activate(hwnd);
-        } else {
+        } else if !placed {
             win::show(hwnd);
         }
         log(LOG_INFO, "vue : prete");
@@ -351,6 +361,7 @@ impl Host for LoaderHost {
             return;
         }
         views::forget(h);
+        places::forget(h);
         // Retirer du docker AVANT de detruire : dans l'autre sens, REAPER
         // garde une reference vers une fenetre morte.
         if let Some(r) = REAPER.get() {
@@ -363,26 +374,42 @@ impl Host for LoaderHost {
     }
 
     fn frames(&self, hwnd: isize, on: bool) {
-        let known = lock(&WINDOWS).contains(&Hwnd(hwnd));
-        log(
-            LOG_INFO,
-            &format!(
-                "cadence {} pour {hwnd:#x}{}",
-                if on { "demandee" } else { "rendue" },
-                if known {
-                    ""
-                } else {
-                    " (fenetre inconnue : ignoree)"
-                }
-            ),
-        );
-        if known {
+        // Pas de ligne par demande : une vue animee en fait des dizaines par
+        // seconde, et le journal en etait noye.
+        if lock(&WINDOWS).contains(&Hwnd(hwnd)) {
             views::frames(Hwnd(hwnd), on);
+        } else {
+            log(
+                LOG_WARN,
+                &format!("cadence demandee pour une fenetre inconnue ({hwnd:#x}) : ignoree"),
+            );
         }
     }
 
     fn frame_info(&self) -> FrameInfo {
         views::frame_info()
+    }
+
+    fn place_take(&self, place: u32, hwnd: isize, show: bool) -> bool {
+        let Some(r) = REAPER.get() else { return false };
+        if hwnd != 0 && !lock(&WINDOWS).contains(&Hwnd(hwnd)) {
+            log(
+                LOG_WARN,
+                "place demandee pour une fenetre inconnue : refusee",
+            );
+            return false;
+        }
+        places::take(r, place, Hwnd(hwnd), show)
+    }
+
+    fn place_state(&self, place: u32) -> (i32, isize) {
+        places::state(place)
+    }
+
+    fn set_keyless(&self, hwnd: isize, on: bool) {
+        if lock(&WINDOWS).contains(&Hwnd(hwnd)) {
+            views::set_keyless(Hwnd(hwnd), on);
+        }
     }
 }
 
@@ -492,6 +519,9 @@ fn check_fault(before: bool, what: &str) {
                 LOG_ERROR,
                 &format!("module mis de cote ({what}) jusqu'a la prochaine construction"),
             );
+            // Un module tombe ne laisse jamais REAPER sans arrangement ni
+            // transport.
+            places::release_all();
             invalidate_all();
         }
     }
@@ -511,6 +541,9 @@ fn on_timer() {
         reload(false);
     }
     audio((), |a| a.poll());
+    if let Some(r) = REAPER.get() {
+        places::guard(r);
+    }
     test_file_poll();
     selftest_tick();
     if let Some(hot) = HOT.get() {
@@ -636,7 +669,14 @@ pub(crate) fn views_count() -> usize {
 }
 
 pub(crate) fn first_view() -> Option<Hwnd> {
-    lock(&WINDOWS).first().copied()
+    view_titled("CP Browser")
+}
+
+/// Une de nos fenetres, par son titre.
+pub(crate) fn view_titled(title: &str) -> Option<Hwnd> {
+    let ws = lock(&WINDOWS).clone();
+    ws.into_iter()
+        .find(|&h| cp_sys::ui::window_text(h) == title)
 }
 
 fn selftest_tick() {
@@ -775,6 +815,7 @@ fn wnd_proc(m: &WinMsg) -> isize {
     if m.msg == win::WM_NCDESTROY {
         lock(&WINDOWS).retain(|h| *h != m.hwnd);
         views::forget(m.hwnd);
+        places::forget(m.hwnd);
     }
     let frame_vblank = if m.msg == WM_CP_FRAME {
         Some(views::frame_done(m.hwnd))
@@ -914,6 +955,9 @@ fn on_unload() {
     }
     cp_sys::rui::remove_mouse_hook();
     views::stop_clock();
+    // REAPER retrouve son arrangement et son transport avant que nos
+    // fenetres ne meurent.
+    places::release_all();
     if let Some(hot) = HOT.get() {
         hot.unload();
     }

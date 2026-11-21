@@ -1,17 +1,26 @@
 //! `cp_module.dll` : le code de CP Studio, recharge a chaud par le chargeur.
 //!
-//! Il porte le navigateur de fichiers (jalon 1) dans une vraie fenetre de
-//! REAPER, flottante ou ancree dans un docker :
+//! Il porte :
+//! - le navigateur de fichiers (jalon 1), dans une vraie fenetre de REAPER :
+//!   flottante, ancree dans un docker, ou A LA PLACE DE L'ARRANGEMENT (la
+//!   place native que tient le chargeur) ;
+//! - CP Transport (`tview.rs`), a la place du transport de REAPER, avec les
+//!   icones de Cedric et le selecteur de vues (Arrange, Browser...).
+//!
+//! Pour chaque fenetre :
 //! - il traduit les messages de Windows en evenements du toolkit ;
 //! - il dessine a la cadence de l'ecran (WM_CP_FRAME) quand quelque chose a
 //!   change, et ne fait rien sinon ;
 //! - il repond au crochet clavier (WM_CP_ACCEL) : ce que le navigateur prend,
-//!   ce qu'il laisse a REAPER, ce qui est du texte ;
-//! - il garde, d'une generation a l'autre, la fenetre et l'etat du navigateur.
+//!   ce qu'il laisse a REAPER, ce qui est du texte (le transport ne prend
+//!   jamais le clavier) ;
+//! - il garde, d'une generation a l'autre, les fenetres et leur etat.
 
 use std::path::PathBuf;
 
-use cp_abi::{WM_CP_ACCEL, WM_CP_FRAME};
+use cp_abi::{
+    PLACE_ARRANGE, PLACE_HELD, VIEW_DOCK, VIEW_FLOAT, VIEW_PLACED, WM_CP_ACCEL, WM_CP_FRAME,
+};
 use cp_browser::draw::Gfx;
 use cp_browser::model::{self, Shortcut};
 use cp_browser::wave::ClipInfo;
@@ -26,21 +35,27 @@ use cp_sys::ui::{self, Cursor, MenuItem};
 use cp_sys::win::{self, Hwnd, WinMsg};
 use cp_ui::{Button, Ev, IconCache, Mods, Theme};
 
-const SECTION: &str = "CP_Studio";
+mod items;
+mod tview;
+
+pub(crate) const SECTION: &str = "CP_Studio";
 const DOCK_IDENT: &str = "cp_studio_browser";
 const TITLE: &str = "CP Browser";
 
-const WIN_DOCK: u32 = 1001;
 const WIN_CLOSE: u32 = 1002;
 const WIN_PERF: u32 = 1003;
+const WIN_PLACE_ARRANGE: u32 = 1004;
+const WIN_PLACE_DOCK: u32 = 1005;
+const WIN_PLACE_FLOAT: u32 = 1006;
 
-mod msg {
+pub(crate) mod msg {
     pub const DESTROY: u32 = 0x0002;
     pub const SIZE: u32 = 0x0005;
     pub const PAINT: u32 = 0x000F;
     pub const CLOSE: u32 = 0x0010;
     pub const ERASEBKGND: u32 = 0x0014;
     pub const SETCURSOR: u32 = 0x0020;
+    pub const MOUSEACTIVATE: u32 = 0x0021;
     pub const GETDLGCODE: u32 = 0x0087;
     pub const KEYDOWN: u32 = 0x0100;
     pub const KEYUP: u32 = 0x0101;
@@ -63,14 +78,14 @@ mod msg {
     pub const MOUSELEAVE: u32 = 0x02A3;
 }
 
-fn lo16(v: isize) -> f32 {
+pub(crate) fn lo16(v: isize) -> f32 {
     (v & 0xFFFF) as u16 as i16 as f32
 }
-fn hi16(v: isize) -> f32 {
+pub(crate) fn hi16(v: isize) -> f32 {
     ((v >> 16) & 0xFFFF) as u16 as i16 as f32
 }
 
-fn mods() -> Mods {
+pub(crate) fn mods() -> Mods {
     let m = ui::mods();
     Mods {
         shift: m.shift,
@@ -79,12 +94,39 @@ fn mods() -> Mods {
     }
 }
 
+/// Ou vit le navigateur.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Place {
+    /// A la place de l'arrangement (la vue choisie dans CP Transport).
+    Arrange,
+    Dock,
+    Float,
+}
+
+impl Place {
+    fn key(self) -> &'static str {
+        match self {
+            Place::Arrange => "arrange",
+            Place::Dock => "dock",
+            Place::Float => "float",
+        }
+    }
+    fn from_key(s: &str) -> Option<Place> {
+        match s {
+            "arrange" => Some(Place::Arrange),
+            "dock" => Some(Place::Dock),
+            "float" => Some(Place::Float),
+            _ => None,
+        }
+    }
+}
+
 /// Ce que le navigateur demande, branche sur le chargeur et REAPER.
 struct Adapter<'a> {
     host: HostRef,
     r: Reaper,
     hwnd: Hwnd,
-    docked: bool,
+    place: Place,
     perf: bool,
     action: &'a mut Option<u32>,
 }
@@ -178,7 +220,17 @@ impl BrowserHost for Adapter<'_> {
     }
     fn window_items(&mut self) -> Vec<MenuEntry> {
         vec![
-            MenuEntry::new(WIN_DOCK, "Dock in Docker", self.docked),
+            MenuEntry::new(
+                WIN_PLACE_ARRANGE,
+                "Show in arrange view",
+                self.place == Place::Arrange,
+            ),
+            MenuEntry::new(WIN_PLACE_DOCK, "Dock in docker", self.place == Place::Dock),
+            MenuEntry::new(
+                WIN_PLACE_FLOAT,
+                "Floating window",
+                self.place == Place::Float,
+            ),
             MenuEntry::new(WIN_PERF, "Performance overlay", self.perf),
             MenuEntry::new(WIN_CLOSE, "Close", false),
         ]
@@ -214,18 +266,25 @@ impl BrowserHost for Adapter<'_> {
     }
 }
 
-/// Ce qu'on fait a la fenetre, au battement.
+/// Ce qu'on fait aux fenetres, au battement : JAMAIS pendant le traitement
+/// d'un message d'une de nos fenetres (detruire une fenetre ancree depuis son
+/// propre clic gelait REAPER).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum WinOp {
+pub(crate) enum WinOp {
     Open,
     Close,
     ToggleDock,
+    Place(Place),
+    ViewArrange,
+    ViewBrowser,
+    TransportOn,
+    TransportOff,
 }
 
 /// La fenetre du navigateur.
 struct View {
     hwnd: Hwnd,
-    docked: bool,
+    place: Place,
     surf: Surface,
     present: Vec<u32>,
     /// Ce qui est a l'ecran (pour n'envoyer que ce qui change).
@@ -246,23 +305,29 @@ struct Perf {
     drawn: u64,
 }
 
-struct App {
+pub(crate) struct App {
     host: HostRef,
     r: Reaper,
     cmd_browser: i32,
     cmd_perf: i32,
     cmd_dock: i32,
     cmd_state: i32,
+    cmd_transport: i32,
+    cmd_view_arrange: i32,
+    cmd_view_browser: i32,
+    cmd_place_arrange: i32,
+    cmd_place_dock: i32,
+    cmd_place_float: i32,
     browser: Browser,
     view: Option<View>,
+    /// La place choisie pour le navigateur.
+    place: Place,
+    tp: tview::TPart,
     text: TextCache,
     icons: IconCache,
     scratch: Scratch,
     action: Option<u32>,
     show_perf: bool,
-    /// Les operations sur la fenetre, faites au prochain battement : JAMAIS
-    /// pendant le traitement d'un message de la fenetre elle-meme (detruire une
-    /// fenetre ancree depuis son propre clic gelait REAPER).
     ops: Vec<WinOp>,
     /// Battements depuis le chargement : au demarrage de REAPER, on attend
     /// qu'il ait fini de se construire avant d'ouvrir (et d'ancrer).
@@ -282,20 +347,20 @@ impl App {
         self.r.ext_get(SECTION, key)
     }
 
-    fn adapter_parts(&mut self) -> (Hwnd, bool) {
+    fn adapter_parts(&mut self) -> (Hwnd, Place) {
         self.view
             .as_ref()
-            .map_or((Hwnd(0), false), |v| (v.hwnd, v.docked))
+            .map_or((Hwnd(0), self.place), |v| (v.hwnd, v.place))
     }
 
     /// Fait `f` avec le navigateur et son hote.
     fn with_browser<T>(&mut self, f: impl FnOnce(&mut Browser, &mut Adapter<'_>) -> T) -> T {
-        let (hwnd, docked) = self.adapter_parts();
+        let (hwnd, place) = self.adapter_parts();
         let mut ad = Adapter {
             host: self.host,
             r: self.r,
             hwnd,
-            docked,
+            place,
             perf: self.show_perf,
             action: &mut self.action,
         };
@@ -303,21 +368,34 @@ impl App {
     }
 
     // -----------------------------------------------------------------------
-    // La fenetre
+    // La fenetre du navigateur
     // -----------------------------------------------------------------------
 
+    /// Le navigateur est-il pose a la place de l'arrangement, visible ?
+    fn browser_in_band(&self) -> bool {
+        let Some(v) = &self.view else { return false };
+        let (st, h) = self.host.place_state(PLACE_ARRANGE);
+        st == PLACE_HELD && h == Some(v.hwnd)
+    }
+
+    /// Montre le navigateur a sa place (le cree s'il le faut).
     fn open_view(&mut self) {
-        if self.view.is_some() {
-            if let Some(v) = &self.view {
-                if v.docked {
-                    self.r.dock_activate(v.hwnd);
-                } else {
-                    win::show(v.hwnd);
+        if let Some(v) = &self.view {
+            match v.place {
+                Place::Dock => self.r.dock_activate(v.hwnd),
+                Place::Float => win::show(v.hwnd),
+                Place::Arrange => {
+                    let h = v.hwnd;
+                    if !self.browser_in_band() && self.host.place_take(PLACE_ARRANGE, Some(h), true)
+                    {
+                        self.render(true);
+                        self.want_frames();
+                    }
                 }
             }
             return;
         }
-        let docked = self.ext("browser_docked").as_deref() == Some("1");
+        let place = self.place;
         let rect: Vec<i32> = self
             .ext("browser_rect")
             .unwrap_or_default()
@@ -329,20 +407,42 @@ impl App {
         } else {
             (-1, -1, 460, 720)
         };
-        let Some(hwnd) = self.host.create_view(TITLE, DOCK_IDENT, x, y, w, h, docked) else {
+        let mode = match place {
+            Place::Arrange => VIEW_PLACED,
+            Place::Dock => VIEW_DOCK,
+            Place::Float => VIEW_FLOAT,
+        };
+        let Some(hwnd) = self.host.create_view(TITLE, DOCK_IDENT, x, y, w, h, mode) else {
             self.host
                 .error("la fenetre du navigateur n'a pas pu etre creee");
             return;
         };
-        self.adopt(hwnd, docked);
+        if place == Place::Arrange {
+            // A la taille de la place, cachee ; dessinee ; puis montree a la
+            // place de l'arrangement : jamais une image vide a l'ecran.
+            if !self.host.place_take(PLACE_ARRANGE, Some(hwnd), false) {
+                self.host.destroy_window(hwnd);
+                self.host
+                    .warn("pas d'arrangement a remplacer : le navigateur s'ancre");
+                self.place = Place::Dock;
+                self.r.ext_set(SECTION, "browser_place", "dock", true);
+                self.open_view();
+                return;
+            }
+            self.adopt(hwnd, place);
+            self.host.place_take(PLACE_ARRANGE, Some(hwnd), true);
+            self.render(true);
+        } else {
+            self.adopt(hwnd, place);
+        }
         self.r.ext_set(SECTION, "browser_open", "1", true);
     }
 
-    fn adopt(&mut self, hwnd: Hwnd, docked: bool) {
+    fn adopt(&mut self, hwnd: Hwnd, place: Place) {
         let scale = ui::dpi(hwnd) as f32 / 96.0;
         self.view = Some(View {
             hwnd,
-            docked,
+            place,
             surf: Surface::default(),
             present: Vec::new(),
             shown: Vec::new(),
@@ -362,7 +462,7 @@ impl App {
 
     fn save_rect(&self) {
         if let Some(v) = &self.view {
-            if !v.docked && win::is_window(v.hwnd) {
+            if v.place == Place::Float && win::is_window(v.hwnd) {
                 let r = ui::window_rect(v.hwnd);
                 let s = format!(
                     "{} {} {} {}",
@@ -383,6 +483,9 @@ impl App {
         if let Some(v) = &mut self.view {
             v.closing = true;
             let h = v.hwnd;
+            if v.place == Place::Arrange {
+                self.host.place_take(PLACE_ARRANGE, None, false);
+            }
             self.host.destroy_window(h);
         }
         self.view = None;
@@ -391,17 +494,44 @@ impl App {
         }
     }
 
-    fn toggle_dock(&mut self) {
-        let Some(v) = &self.view else { return };
-        let docked = !v.docked;
-        self.close_view(false);
-        self.r.ext_set(
-            SECTION,
-            "browser_docked",
-            if docked { "1" } else { "0" },
-            true,
-        );
+    /// Change la place du navigateur (et l'y montre).
+    pub(crate) fn set_place(&mut self, p: Place) {
+        let reopen = self.view.as_ref().is_some_and(|v| v.place != p);
+        self.place = p;
+        self.r.ext_set(SECTION, "browser_place", p.key(), true);
+        if reopen {
+            self.close_view(false);
+        }
         self.open_view();
+    }
+
+    /// « Arrange » dans le selecteur : l'arrangement revient, la vue qui
+    /// l'occupait est garee (cachee, vivante).
+    pub(crate) fn view_arrange(&mut self) {
+        let (st, _) = self.host.place_state(PLACE_ARRANGE);
+        if st == PLACE_HELD {
+            self.host.place_take(PLACE_ARRANGE, None, false);
+            if let Some(v) = &mut self.view {
+                if v.frames_on {
+                    v.frames_on = false;
+                    self.host.frames(v.hwnd, false);
+                }
+            }
+        }
+    }
+
+    /// « Browser » dans le selecteur : une destination, pas un interrupteur.
+    pub(crate) fn view_browser(&mut self) {
+        self.open_view();
+    }
+
+    fn toggle_dock(&mut self) {
+        let p = if self.place == Place::Dock {
+            Place::Float
+        } else {
+            Place::Dock
+        };
+        self.set_place(p);
     }
 
     /// Fait les operations de fenetre en attente (depuis le battement).
@@ -411,25 +541,22 @@ impl App {
             match op {
                 WinOp::Open => self.open_view(),
                 WinOp::Close => self.close_view(true),
-                WinOp::ToggleDock => {
-                    if self.view.is_some() {
-                        self.toggle_dock();
-                    } else {
-                        let docked = self.ext("browser_docked").as_deref() == Some("1");
-                        self.r.ext_set(
-                            SECTION,
-                            "browser_docked",
-                            if docked { "0" } else { "1" },
-                            true,
-                        );
-                        self.open_view();
-                    }
-                }
+                WinOp::ToggleDock => self.toggle_dock(),
+                WinOp::Place(p) => self.set_place(p),
+                WinOp::ViewArrange => self.view_arrange(),
+                WinOp::ViewBrowser => self.view_browser(),
+                WinOp::TransportOn => self.transport_start(),
+                WinOp::TransportOff => self.transport_stop(true),
             }
+        }
+        if self.tp.view.is_some() {
+            self.tp.t.views = self.view_tabs();
+            self.tp.t.mark();
+            self.transport_render(false);
         }
     }
 
-    fn queue(&mut self, op: WinOp) {
+    pub(crate) fn queue(&mut self, op: WinOp) {
         if !self.ops.contains(&op) {
             self.ops.push(op);
         }
@@ -437,8 +564,10 @@ impl App {
 
     fn run_action(&mut self) {
         match self.action.take() {
-            Some(WIN_DOCK) => self.queue(WinOp::ToggleDock),
             Some(WIN_CLOSE) => self.queue(WinOp::Close),
+            Some(WIN_PLACE_ARRANGE) => self.queue(WinOp::Place(Place::Arrange)),
+            Some(WIN_PLACE_DOCK) => self.queue(WinOp::Place(Place::Dock)),
+            Some(WIN_PLACE_FLOAT) => self.queue(WinOp::Place(Place::Float)),
             Some(WIN_PERF) => {
                 self.show_perf = !self.show_perf;
                 self.browser.mark();
@@ -454,7 +583,7 @@ impl App {
 
     fn want_frames(&mut self) {
         if let Some(v) = &mut self.view {
-            if !v.frames_on {
+            if !v.frames_on && ui::is_shown(v.hwnd) {
                 v.frames_on = true;
                 self.host.frames(v.hwnd, true);
             }
@@ -496,7 +625,7 @@ impl App {
         }
         let (band_y, band_h) = self.browser.wave_band();
         let t0 = ui::qpc();
-        let (hwnd, docked) = (v.hwnd, v.docked);
+        let (hwnd, place) = (v.hwnd, v.place);
         {
             let View {
                 surf, theme, perf, ..
@@ -511,7 +640,7 @@ impl App {
                 host: self.host,
                 r: self.r,
                 hwnd,
-                docked,
+                place,
                 perf: self.show_perf,
                 action: &mut self.action,
             };
@@ -604,7 +733,8 @@ impl App {
         self.with_browser(|b, h| b.tick(h));
         self.run_action();
         self.render(false);
-        let idle = !self.browser.animating() && !self.show_perf;
+        let hidden = self.view.as_ref().is_some_and(|v| !ui::is_shown(v.hwnd));
+        let idle = (!self.browser.animating() && !self.show_perf) || hidden;
         if let Some(v) = &mut self.view {
             if idle && v.frames_on {
                 v.frames_on = false;
@@ -762,236 +892,8 @@ impl App {
         };
         ui::set_cursor(c);
     }
-}
 
-// ---------------------------------------------------------------------------
-// L'etat entre deux generations
-// ---------------------------------------------------------------------------
-
-const STATE_TAG: &str = "cp_module 2";
-
-fn encode(app: &App) -> Vec<u8> {
-    let mut s = format!("{STATE_TAG}\n");
-    if let Some(v) = &app.view {
-        s += &format!("hwnd\t{}\ndocked\t{}\n", v.hwnd.0, v.docked as u8);
-    }
-    s += &format!("perf\t{}\n", app.show_perf as u8);
-    s += "browser\n";
-    s += &app.browser.save_state();
-    s.into_bytes()
-}
-
-/// (la vue : sa fenetre et si elle est ancree), l'affichage des mesures, et
-/// l'etat du navigateur.
-type Saved = (Option<(Hwnd, bool)>, bool, String);
-
-fn decode(st: &[u8]) -> Option<Saved> {
-    let s = std::str::from_utf8(st).ok()?;
-    let mut lines = s.split_inclusive('\n');
-    if lines.next()?.trim_end() != STATE_TAG {
-        return None;
-    }
-    let (mut hwnd, mut docked, mut perf) = (0isize, false, false);
-    let mut rest = String::new();
-    let mut in_browser = false;
-    for l in lines {
-        if in_browser {
-            rest.push_str(l);
-            continue;
-        }
-        let t = l.trim_end();
-        if t == "browser" {
-            in_browser = true;
-        } else if let Some(v) = t.strip_prefix("hwnd\t") {
-            hwnd = v.parse().unwrap_or(0);
-        } else if let Some(v) = t.strip_prefix("docked\t") {
-            docked = v == "1";
-        } else if let Some(v) = t.strip_prefix("perf\t") {
-            perf = v == "1";
-        }
-    }
-    let view = (hwnd != 0).then_some((Hwnd(hwnd), docked));
-    Some((view, perf, rest))
-}
-
-impl Module for App {
-    fn init(host: HostRef, state: &[u8]) -> Self {
-        let r = host.reaper();
-        let (sc, mediadb) = read_shortcuts(&r);
-        let project = r.project_dir();
-        let favs: Vec<PathBuf> = r
-            .ext_get(SECTION, "browser_favorites")
-            .unwrap_or_default()
-            .split('|')
-            .filter(|s| !s.is_empty())
-            .map(PathBuf::from)
-            .collect();
-        let mut browser = Browser::new(&sc, &mediadb, project.as_deref(), favs);
-        if let Some(v) = r
-            .ext_get(SECTION, "browser_volume")
-            .and_then(|v| v.parse().ok())
-        {
-            browser.volume = v;
-        }
-        browser.looping = r.ext_get(SECTION, "browser_loop").as_deref() == Some("1");
-        browser.sync = r.ext_get(SECTION, "browser_sync").as_deref() == Some("1");
-        browser.samples_view = r.ext_get(SECTION, "browser_samples").as_deref() == Some("1");
-        if let Some(v) = r
-            .ext_get(SECTION, "browser_wave_h")
-            .and_then(|v| v.parse().ok())
-        {
-            browser.wave_h_pref = v;
-        }
-        browser.data_dir = r.resource_path().map(|p| p.join("CP_Studio"));
-        browser.load_collections();
-        let cmd_browser =
-            host.register_action("CPSTUDIO_BROWSER", "CP Studio: Browser (show/hide)");
-        let cmd_perf = host.register_action(
-            "CPSTUDIO_PERF",
-            "CP Studio: Performance overlay (show/hide)",
-        );
-        let cmd_dock =
-            host.register_action("CPSTUDIO_BROWSER_DOCK", "CP Studio: Browser - dock/undock");
-        let cmd_state = host.register_action(
-            "CPSTUDIO_BROWSER_STATE",
-            "CP Studio: (test) Browser state to ExtState",
-        );
-        let mut app = App {
-            host,
-            r,
-            cmd_browser,
-            cmd_perf,
-            cmd_dock,
-            cmd_state,
-            browser,
-            view: None,
-            text: TextCache::new(Box::new(GdiGlyphs::new(&["Segoe UI", "Consolas"]))),
-            icons: IconCache::default(),
-            scratch: Scratch::default(),
-            action: None,
-            ops: Vec::new(),
-            ticks: 0,
-            show_perf: false,
-        };
-        match decode(state) {
-            Some((view, perf, bstate)) => {
-                app.show_perf = perf;
-                app.browser.restore_state(&bstate);
-                if let Some((h, docked)) = view {
-                    if win::is_window(h) {
-                        app.adopt(h, docked);
-                        app.want_frames();
-                    }
-                }
-            }
-            None => {
-                // Premier chargement de la session : rouvrir si elle l'etait,
-                // une fois REAPER construit (au battement).
-                if app.ext("browser_open").as_deref() == Some("1") {
-                    app.queue(WinOp::Open);
-                }
-            }
-        }
-        host.info(&format!(
-            "module pret : generation {}, navigateur {}",
-            host.generation(),
-            if app.view.is_some() {
-                "ouvert"
-            } else {
-                "ferme"
-            }
-        ));
-        app
-    }
-
-    fn shutdown(&mut self) {
-        self.save_rect();
-        self.host.store_state(&encode(self));
-        let (hwnd, docked) = self.adapter_parts();
-        let mut ad = Adapter {
-            host: self.host,
-            r: self.r,
-            hwnd,
-            docked,
-            perf: self.show_perf,
-            action: &mut self.action,
-        };
-        self.browser.release_all(&mut ad);
-        // La fenetre reste au chargeur : le module suivant la reprend. Elle
-        // ne recevra plus d'images d'ici la.
-        if let Some(v) = &self.view {
-            self.host.frames(v.hwnd, false);
-        }
-    }
-
-    fn tick(&mut self) {
-        self.ticks = self.ticks.saturating_add(1);
-        // Une demi-seconde de battements apres le chargement : REAPER a fini
-        // de se construire (ses dockers compris).
-        if !self.ops.is_empty() && self.ticks >= 15 {
-            self.do_ops();
-        }
-        if self.view.is_none() {
-            return;
-        }
-        self.with_browser(|b, h| b.tick(h));
-        if self.browser.animating() {
-            self.want_frames();
-        } else if self.browser.take_dirty() {
-            self.browser.mark();
-            self.want_frames();
-        }
-    }
-
-    fn on_action(&mut self, cmd: i32) -> bool {
-        if cmd == self.cmd_browser {
-            if self.view.is_some() {
-                self.queue(WinOp::Close);
-            } else {
-                self.queue(WinOp::Open);
-            }
-            true
-        } else if cmd == self.cmd_perf {
-            self.show_perf = !self.show_perf;
-            self.browser.mark();
-            self.want_frames();
-            true
-        } else if cmd == self.cmd_state {
-            // Pour l'auto-test : ce que le navigateur montre, lisible par
-            // GetExtState (non persistant).
-            let st = format!(
-                "sel={} rows={} focus={}",
-                self.browser.sel.map_or(-1, |s| s as i64),
-                self.browser.rows.len(),
-                if self.browser.focus == Focus::Search {
-                    "search"
-                } else {
-                    "list"
-                }
-            );
-            self.r.ext_set(SECTION, "selftest_state", &st, false);
-            true
-        } else if cmd == self.cmd_dock {
-            self.queue(WinOp::ToggleDock);
-            true
-        } else {
-            false
-        }
-    }
-
-    fn toggle_state(&mut self, cmd: i32) -> Option<bool> {
-        if cmd == self.cmd_browser {
-            Some(self.view.is_some())
-        } else if cmd == self.cmd_perf {
-            Some(self.show_perf)
-        } else if cmd == self.cmd_dock {
-            Some(self.view.as_ref().is_some_and(|v| v.docked))
-        } else {
-            None
-        }
-    }
-
-    fn wnd_proc(&mut self, m: &WinMsg) -> Option<isize> {
+    fn browser_wnd(&mut self, m: &WinMsg) -> Option<isize> {
         let hwnd = self.view.as_ref()?.hwnd;
         if m.hwnd != hwnd {
             return None;
@@ -1064,6 +966,360 @@ impl Module for App {
     }
 }
 
+// ---------------------------------------------------------------------------
+// L'etat entre deux generations
+// ---------------------------------------------------------------------------
+
+const STATE_TAG: &str = "cp_module 3";
+
+/// Ce qu'une generation passe a la suivante.
+#[derive(Debug, Default, PartialEq)]
+struct Saved {
+    /// La fenetre du navigateur et sa place.
+    view: Option<(Hwnd, Place)>,
+    place: Option<Place>,
+    transport: Option<Hwnd>,
+    perf: bool,
+    browser: String,
+}
+
+fn encode(app: &App) -> Vec<u8> {
+    let mut s = format!("{STATE_TAG}\n");
+    if let Some(v) = &app.view {
+        s += &format!("hwnd\t{}\nplace\t{}\n", v.hwnd.0, v.place.key());
+    }
+    s += &format!("want\t{}\n", app.place.key());
+    if let Some(t) = &app.tp.view {
+        s += &format!("transport\t{}\n", t.hwnd.0);
+    }
+    s += &format!("perf\t{}\n", app.show_perf as u8);
+    s += "browser\n";
+    s += &app.browser.save_state();
+    s.into_bytes()
+}
+
+fn decode(st: &[u8]) -> Option<Saved> {
+    let s = std::str::from_utf8(st).ok()?;
+    let mut lines = s.split_inclusive('\n');
+    if lines.next()?.trim_end() != STATE_TAG {
+        return None;
+    }
+    let mut out = Saved::default();
+    let (mut hwnd, mut vplace) = (0isize, Place::Dock);
+    let mut in_browser = false;
+    for l in lines {
+        if in_browser {
+            out.browser.push_str(l);
+            continue;
+        }
+        let t = l.trim_end();
+        if t == "browser" {
+            in_browser = true;
+        } else if let Some(v) = t.strip_prefix("hwnd\t") {
+            hwnd = v.parse().unwrap_or(0);
+        } else if let Some(v) = t.strip_prefix("place\t") {
+            vplace = Place::from_key(v).unwrap_or(Place::Dock);
+        } else if let Some(v) = t.strip_prefix("want\t") {
+            out.place = Place::from_key(v);
+        } else if let Some(v) = t.strip_prefix("transport\t") {
+            out.transport = v.parse().ok().filter(|&h| h != 0).map(Hwnd);
+        } else if let Some(v) = t.strip_prefix("perf\t") {
+            out.perf = v == "1";
+        }
+    }
+    out.view = (hwnd != 0).then_some((Hwnd(hwnd), vplace));
+    Some(out)
+}
+
+impl Module for App {
+    fn init(host: HostRef, state: &[u8]) -> Self {
+        let r = host.reaper();
+        let (sc, mediadb) = read_shortcuts(&r);
+        let project = r.project_dir();
+        let favs: Vec<PathBuf> = r
+            .ext_get(SECTION, "browser_favorites")
+            .unwrap_or_default()
+            .split('|')
+            .filter(|s| !s.is_empty())
+            .map(PathBuf::from)
+            .collect();
+        let mut browser = Browser::new(&sc, &mediadb, project.as_deref(), favs);
+        if let Some(v) = r
+            .ext_get(SECTION, "browser_volume")
+            .and_then(|v| v.parse().ok())
+        {
+            browser.volume = v;
+        }
+        browser.looping = r.ext_get(SECTION, "browser_loop").as_deref() == Some("1");
+        browser.sync = r.ext_get(SECTION, "browser_sync").as_deref() == Some("1");
+        browser.samples_view = r.ext_get(SECTION, "browser_samples").as_deref() == Some("1");
+        if let Some(v) = r
+            .ext_get(SECTION, "browser_wave_h")
+            .and_then(|v| v.parse().ok())
+        {
+            browser.wave_h_pref = v;
+        }
+        browser.data_dir = r.resource_path().map(|p| p.join("CP_Studio"));
+        browser.load_collections();
+        // La place du navigateur ; l'ancien reglage « ancre » s'y lit.
+        let place = r
+            .ext_get(SECTION, "browser_place")
+            .and_then(|v| Place::from_key(&v))
+            .unwrap_or(
+                if r.ext_get(SECTION, "browser_docked").as_deref() == Some("1") {
+                    Place::Dock
+                } else {
+                    Place::Float
+                },
+            );
+        let cmd_browser =
+            host.register_action("CPSTUDIO_BROWSER", "CP Studio: Browser (show/hide)");
+        let cmd_perf = host.register_action(
+            "CPSTUDIO_PERF",
+            "CP Studio: Performance overlay (show/hide)",
+        );
+        let cmd_dock =
+            host.register_action("CPSTUDIO_BROWSER_DOCK", "CP Studio: Browser - dock/undock");
+        let cmd_state = host.register_action(
+            "CPSTUDIO_BROWSER_STATE",
+            "CP Studio: (test) Browser state to ExtState",
+        );
+        let cmd_transport = host.register_action(
+            "CPSTUDIO_TRANSPORT",
+            "CP Studio: Transport (replace REAPER's transport, on/off)",
+        );
+        let cmd_view_arrange =
+            host.register_action("CPSTUDIO_VIEW_ARRANGE", "CP Studio: View - Arrange");
+        let cmd_view_browser =
+            host.register_action("CPSTUDIO_VIEW_BROWSER", "CP Studio: View - Browser");
+        let cmd_place_arrange = host.register_action(
+            "CPSTUDIO_BROWSER_IN_ARRANGE",
+            "CP Studio: Browser - show in arrange view",
+        );
+        let cmd_place_dock = host.register_action(
+            "CPSTUDIO_BROWSER_DOCKED",
+            "CP Studio: Browser - dock in docker",
+        );
+        let cmd_place_float = host.register_action(
+            "CPSTUDIO_BROWSER_FLOATING",
+            "CP Studio: Browser - floating window",
+        );
+        let tp = tview::TPart::new(&r);
+        let mut app = App {
+            host,
+            r,
+            cmd_browser,
+            cmd_perf,
+            cmd_dock,
+            cmd_state,
+            cmd_transport,
+            cmd_view_arrange,
+            cmd_view_browser,
+            cmd_place_arrange,
+            cmd_place_dock,
+            cmd_place_float,
+            browser,
+            view: None,
+            place,
+            tp,
+            text: TextCache::new(Box::new(GdiGlyphs::new(&["Segoe UI", "Consolas"]))),
+            icons: IconCache::default(),
+            scratch: Scratch::default(),
+            action: None,
+            ops: Vec::new(),
+            ticks: 0,
+            show_perf: false,
+        };
+        match decode(state) {
+            Some(sv) => {
+                app.show_perf = sv.perf;
+                app.browser.restore_state(&sv.browser);
+                if let Some(p) = sv.place {
+                    app.place = p;
+                }
+                if let Some((h, p)) = sv.view {
+                    if win::is_window(h) {
+                        app.adopt(h, p);
+                        app.want_frames();
+                    }
+                }
+                if let Some(h) = sv.transport {
+                    if win::is_window(h) {
+                        app.transport_adopt(h);
+                    }
+                }
+            }
+            None => {
+                // Premier chargement de la session : rouvrir ce qui l'etait,
+                // une fois REAPER construit (au battement).
+                if app.ext("transport_on").as_deref() == Some("1") {
+                    app.queue(WinOp::TransportOn);
+                }
+                if app.ext("browser_open").as_deref() == Some("1") {
+                    app.queue(WinOp::Open);
+                }
+            }
+        }
+        host.info(&format!(
+            "module pret : generation {}, navigateur {} ({}), transport {}",
+            host.generation(),
+            if app.view.is_some() {
+                "ouvert"
+            } else {
+                "ferme"
+            },
+            app.place.key(),
+            if app.tp.view.is_some() {
+                "pose"
+            } else {
+                "absent"
+            }
+        ));
+        app
+    }
+
+    fn shutdown(&mut self) {
+        self.save_rect();
+        self.host.store_state(&encode(self));
+        let (hwnd, place) = self.adapter_parts();
+        let mut ad = Adapter {
+            host: self.host,
+            r: self.r,
+            hwnd,
+            place,
+            perf: self.show_perf,
+            action: &mut self.action,
+        };
+        self.browser.release_all(&mut ad);
+        if self.tp.prompt {
+            self.r.prompt_for_action(-1);
+        }
+        // Les fenetres restent au chargeur : le module suivant les reprend.
+        // Elles ne recevront plus d'images d'ici la.
+        if let Some(v) = &self.view {
+            self.host.frames(v.hwnd, false);
+        }
+        if let Some(v) = &self.tp.view {
+            self.host.frames(v.hwnd, false);
+        }
+    }
+
+    fn tick(&mut self) {
+        self.ticks = self.ticks.saturating_add(1);
+        // Une demi-seconde de battements apres le chargement : REAPER a fini
+        // de se construire (ses dockers compris).
+        if !self.ops.is_empty() && self.ticks >= 15 {
+            self.do_ops();
+        }
+        self.transport_tick();
+        if self.view.is_none() {
+            return;
+        }
+        self.with_browser(|b, h| b.tick(h));
+        let shown = self.view.as_ref().is_some_and(|v| ui::is_shown(v.hwnd));
+        if !shown {
+            return;
+        }
+        if self.browser.animating() {
+            self.want_frames();
+        } else if self.browser.take_dirty() {
+            self.browser.mark();
+            self.want_frames();
+        }
+    }
+
+    fn on_action(&mut self, cmd: i32) -> bool {
+        if cmd == self.cmd_browser {
+            if self.view.is_some() {
+                self.queue(WinOp::Close);
+            } else {
+                self.queue(WinOp::Open);
+            }
+            true
+        } else if cmd == self.cmd_perf {
+            self.show_perf = !self.show_perf;
+            self.browser.mark();
+            self.want_frames();
+            true
+        } else if cmd == self.cmd_state {
+            // Pour l'auto-test : ce que le navigateur montre, lisible par
+            // GetExtState (non persistant).
+            let st = format!(
+                "sel={} rows={} focus={} place={} band={}",
+                self.browser.sel.map_or(-1, |s| s as i64),
+                self.browser.rows.len(),
+                if self.browser.focus == Focus::Search {
+                    "search"
+                } else {
+                    "list"
+                },
+                self.place.key(),
+                self.browser_in_band() as u8,
+            );
+            self.r.ext_set(SECTION, "selftest_state", &st, false);
+            true
+        } else if cmd == self.cmd_dock {
+            self.queue(WinOp::ToggleDock);
+            true
+        } else if cmd == self.cmd_transport {
+            self.queue(if self.tp.view.is_some() {
+                WinOp::TransportOff
+            } else {
+                WinOp::TransportOn
+            });
+            true
+        } else if cmd == self.cmd_view_arrange {
+            self.queue(WinOp::ViewArrange);
+            true
+        } else if cmd == self.cmd_view_browser {
+            self.queue(WinOp::ViewBrowser);
+            true
+        } else if cmd == self.cmd_place_arrange {
+            self.queue(WinOp::Place(Place::Arrange));
+            true
+        } else if cmd == self.cmd_place_dock {
+            self.queue(WinOp::Place(Place::Dock));
+            true
+        } else if cmd == self.cmd_place_float {
+            self.queue(WinOp::Place(Place::Float));
+            true
+        } else {
+            false
+        }
+    }
+
+    fn toggle_state(&mut self, cmd: i32) -> Option<bool> {
+        if cmd == self.cmd_browser {
+            Some(self.view.is_some())
+        } else if cmd == self.cmd_perf {
+            Some(self.show_perf)
+        } else if cmd == self.cmd_dock {
+            Some(self.place == Place::Dock)
+        } else if cmd == self.cmd_transport {
+            Some(self.tp.view.is_some())
+        } else if cmd == self.cmd_view_browser {
+            Some(self.browser_in_band())
+        } else if cmd == self.cmd_view_arrange {
+            Some(self.host.place_state(PLACE_ARRANGE).0 != PLACE_HELD)
+        } else if cmd == self.cmd_place_arrange {
+            Some(self.place == Place::Arrange)
+        } else if cmd == self.cmd_place_dock {
+            Some(self.place == Place::Dock)
+        } else if cmd == self.cmd_place_float {
+            Some(self.place == Place::Float)
+        } else {
+            None
+        }
+    }
+
+    fn wnd_proc(&mut self, m: &WinMsg) -> Option<isize> {
+        if let Some(r) = self.transport_wnd(m) {
+            return Some(r);
+        }
+        self.browser_wnd(m)
+    }
+}
+
 cp_sys::export_module!(App);
 
 #[cfg(test)]
@@ -1073,11 +1329,15 @@ mod tests {
     #[test]
     fn l_etat_se_relit() {
         let bstate = "open\tC:\\x\nsel\tC:\\x\\a.wav\n";
-        let s = format!("{STATE_TAG}\nhwnd\t1234\ndocked\t1\nperf\t0\nbrowser\n{bstate}");
-        let (v, perf, rest) = decode(s.as_bytes()).unwrap();
-        assert_eq!(v, Some((Hwnd(1234), true)));
-        assert!(!perf);
-        assert_eq!(rest, bstate);
+        let s = format!(
+            "{STATE_TAG}\nhwnd\t1234\nplace\tarrange\nwant\tarrange\ntransport\t99\nperf\t0\nbrowser\n{bstate}"
+        );
+        let sv = decode(s.as_bytes()).unwrap();
+        assert_eq!(sv.view, Some((Hwnd(1234), Place::Arrange)));
+        assert_eq!(sv.place, Some(Place::Arrange));
+        assert_eq!(sv.transport, Some(Hwnd(99)));
+        assert!(!sv.perf);
+        assert_eq!(sv.browser, bstate);
         assert!(decode(b"autre chose\n").is_none());
     }
 }

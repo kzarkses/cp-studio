@@ -84,7 +84,7 @@ pub trait Host: Send + Sync {
         _y: i32,
         _w: i32,
         _h: i32,
-        _docked: bool,
+        _mode: i32,
     ) -> isize {
         0
     }
@@ -93,6 +93,16 @@ pub trait Host: Send + Sync {
     fn frame_info(&self) -> FrameInfo {
         FrameInfo::default()
     }
+
+    // --- les places natives (ABI 6)
+    fn place_take(&self, _place: u32, _hwnd: isize, _show: bool) -> bool {
+        false
+    }
+    /// (etat `PLACE_*`, vue qui l'occupe).
+    fn place_state(&self, _place: u32) -> (i32, isize) {
+        (cp_abi::PLACE_MISSING, 0)
+    }
+    fn set_keyless(&self, _hwnd: isize, _on: bool) {}
 }
 
 /// Ou en est un chargement de fichier.
@@ -130,6 +140,9 @@ static API: HostApi = HostApi {
     destroy_window: v_destroy,
     frames: v_frames,
     frame_info: v_frame_info,
+    place_take: p_take,
+    place_state: p_state,
+    set_keyless: p_keyless,
 };
 
 /// Installe l'implementation (une seule par processus ; un second appel est
@@ -363,7 +376,7 @@ extern "C" fn v_create(spec: *const ViewSpec) -> isize {
     let (t, i) = unsafe { (bytes(sp.title, sp.title_len), bytes(sp.ident, sp.ident_len)) };
     let (t, i) = (String::from_utf8_lossy(t), String::from_utf8_lossy(i));
     with(0, |h| {
-        h.create_view(&t, &i, sp.x, sp.y, sp.w, sp.h, sp.docked != 0)
+        h.create_view(&t, &i, sp.x, sp.y, sp.w, sp.h, sp.docked)
     })
 }
 
@@ -381,4 +394,25 @@ extern "C" fn v_frame_info(out: *mut FrameInfo) {
         // SAFETY: l'adresse d'un FrameInfo du module.
         unsafe { *out = fi };
     }
+}
+
+// ---------------------------------------------------------------------------
+// Les places natives
+// ---------------------------------------------------------------------------
+
+extern "C" fn p_take(place: u32, hwnd: isize, show: i32) -> i32 {
+    with(false, |h| h.place_take(place, hwnd, show != 0)) as i32
+}
+
+extern "C" fn p_state(place: u32, hwnd: *mut isize) -> i32 {
+    let (st, w) = with((cp_abi::PLACE_MISSING, 0), |h| h.place_state(place));
+    if !hwnd.is_null() {
+        // SAFETY: l'adresse d'un isize du module.
+        unsafe { *hwnd = w };
+    }
+    st
+}
+
+extern "C" fn p_keyless(hwnd: isize, on: i32) {
+    with((), |h| h.set_keyless(hwnd, on != 0));
 }
