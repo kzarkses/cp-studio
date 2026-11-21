@@ -215,6 +215,18 @@ impl Reaper {
 }
 
 impl Reaper {
+    /// `Main_OnCommand(cmd, 0)` : lance une action de REAPER.
+    pub fn main_on_command(&self, cmd: i32) {
+        let p = self.get_func(c"Main_OnCommand");
+        if p.is_null() {
+            return;
+        }
+        // SAFETY: void Main_OnCommand(int command, int flag).
+        let f: unsafe extern "C" fn(i32, i32) = unsafe { std::mem::transmute(p) };
+        // SAFETY: appel sur le fil principal, comme toute action.
+        unsafe { f(cmd, 0) }
+    }
+
     /// La boite d'ouverture de fichier de REAPER (modale). `None` si annulee.
     pub fn ask_file_to_read(&self, title: &str, ext: &str) -> Option<String> {
         type F = unsafe extern "C" fn(*mut c_char, *const c_char, *const c_char) -> bool;

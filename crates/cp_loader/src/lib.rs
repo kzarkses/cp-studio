@@ -16,6 +16,8 @@
 //! Journal : `<ressources REAPER>/cp_studio.log` (la session precedente dans
 //! `cp_studio.prev.log`).
 
+mod selftest;
+
 use std::ffi::{CStr, c_void};
 use std::fs::{self, File};
 use std::io::Write;
@@ -69,6 +71,8 @@ static TEST: Mutex<TestState> = Mutex::new(TestState {
     file_ticket: None,
     file_voice: None,
 });
+
+static SELFTEST: Mutex<Option<selftest::SelfTest>> = Mutex::new(None);
 
 /// Les sons des actions de test.
 struct TestState {
@@ -347,6 +351,7 @@ fn on_timer() {
     }
     audio((), |a| a.poll());
     test_file_poll();
+    selftest_tick();
     if let Some(hot) = HOT.get() {
         let sane = hot.fault().is_none();
         hot.call(|api| (api.tick)());
@@ -462,6 +467,22 @@ fn on_command(cmd: i32) -> bool {
 // ---------------------------------------------------------------------------
 // Les sons de test
 // ---------------------------------------------------------------------------
+
+fn selftest_tick() {
+    let mut g = lock(&SELFTEST);
+    let Some(st) = g.as_mut() else { return };
+    if audio(false, |a| st.tick(a)) {
+        let quit = st.quit_after();
+        *g = None;
+        drop(g);
+        if quit {
+            log(LOG_INFO, "[selftest] fermeture de REAPER demandee");
+            if let Some(r) = REAPER.get() {
+                r.main_on_command(40004); // File: Quit REAPER
+            }
+        }
+    }
+}
 
 /// Lance la boucle de test, ou l'arrete (fondu de 20 ms).
 fn test_loop_toggle() {
@@ -635,6 +656,10 @@ fn on_load(instance: isize, r: Reaper) -> bool {
             }
         ),
     );
+    *lock(&SELFTEST) = selftest::requested();
+    if lock(&SELFTEST).is_some() {
+        log(LOG_INFO, "[selftest] demande par CP_STUDIO_SELFTEST");
+    }
     let _ = HOT.set(Hot::new(src, shadow));
     let _ = HOST_API.set(host::install(Box::new(LoaderHost)));
     if let Err(e) = win::register_class(instance, wnd_proc) {

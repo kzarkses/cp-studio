@@ -114,6 +114,10 @@ pub struct AudioHost {
     voices: Vec<VoiceH>,
     hook: bool,
     max_frames: usize,
+    /// Le taux annonce a REAPER quand les apercus ont ete lances. REAPER le lit
+    /// au lancement : s'il change (peripherique change, ou taux inconnu au
+    /// demarrage), on relance les apercus, sinon REAPER reechantillonnerait.
+    preview_srate: f64,
 }
 
 impl AudioHost {
@@ -147,6 +151,7 @@ impl AudioHost {
             voices: Vec::new(),
             hook,
             max_frames: MAX_CLIP_FRAMES as usize,
+            preview_srate: 0.0,
         }
     }
 
@@ -174,6 +179,7 @@ impl AudioHost {
             return false;
         }
         let core = self.ctl.core().clone();
+        let core_srate = core.srate();
         let p = &mut self.ports[port];
         let stats = p.stats.clone();
         let feed = move || PortSource::new(Box::new(PortFeed { core, port, stats }));
@@ -183,7 +189,11 @@ impl AudioHost {
                     let src = feed();
                     p.preview = Some(Preview::new(r, src));
                 }
-                p.preview.as_mut().is_some_and(|pv| pv.play_hardware(0))
+                let ok = p.preview.as_mut().is_some_and(|pv| pv.play_hardware(0));
+                if ok {
+                    self.preview_srate = core_srate;
+                }
+                ok
             }
             None => {
                 if p.feed_for_tests.is_none() {
@@ -256,6 +266,11 @@ impl AudioHost {
             return None;
         }
         Some((self.pool.get(h.id())?, e))
+    }
+
+    /// La matiere d'un clip vivant (entrelacee).
+    pub fn clip_samples(&self, h: ClipH) -> Option<&[f32]> {
+        self.clip(h).map(|(c, _)| c.samples())
     }
 
     /// (frames, canaux, taux) d'un clip vivant.
@@ -382,6 +397,16 @@ impl AudioHost {
             self.ctl.voice_release(v);
         }
         self.pool.collect();
+        let sr = self.ctl.core().srate();
+        if self.preview_srate > 0.0 && sr != self.preview_srate {
+            for p in &mut self.ports {
+                if let Some(pv) = p.preview.as_mut().filter(|pv| pv.is_playing()) {
+                    pv.stop();
+                    pv.play_hardware(0);
+                }
+            }
+            self.preview_srate = sr;
+        }
     }
 
     // -----------------------------------------------------------------------
