@@ -49,16 +49,19 @@ Ce que ces mots veulent dire, en critères :
 | ✅ Le cœur du moteur audio : voix, colonnes, vivier, horloge | 2026-11-21 | identique au bit à l'ancien C++ (10 scénarios, 300 graines de fuzz) |
 | ✅ La première application est choisie : le navigateur de fichiers | 2026-11-21 | décision de Cedric |
 | ✅ A1 : le moteur branché dans REAPER (aperçu matériel permanent, crochet, décodage par REAPER, pics) | 2026-11-21 | `cargo xtask reaper-test` dans le vrai REAPER : deux WAV relus au bit près, aperçu tiré une fois par bloc, aucun compteur de perte, 0,18 % du fil audio pour 3 voix |
-| ✅ B1 (en partie) : fenêtres flottantes ou ancrées, clavier des fenêtres ancrées (crochet « accelerator » + dernier clic), double-clic | 2026-11-21 | auto-test : le navigateur s'ancre dans un docker et en revient ; reste : screensets, DPI par écran testé |
+| ✅ B1 (en partie) : fenêtres flottantes ou ancrées, clavier des fenêtres ancrées (crochet « accelerator » + dernier clic), double-clic ; ouvrir, ancrer et fermer se font hors du message de la fenêtre et jamais au démarrage de REAPER | 2026-11-21 | auto-test : le navigateur s'ancre dans un docker et en revient, les touches redirigées arrivent, un rechargement à chaud garde la fenêtre et la sélection ; reste : screensets, DPI par écran testé, le glisser de l'onglet entre dockers à la souris |
 | ✅ B2 (base) : `cp_gfx`, rastériseur à couverture exacte, chemins, Bézier, traits, dégradés, transparence, découpage au pixel | 2026-11-21 | vérités géométriques (disque = πr², rectangle fractionnaire = son aire), planches PNG |
 | ✅ B3 (base) : texte par GDI, cache de glyphes, mesure, « … » | 2026-11-21 | captures du vrai REAPER |
 | ✅ B4 (base) : icônes Lucide en vecteur (SVG avec arcs) | 2026-11-21 | test : chaque icône se dessine dans son carré |
-| ✅ B5 (base) : horloge calée sur l'écran (DwmFlush), images sautées comptées | 2026-11-21 | vrai REAPER : 120 Hz mesurés, 0 image en retard ; une image = 2,1 ms ; reste : ne repeindre que ce qui change |
+| ✅ B5 : horloge calée sur le vrai rafraîchissement de l'écran (`D3DKMTWaitForVerticalBlankEvent` ; `DwmFlush` s'arrêtait sur un écran immobile) ; ne repeindre que ce qui change (la forme d'onde seule pendant l'écoute) et n'envoyer à l'écran que les rangées changées ; une garde laisse toujours au moins la moitié du fil principal à REAPER | 2026-11-21 | vrai REAPER, ancré en 870 × 1298 : 0,4 ms par image d'animation, 1,8 ms par redessin complet, battement de REAPER 42 ms au pire (le gel signalé par Cedric : 32 s) ; reste : le geste de 10 s compté à la main, la latence souris → écran |
+| ✅ B6 (base) : souris (capture, double-clic, molette verticale et horizontale, curseurs), caractères par `WM_CHAR` (AZERTY), menus contextuels natifs, presse-papiers, glisser-déposer Windows vers REAPER | 2026-11-21 | tests ; vrai REAPER pour le clavier ; reste : infobulles, glisser depuis l'Explorateur vers nos fenêtres |
 | ✅ B7 (base) : mesures à l'écran (temps d'image, cadence, images sautées) | 2026-11-21 | action « Performance overlay » |
 | ✅ A2 (base) : écoute en flux (jouable dès la première seconde décodée), pics à plusieurs résolutions | 2026-11-21 | tests ; limite 1,5 Go par fichier (23 min stéréo 48 kHz) ; reste : le vrai flux disque pour les fichiers de plusieurs heures |
 | ✅ A3 (premier critère) : une section de N échantillons rend N échantillons, N de 1 à 4096 | 2026-11-21 | test `cp_audio` |
 | ✅ Le navigateur V1 : arbre des raccourcis, en-têtes collés empilés, écoute au relâchement, forme d'onde à tout zoom (64 px par échantillon), section, insertion et glisser-déposer avec section, recherche (noms + MediaDB), favoris, clavier, ancrable | 2026-11-21 | tests avec le vrai moteur et les vraies polices ; vrai REAPER (insertion exacte, fenêtre, ancrage) |
-| ▶ **En cours : le navigateur V2** (collections, hasard, calage au tempo, remplacement à chaud, effets), puis le retour de Cedric | | |
+| ✅ Le navigateur V2 : collections colorées 1 à 7, hasard (R), calage au tempo (×0,5 / 1 / 2, par la hauteur), remplacement à chaud de la source (Q, Échap), vue « samples », effets comme racine virtuelle | 2026-11-21 | vrai REAPER : 1 615 effets listés, tempo du projet lu, pic de la miniature = pic du fichier ; reste : rangées de hauteur variable dans la vue « samples », l'étirement (A5) pour caler sans changer la hauteur |
+| ✅ Premier retour de Cedric : « stable et fonctionnel, barebone mais c'est là », sauf un gel de REAPER en mode ancré | 2026-11-21 | gel trouvé et corrigé à la racine (voir B5), l'auto-test mesure désormais ce cas |
+| ▶ **Maintenant : le jalon 1 à l'usage.** Cedric s'en sert au quotidien ; on corrige et on polit à partir de ses retours. Ensuite, le choix de l'application suivante | | |
 
 **Le but immédiat est le jalon 1** (voir plus bas) : un navigateur de fichiers
 complet et utilisable au quotidien. Il fait tourner ensemble les deux moteurs,
@@ -507,8 +510,8 @@ moment de la commencer.
 | où vit le moteur audio | dans la petite DLL fixe (une retouche d'interface ne coupe jamais le son) |
 | comment parler aux classes C++ de REAPER (`PCM_source`, `IReaperPitchShift`) | nos propres tables virtuelles dans `cp_sys`, vérifiées par un programme C++ ; reaper-rs en repli |
 | l'étirement | cuit par défaut, en temps réel pour ce qui change en jouant |
-| le chemin de présentation | celui de l'ancienne suite d'abord (GDI + `DwmFlush`), DXGI si la mesure le demande |
-| le rendu du texte | à trancher à la mesure de la netteté (GDI ou DirectWrite) |
+| le chemin de présentation | GDI (`SetDIBitsToDevice` des seules rangées changées), calé sur `D3DKMTWaitForVerticalBlankEvent` ; `DwmFlush` écarté (il bloque sur un écran immobile) ; DXGI si la mesure le demande |
+| le rendu du texte | GDI pour l'instant (`GGO_GRAY8_BITMAP`), net dans les captures ; DirectWrite si les retours le demandent (idéogrammes, emoji) |
 | ~~la première application~~ | **tranché** : le navigateur de fichiers (Cedric, 2026-11-21) |
 | l'application suivante | à décider après le retour de Cedric sur le jalon 1 |
 
