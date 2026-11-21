@@ -1,0 +1,17 @@
+[package]
+name = "cp_transport"
+description = "CP Transport : le transport de CP Studio, a la place de celui de REAPER (sans Windows)"
+edition.workspace = true
+version.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+cp_gfx = { path = "../cp_gfx" }
+cp_ui = { path = "../cp_ui" }
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+cp_sys = { path = "../cp_sys" }

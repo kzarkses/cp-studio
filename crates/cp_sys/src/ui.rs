@@ -80,6 +80,11 @@ unsafe extern "system" {
     fn SetWindowTextW(h: Raw, s: *const u16) -> i32;
     fn GetClassNameW(h: Raw, buf: *mut u16, n: i32) -> i32;
     fn GetDoubleClickTime() -> u32;
+    fn GetWindow(h: Raw, cmd: u32) -> Raw;
+    fn GetWindowTextW(h: Raw, buf: *mut u16, n: i32) -> i32;
+    fn MapWindowPoints(from: Raw, to: Raw, pts: *mut Point, n: u32) -> i32;
+    fn ShowWindow(h: Raw, cmd: i32) -> i32;
+    fn UpdateWindow(h: Raw) -> i32;
 }
 
 #[link(name = "gdi32")]
@@ -276,6 +281,90 @@ pub fn cursor_pos() -> (i32, i32) {
     // SAFETY: ecrit un POINT.
     unsafe { GetCursorPos(&mut p) };
     (p.x, p.y)
+}
+
+/// Les filles DIRECTES de `parent`, dans l'ordre de la pile (du dessus au
+/// dessous).
+pub fn children(parent: Hwnd) -> Vec<Hwnd> {
+    const GW_HWNDNEXT: u32 = 2;
+    const GW_CHILD: u32 = 5;
+    let mut out = Vec::new();
+    // SAFETY: GetWindow accepte tout handle et rend nul a la fin.
+    let mut h = unsafe { GetWindow(parent.raw(), GW_CHILD) };
+    while !h.is_null() && out.len() < 4096 {
+        out.push(Hwnd(h as isize));
+        // SAFETY: idem.
+        h = unsafe { GetWindow(h, GW_HWNDNEXT) };
+    }
+    out
+}
+
+/// Le titre d'une fenetre.
+pub fn window_text(h: Hwnd) -> String {
+    let mut buf = [0u16; 256];
+    // SAFETY: tampon de 256 caracteres.
+    let n = unsafe { GetWindowTextW(h.raw(), buf.as_mut_ptr(), 256) };
+    String::from_utf16_lossy(&buf[..n.max(0) as usize])
+}
+
+/// Le rectangle de `h` dans les coordonnees client de `parent`.
+pub fn rect_in(h: Hwnd, parent: Hwnd) -> Rect {
+    let r = window_rect(h);
+    let mut p = [
+        Point {
+            x: r.left,
+            y: r.top,
+        },
+        Point {
+            x: r.right,
+            y: r.bottom,
+        },
+    ];
+    // SAFETY: deux points en lecture-ecriture.
+    unsafe { MapWindowPoints(null_mut(), parent.raw(), p.as_mut_ptr(), 2) };
+    Rect {
+        left: p[0].x,
+        top: p[0].y,
+        right: p[1].x,
+        bottom: p[1].y,
+    }
+}
+
+/// Le drapeau de visibilite de la fenetre elle-meme (pas de ses ancetres).
+pub fn is_visible(h: Hwnd) -> bool {
+    // SAFETY: aucune precondition.
+    unsafe { IsWindowVisible(h.raw()) != 0 }
+}
+
+/// Cache ou montre sans activer.
+pub fn show_window(h: Hwnd, show: bool) {
+    const SW_HIDE: i32 = 0;
+    const SW_SHOWNA: i32 = 8;
+    // SAFETY: sans effet sur un handle mort.
+    unsafe { ShowWindow(h.raw(), if show { SW_SHOWNA } else { SW_HIDE }) };
+}
+
+/// Pose une fenetre fille en haut de la pile de ses soeurs, a `x, y, w, h`
+/// (coordonnees de son parent), en la montrant (`Some(true)`), la cachant
+/// (`Some(false)`) ou sans toucher a sa visibilite (`None`). Jamais activee.
+pub fn place_window(h: Hwnd, x: i32, y: i32, w: i32, hh: i32, show: Option<bool>) {
+    const SWP_NOACTIVATE: u32 = 0x0010;
+    const SWP_SHOWWINDOW: u32 = 0x0040;
+    const SWP_HIDEWINDOW: u32 = 0x0080;
+    let flags = SWP_NOACTIVATE
+        | match show {
+            Some(true) => SWP_SHOWWINDOW,
+            Some(false) => SWP_HIDEWINDOW,
+            None => 0,
+        };
+    // SAFETY: HWND_TOP = nul ; sans effet sur un handle mort.
+    unsafe { SetWindowPos(h.raw(), null_mut(), x, y, w, hh, flags) };
+}
+
+/// Peint tout de suite ce qui est a peindre (WM_PAINT synchrone).
+pub fn update_window(h: Hwnd) {
+    // SAFETY: sans effet sur un handle mort.
+    unsafe { UpdateWindow(h.raw()) };
 }
 
 /// Visible pour de vrai : ni cachee (onglet de docker inactif, ancetre cache),

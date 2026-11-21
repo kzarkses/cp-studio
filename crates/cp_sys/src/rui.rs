@@ -159,6 +159,24 @@ pub mod accel {
     pub const PASS_TO_WINDOW: i32 = -1;
 }
 
+#[link(name = "user32")]
+unsafe extern "system" {
+    fn TranslateMessage(m: *const Msg) -> i32;
+    fn DispatchMessageW(m: *const Msg) -> isize;
+}
+
+/// Livre soi-meme une touche a sa fenetre (WM_CHAR compris) : REAPER ne rend
+/// pas ses touches a une fenetre posee a la place de ses propres panneaux
+/// (une fille directe de sa fenetre principale). L'appelant mange ensuite le
+/// message pour REAPER.
+pub fn deliver(m: &Msg) {
+    // SAFETY: une copie complete d'un MSG que Windows a mis en file.
+    unsafe {
+        TranslateMessage(m);
+        DispatchMessageW(m);
+    }
+}
+
 static ACCEL_FN: OnceLock<fn(&mut Msg) -> i32> = OnceLock::new();
 
 unsafe extern "C" fn accel_trampoline(msg: *mut Msg, _: *mut AccelReg) -> i32 {

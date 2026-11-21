@@ -139,7 +139,7 @@ unsafe extern "system" {
 }
 
 /// Une fenetre. Un entier, donc `Send` : c'est un nom, pas une propriete.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub struct Hwnd(pub isize);
 
 impl Hwnd {

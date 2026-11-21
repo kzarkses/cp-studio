@@ -28,6 +28,7 @@ pub mod font;
 pub mod grow;
 pub mod guard;
 pub mod host;
+pub mod image;
 pub mod module;
 pub mod pcm;
 pub mod project;
@@ -35,6 +36,7 @@ pub mod reaper;
 pub mod rt;
 pub mod rui;
 pub mod shell;
+pub mod transport;
 pub mod ui;
 pub mod win;
 
