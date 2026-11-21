@@ -69,6 +69,7 @@ dependencies = [
  "cp_browser",
  "cp_gfx",
  "cp_sys",
+ "cp_tab",
  "cp_transport",
  "cp_ui",
 ]
@@ -88,6 +89,10 @@ dependencies = [
  "cp_abi",
  "cp_gfx",
 ]
+
+[[package]]
+name = "cp_tab"
+version = "0.1.0"
 
 [[package]]
 name = "cp_transport"

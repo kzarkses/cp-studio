@@ -36,6 +36,7 @@ pub mod reaper;
 pub mod rt;
 pub mod rui;
 pub mod shell;
+pub mod tab;
 pub mod transport;
 pub mod ui;
 pub mod win;

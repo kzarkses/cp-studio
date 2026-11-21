@@ -307,11 +307,19 @@ impl App {
             } else {
                 Glyph::Text(initials(&name))
             };
+            // Nos propres actions se lisent ici : demander leur etat a REAPER
+            // repasserait par le module, occupe a ce battement (il rendrait
+            // « pas d'etat »).
+            let on = if c.id.starts_with("_CPSTUDIO_") {
+                cp_sys::module::Module::toggle_state(self, cmd) == Some(true)
+            } else {
+                self.r.toggle_state(cmd) == 1
+            };
             out.push(Item {
                 id: c.id.clone(),
                 name,
                 glyph,
-                on: self.r.toggle_state(cmd) == 1,
+                on,
                 open: false,
             });
             shown.push((i, cmd));

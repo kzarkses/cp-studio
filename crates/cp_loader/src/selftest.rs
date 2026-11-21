@@ -75,6 +75,8 @@ enum Phase {
     Transport,
     /// Le navigateur a la place de l'arrangement.
     Band,
+    /// Guitar Tab sur un riff connu.
+    GuitarTab,
     Done,
 }
 
@@ -264,6 +266,7 @@ impl SelfTest {
             | Phase::Keys
             | Phase::Transport
             | Phase::Band
+            | Phase::GuitarTab
             | Phase::Done => {}
         }
         false
@@ -588,12 +591,120 @@ impl SelfTest {
             }
             Phase::Band => {
                 if self.places_tick(r, false) {
+                    self.keys_step = 0;
+                    self.ui_at = Some(Instant::now());
+                    self.phase = Phase::GuitarTab;
+                }
+            }
+            Phase::GuitarTab => {
+                if self.gtab_tick(r) {
                     self.finish_report();
                     return true;
                 }
             }
             Phase::Done => return true,
             _ => {}
+        }
+        false
+    }
+
+    /// Guitar Tab de bout en bout : un riff de huit noires (dents de scie a
+    /// 112 BPM, les hauteurs connues), pose dans le projet, transcrit par
+    /// l'action ; on lit ce que le module a ecrit (ExtState) et le fichier.
+    fn gtab_tick(&mut self, r: &cp_sys::reaper::Reaper) -> bool {
+        const RIFF: [i32; 8] = [45, 52, 57, 52, 45, 52, 57, 60];
+        let t = self.ui_at.map_or(0.0, |t| t.elapsed().as_secs_f64());
+        match self.keys_step {
+            0 => {
+                let sr = 44100u32;
+                let beat = 60.0 / 112.0;
+                let n = (beat * RIFF.len() as f64 * sr as f64) as usize + sr as usize / 2;
+                let mut x = vec![0f32; n];
+                for (k, &p) in RIFF.iter().enumerate() {
+                    let f = 440.0 * 2f64.powf((p - 69) as f64 / 12.0);
+                    let a = (k as f64 * beat * sr as f64) as usize;
+                    let len = (beat * 0.95 * sr as f64) as usize;
+                    for i in 0..len {
+                        let ph = (i as f64 * f / sr as f64).fract();
+                        let env = (-(i as f64) / sr as f64 * 3.0).exp();
+                        x[a + i] += ((2.0 * ph - 1.0) * 0.35 * env) as f32;
+                    }
+                }
+                let path = dir().join("riff.wav");
+                let _ = fs::write(&path, wav(&x, 1, sr, false));
+                r.ext_set("CP_Studio", "selftest_gtab", "", false);
+                // Le riff seul choisi : InsertMedia AJOUTE a la selection.
+                let unsel = r.command_text(40289);
+                if !(unsel.to_lowercase().contains("unselect")
+                    && unsel.to_lowercase().contains("all items"))
+                {
+                    self.say(
+                        false,
+                        format!("40289 n'est pas « unselect all items » : {unsel:?}"),
+                    );
+                    return true;
+                }
+                r.main_on_command(40289);
+                let p = path.to_string_lossy().into_owned();
+                match r.insert_media(&p, None) {
+                    Ok(()) => {
+                        let c = r.named_command("_CPSTUDIO_GUITARTAB");
+                        if c == 0 {
+                            self.say(false, "l'action Guitar Tab n'existe pas".into());
+                            return true;
+                        }
+                        r.main_on_command(c);
+                    }
+                    Err(e) => {
+                        self.say(false, format!("Guitar Tab : riff non pose ({e})"));
+                        return true;
+                    }
+                }
+                self.keys_step = 1;
+                self.ui_at = Some(Instant::now());
+            }
+            1 => {
+                let st = r.ext_get("CP_Studio", "selftest_gtab").unwrap_or_default();
+                if st.is_empty() {
+                    if t > 40.0 {
+                        self.say(false, "Guitar Tab : pas de resultat en 40 s".into());
+                        return true;
+                    }
+                    return false;
+                }
+                let field = |k: &str| -> String {
+                    st.split_whitespace()
+                        .find_map(|w| w.strip_prefix(&format!("{k}=")).map(String::from))
+                        .unwrap_or_default()
+                };
+                let pitches: Vec<i32> = field("pitches")
+                    .split(',')
+                    .filter_map(|v| v.parse().ok())
+                    .collect();
+                let file = st.split("file=").nth(1).unwrap_or("").to_string();
+                let xml = fs::read_to_string(&file).unwrap_or_default();
+                self.say(
+                    pitches == RIFF,
+                    format!("Guitar Tab : hauteurs du riff {pitches:?} (attendu {RIFF:?})"),
+                );
+                self.say(
+                    field("midi") == "1" && xml.contains("<sign>TAB</sign>") && xml.contains("<fret>"),
+                    format!(
+                        "Guitar Tab : piste MIDI posee, partition ecrite ({} octets) en {t:.1} s ; {}",
+                        xml.len(),
+                        st.split(" file=").next().unwrap_or("")
+                    ),
+                );
+                // Huit noires a 112 BPM sur la grille : chaque note dure une
+                // noire (4 cases de double croche) dans la portee.
+                let quarters = xml.matches("<type>quarter</type><staff>1</staff>").count();
+                self.say(
+                    quarters >= 6,
+                    format!("Guitar Tab : rythme, {quarters} noires sur la portee (8 jouees)"),
+                );
+                return true;
+            }
+            _ => return true,
         }
         false
     }

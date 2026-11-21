@@ -35,6 +35,7 @@ use cp_sys::ui::{self, Cursor, MenuItem};
 use cp_sys::win::{self, Hwnd, WinMsg};
 use cp_ui::{Button, Ev, IconCache, Mods, Theme};
 
+mod gtab;
 mod items;
 mod tview;
 
@@ -318,6 +319,9 @@ pub(crate) struct App {
     cmd_place_arrange: i32,
     cmd_place_dock: i32,
     cmd_place_float: i32,
+    cmd_gtab: i32,
+    /// Une transcription Guitar Tab en cours.
+    gtab: Option<gtab::Job>,
     browser: Browser,
     view: Option<View>,
     /// La place choisie pour le navigateur.
@@ -1104,6 +1108,10 @@ impl Module for App {
             "CPSTUDIO_BROWSER_FLOATING",
             "CP Studio: Browser - floating window",
         );
+        let cmd_gtab = host.register_action(
+            "CPSTUDIO_GUITARTAB",
+            "CP Studio: Guitar Tab - transcribe the selected item",
+        );
         let tp = tview::TPart::new(&r);
         let mut app = App {
             host,
@@ -1118,6 +1126,8 @@ impl Module for App {
             cmd_place_arrange,
             cmd_place_dock,
             cmd_place_float,
+            cmd_gtab,
+            gtab: None,
             browser,
             view: None,
             place,
@@ -1194,6 +1204,7 @@ impl Module for App {
         if self.tp.prompt {
             self.r.prompt_for_action(-1);
         }
+        self.gtab_cancel();
         // Les fenetres restent au chargeur : le module suivant les reprend.
         // Elles ne recevront plus d'images d'ici la.
         if let Some(v) = &self.view {
@@ -1211,6 +1222,7 @@ impl Module for App {
         if !self.ops.is_empty() && self.ticks >= 15 {
             self.do_ops();
         }
+        self.gtab_tick();
         self.transport_tick();
         if self.view.is_none() {
             return;
@@ -1283,6 +1295,9 @@ impl Module for App {
         } else if cmd == self.cmd_place_float {
             self.queue(WinOp::Place(Place::Float));
             true
+        } else if cmd == self.cmd_gtab {
+            self.gtab_start();
+            true
         } else {
             false
         }
@@ -1307,6 +1322,8 @@ impl Module for App {
             Some(self.place == Place::Dock)
         } else if cmd == self.cmd_place_float {
             Some(self.place == Place::Float)
+        } else if cmd == self.cmd_gtab {
+            Some(self.gtab_running())
         } else {
             None
         }
