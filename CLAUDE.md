@@ -104,5 +104,7 @@ fenetres survivent donc a un rechargement, et le nouveau code les repeint.
   courant). Lancer depuis un dossier vide du scratchpad. Cargo et git, eux,
   tournent dans le depot.
 - **Jamais d'effacement recursif.** Le code efface des fichiers NOMMES.
-- **Pousser sur un depot distant chaque soir** des qu'il existe : le 20
-  novembre, trois mois de travail n'existaient que dans le `.git` local.
+- **Pousser apres chaque commit** sur `origin`
+  (https://github.com/kzarkses/cp-studio, PUBLIC, choix de Cedric) : le 20
+  novembre, trois mois de travail n'existaient que dans le `.git` local. Rien
+  de prive dans le depot : ni jeton, ni mot de passe, ni donnee personnelle.
