@@ -10,6 +10,7 @@
 //! - [`host`] : cote chargeur, la table offerte au module.
 //! - [`module`] : cote module, la table offerte au chargeur et la macro
 //!   [`export_module!`].
+//! - [`rt`] : les primitives temps reel (l'anneau sans verrou du fil audio).
 
 pub use cp_abi as abi;
 
@@ -18,6 +19,7 @@ pub mod guard;
 pub mod host;
 pub mod module;
 pub mod reaper;
+pub mod rt;
 pub mod win;
 
 pub use guard::guard;
