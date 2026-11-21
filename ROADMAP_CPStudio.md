@@ -47,6 +47,13 @@ Ce que ces mots veulent dire, en critères :
 | ✅ Rust installé, dépôt neuf, public, poussé après chaque commit | 2026-11-21 | github.com/kzarkses/cp-studio |
 | ✅ La petite DLL fixe et le rechargement à chaud du module | 2026-11-21 | retouche recompilée en 0,6 s, rechargée en 0,9 s ; le vrai chargeur testé dans un faux REAPER |
 | ✅ Le cœur du moteur audio : voix, colonnes, vivier, horloge | 2026-11-21 | identique au bit à l'ancien C++ (10 scénarios, 300 graines de fuzz) |
+| ✅ La première application est choisie : le navigateur de fichiers | 2026-11-21 | décision de Cedric |
+| ▶ **En cours : A1**, le premier son dans REAPER, puis tout le **jalon 1** (le navigateur utilisable), en autonomie complète | | |
+
+**Le but immédiat est le jalon 1** (voir plus bas) : un navigateur de fichiers
+complet et utilisable au quotidien. Il fait tourner ensemble les deux moteurs,
+le toolkit et l'ancrage, pour que Cedric puisse s'en servir pour de vrai et
+faire un vrai retour.
 
 ---
 
@@ -90,6 +97,26 @@ Ce que ces mots veulent dire, en critères :
   rare, et il est testé hors de REAPER.
 - **Fini quand :** une action de test lance une boucle et Cedric l'entend, sans
   clic. Les compteurs de lecture (trop ou pas assez de blocs lus) restent à zéro.
+- **Pour reprendre :**
+  - **La référence :** `reference/cp_native/src/host/cp_source.h` et
+    `cp_source.cpp`. C'est l'ancienne `PortSource` : `GetSamples` remplit le
+    bloc depuis `render_port` et convertit float → ReaSample, plus le MIDI
+    daté.
+  - **Le SDK** (`C:\Users\Cedric\dev\reaper-sdk\sdk`) :
+    - `reaper_plugin.h` donne `class PCM_source` (l'ordre des méthodes
+      virtuelles fait la table), `PCM_source_transfer_t`, `preview_register_t`
+      et `audio_hook_register_t` ;
+    - `reaper_plugin_functions.h` donne `PlayTrackPreview2Ex`,
+      `StopTrackPreview2`, `Audio_RegHardwareHook`, `PCM_Source_CreateFromFile`
+      et `GetPlayPosition2`.
+  - **Les pièges déjà payés :**
+    - la position de lecture qui va avec l'horloge est `GetPlayPosition2`
+      (bloc en traitement), pas `GetPlayPosition` (ce qu'on entend, en retard de
+      la latence de sortie) ;
+    - un aperçu vers le master rend « succès » et ne joue rien ;
+    - une piste qui porte un instrument avale l'audio qu'on y verse.
+  - **Le test :** étendre le faux REAPER (`cp_sys/tests/fake_reaper.rs`) pour
+    qu'il tire les blocs d'un aperçu comme REAPER le fait.
 
 ### A2. Le vivier complet
 
@@ -367,14 +394,57 @@ tout est listé.
 
 ## Phase E — Les applications
 
-**L'ordre est à décider par Cedric.** Ma recommandation : commencer par le
-**navigateur de fichiers**. Il met à l'épreuve, à lui seul, toutes les
-exigences :
+**La première est le navigateur de fichiers** (décidé par Cedric le
+2026-11-21). Il met à l'épreuve, à lui seul, toutes les exigences :
 - l'écoute en flux ;
 - la sélection minuscule ;
 - la forme d'onde à tout zoom ;
 - les longues listes fluides ;
 - l'ancrage.
+
+L'ordre des suivantes reste à décider.
+
+### Jalon 1 — le navigateur de fichiers, utilisable au quotidien
+
+**Ce qu'il faut pour y arriver** : A1, A2, A3 ; B1 à B7 ; de C, ce que le
+navigateur utilise ; de D, ce que le navigateur appelle.
+
+**Ce qu'il fait (V1).** C'est l'ancien navigateur (mémoire
+`project-media-explorer`), plus ce que le natif permet enfin.
+
+- **L'arborescence :**
+  - les dossiers et les raccourcis de l'Explorateur de REAPER, lus dans
+    `reaper.ini`, section `[reaper_explorer]` ;
+  - le dépliage en ligne ;
+  - les en-têtes de dossier qui restent collés en haut, empilés. Aucun DAW ne
+    le fait.
+- **L'écoute instantanée à la sélection**, par notre moteur, en flux :
+  - arrêt, boucle, volume d'écoute ;
+  - écoute au relâchement du clic : un glisser reste muet dès le premier pixel ;
+  - sortie par une piste relais : le master n'est pas une destination d'aperçu
+    valable.
+- **La forme d'onde du fichier choisi, à tout zoom :**
+  - la sélection d'une section, même minuscule ;
+  - l'écoute ne joue que la section, à l'échantillon près.
+- **Le glisser :**
+  - vers REAPER, par un VRAI glisser-déposer Windows : REAPER pose l'item là où
+    on lâche, avec la section choisie ;
+  - aussi vers d'autres logiciels. C'était impossible depuis Lua.
+- **La recherche** dans les noms et dans les bases MediaDB de REAPER ; les
+  favoris.
+- **Le clavier complet.** Ancrable partout.
+
+**V2, juste après.** Ce que l'ancien navigateur avait aussi :
+- les collections colorées (1 à 7) ;
+- le hasard (R) ;
+- le calage au tempo : tempo lu dans le nom, `GetTempoMatchPlayRate`, ×0,5 / 1
+  / 2. En changeant la hauteur d'abord, puis en étirant quand A5 arrive ;
+- le remplacement à chaud de la source de l'item choisi (Q, Échap pour revenir) ;
+- la vue « samples », une forme d'onde par ligne ;
+- les effets comme racine virtuelle (insertion d'un effet).
+
+**Fini quand :** Cedric s'en sert comme navigateur au quotidien, ancré dans
+REAPER, et en fait un vrai retour.
 
 | application | ce qu'elle fait | où est sa spécification |
 |---|---|---|
@@ -413,7 +483,7 @@ moment de la commencer.
 3. **B3, B4, B6** : le texte, les images, l'entrée.
 4. **A2, A3** : le vivier complet et l'exactitude à 100 %.
 5. **C** : le toolkit, construit pendant la première application et pour elle.
-6. **Première application** (recommandée : le navigateur de fichiers).
+6. **Le navigateur de fichiers** : V1, puis V2. C'est la fin du jalon 1.
 7. **A4, A5** : la vitesse et l'étirement, quand l'éditeur arrive.
 8. **A6, A7, A8** : lanes, clock, enregistrement, quand la Session arrive.
 9. **A9, A10, F** : robustesse, sorties, livraison, tout au long.
@@ -429,7 +499,8 @@ moment de la commencer.
 | l'étirement | cuit par défaut, en temps réel pour ce qui change en jouant |
 | le chemin de présentation | celui de l'ancienne suite d'abord (GDI + `DwmFlush`), DXGI si la mesure le demande |
 | le rendu du texte | à trancher à la mesure de la netteté (GDI ou DirectWrite) |
-| la première application | le navigateur de fichiers |
+| ~~la première application~~ | **tranché** : le navigateur de fichiers (Cedric, 2026-11-21) |
+| l'application suivante | à décider après le retour de Cedric sur le jalon 1 |
 
 ## Ce que CP Studio ne fera pas
 

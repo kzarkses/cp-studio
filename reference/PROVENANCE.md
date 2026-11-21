@@ -34,6 +34,28 @@ generation, notes du moteur, etc.
 ce nom. Ce sont les lots du socle (`project-audit-socle` dans la memoire de
 Claude) : ils ajoutent des compteurs et des gardes, pas des changements de son.
 
+### Le reste de CP_Native (hote, dessin, tests)
+
+Meme origine. Ils serviront a A1 (le branchement dans REAPER) et a B2 (le
+dessin). Aucun n'est prouve identique a un commit ; ceux qui finissent en
+`.partiel` sont TROUES : chaque ligne manquante y est marquee
+`/*@@ LIGNE MANQUANTE @@*/`.
+
+| dossier | complets | troues |
+|---|---|---|
+| `src/host` | `cp_source.h` (identique a un commit), `cp_source.cpp`, `cp_playclock.h`, `cp_sane.h` (identique), `cp_key.h` (identique), `cp_win.h`, `cp_list.h`, `cp_log.cpp` | `cp_main.cpp` (40 lignes sur 3 199), `cp_win.cpp` (800 sur 4 099), `cp_list.cpp` (135 sur 314) |
+| `src/gfx` | `cp_blit.cpp`, `cp_raster.cpp`, `cp_raster2.cpp`, `cp_text.cpp` | `cp_surface.h` |
+| `src/test` | — | `harness.cpp`, `gfx_test.cpp` (leurs versions du 22 aout sont entieres sur GitHub, voir ci-dessous) |
+| `src/video` | `cp_vsink.cpp` (recousu) | — |
+| `src/tab`, `tools/gen_bp_weights.py` | le portage C++ de Basic Pitch ecrit le 2026-11-20 pour la tablature (verifie contre onnxruntime a 2e-5) ; `cp_bp_weights.h` se regenere avec `gen_bp_weights.py` depuis `nmp.onnx` | — |
+
+L'etat de CP_Native au 22 aout (harnais compris) est entier dans le miroir
+GitHub : `E:\CP_Scripts_recovery_20261120\github_2026-08-22.git`. Les scripts
+de reconstitution sont dans `E:\CP_Scripts_recovery_20261120\tools`
+(`extract_ref.py` refait ce dossier depuis les transcriptions).
+
+## Le binaire final
+
 Le binaire final de l'ancien moteur (ABI 11) existe encore, installe dans
 REAPER : `UserPlugins\reaper_cpclip.dll`. Une copie est dans
 `E:\CP_Scripts_recovery_20261120\reaper_installed`.

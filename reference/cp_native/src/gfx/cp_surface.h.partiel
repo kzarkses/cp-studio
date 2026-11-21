@@ -1,0 +1,168 @@
+/*@@ LIGNE MANQUANTE @@*/
+/*@@ LIGNE MANQUANTE @@*/
+/*@@ LIGNE MANQUANTE @@*/
+/*@@ LIGNE MANQUANTE @@*/
+/*@@ LIGNE MANQUANTE @@*/
+/*@@ LIGNE MANQUANTE @@*/
+/*@@ LIGNE MANQUANTE @@*/
+/*@@ LIGNE MANQUANTE @@*/
+/*@@ LIGNE MANQUANTE @@*/
+/*@@ LIGNE MANQUANTE @@*/
+/*@@ LIGNE MANQUANTE @@*/
+/*@@ LIGNE MANQUANTE @@*/
+/*@@ LIGNE MANQUANTE @@*/
+/*@@ LIGNE MANQUANTE @@*/
+/*@@ LIGNE MANQUANTE @@*/
+/*@@ LIGNE MANQUANTE @@*/
+/*@@ LIGNE MANQUANTE @@*/
+/*@@ LIGNE MANQUANTE @@*/
+/*@@ LIGNE MANQUANTE @@*/
+/*@@ LIGNE MANQUANTE @@*/
+/*@@ LIGNE MANQUANTE @@*/
+/*@@ LIGNE MANQUANTE @@*/
+/*@@ LIGNE MANQUANTE @@*/
+/*@@ LIGNE MANQUANTE @@*/
+/*@@ LIGNE MANQUANTE @@*/
+/*@@ LIGNE MANQUANTE @@*/
+/*@@ LIGNE MANQUANTE @@*/
+/*@@ LIGNE MANQUANTE @@*/
+/*@@ LIGNE MANQUANTE @@*/
+/*@@ LIGNE MANQUANTE @@*/
+/*@@ LIGNE MANQUANTE @@*/
+/*@@ LIGNE MANQUANTE @@*/
+/*@@ LIGNE MANQUANTE @@*/
+/*@@ LIGNE MANQUANTE @@*/
+/*@@ LIGNE MANQUANTE @@*/
+/*@@ LIGNE MANQUANTE @@*/
+/*@@ LIGNE MANQUANTE @@*/
+/*@@ LIGNE MANQUANTE @@*/
+/*@@ LIGNE MANQUANTE @@*/
+/*@@ LIGNE MANQUANTE @@*/
+/*@@ LIGNE MANQUANTE @@*/
+/*@@ LIGNE MANQUANTE @@*/
+/*@@ LIGNE MANQUANTE @@*/
+/*@@ LIGNE MANQUANTE @@*/
+/*@@ LIGNE MANQUANTE @@*/
+/*@@ LIGNE MANQUANTE @@*/
+/*@@ LIGNE MANQUANTE @@*/
+/*@@ LIGNE MANQUANTE @@*/
+/*@@ LIGNE MANQUANTE @@*/
+/*@@ LIGNE MANQUANTE @@*/
+/*@@ LIGNE MANQUANTE @@*/
+/*@@ LIGNE MANQUANTE @@*/
+/*@@ LIGNE MANQUANTE @@*/
+/*@@ LIGNE MANQUANTE @@*/
+/*@@ LIGNE MANQUANTE @@*/
+/*@@ LIGNE MANQUANTE @@*/
+/*@@ LIGNE MANQUANTE @@*/
+/*@@ LIGNE MANQUANTE @@*/
+/*@@ LIGNE MANQUANTE @@*/
+// `bits` pointe un tampon dans lequel l'appelant vient d'ecrire UN pixel de
+// couleur connue par le moyen de la plateforme (LICE_PutPixel en vrai, un
+// ecriture directe dans le harnais). `span` est ce que LICE__GetRowSpan a
+// rendu, sans interpretation.
+//
+// La couleur temoin n'est pas prise au hasard : ses quatre canaux sont TOUS
+// DIFFERENTS et aucun n'est 0 ni 255, sinon deux ordres d'octets rendraient le
+// meme motif et la mesure ne distinguerait rien.
+enum : unsigned int {
+  kProbeR = 0x12, kProbeG = 0x34, kProbeB = 0x56, kProbeA = 0x78
+};
+unsigned int probe_witness_pixel();   // le uint32 attendu en ARGB32
+
+// Deduit le format depuis DEUX pixels temoins : un a (0,0), un a (0,1). Le
+// second est ce qui tranche l'unite du span — si le span etait en octets et
+// qu'on l'a lu en pixels, le pixel de la deuxieme ligne n'est pas la ou on le
+// cherche.
+FormatProbe probe_format(const void* bits, int span_raw, int w, int h,
+                         bool lice_says_flipped);
+
+// ---------------------------------------------------------------------------
+// LA SURFACE
+// ---------------------------------------------------------------------------
+// Elle ne POSSEDE rien : elle pointe les pixels de quelqu'un d'autre (une
+// bitmap LICE en vrai, un malloc dans le harnais). Pas de destructeur, pas de
+// copie a surveiller, et aucune allocation dans un chemin de dessin.
+struct Surface {
+  unsigned int* px;     // ARGB32, confirme par la sonde
+  int w, h;
+  int stride;           // EN PIXELS, jamais en octets
+  // ⚠ LE DECOUPAGE EST REEL, ET C'EST UNE CAPACITE QUE `gfx` N'AVAIT PAS.
+  // La-bas, le clip etait LOGICIEL et approximatif : exact pour les rects,
+  // Cohen-Sutherland pour les lignes, tout-ou-rien pour le texte, et
+  // `gfx.circle`, `gfx.arc`, `gfx.triangle` et `gfx.blit` ne le consultaient
+  // PAS DU TOUT. D'ou la regle « visibilite entiere exigee » qui parseme le
+  // toolkit, et d'ou un rectangle arrondi qui retombait sur des coins durs des
+  // qu'une liste defilait.
+  //
+  // Ici on ecrit les pixels : le test est au pixel, pour TOUTES les primitives,
+  // sans exception et sans politique a retenir. `overflow: hidden` devient
+  // exact.
+  int cx, cy, cw, ch;
+};
+
+// Pose la surface avec un decoupage egal a sa taille. TOUJOURS passer par la :
+// un `Surface` construit champ par champ laisse le decoupage indefini, et une
+// primitive ecrirait alors n'importe ou.
+inline void surface_set(Surface& s, unsigned int* px, int w, int h, int stride) {
+  s.px = px; s.w = w; s.h = h; s.stride = stride;
+  s.cx = 0; s.cy = 0; s.cw = w; s.ch = h;
+}
+
+// Restreint le decoupage. Rend false si le resultat est vide — l'appelant peut
+// alors sauter tout un panneau sans le dessiner.
+inline bool surface_clip(Surface& s, int x, int y, int w, int h) {
+  int x1 = x + w, y1 = y + h;
+  if (x < s.cx) x = s.cx;
+  if (y < s.cy) y = s.cy;
+  if (x1 > s.cx + s.cw) x1 = s.cx + s.cw;
+  if (y1 > s.cy + s.ch) y1 = s.cy + s.ch;
+  s.cx = x; s.cy = y;
+  s.cw = x1 - x; s.ch = y1 - y;
+  if (s.cw < 0) s.cw = 0;
+  if (s.ch < 0) s.ch = 0;
+  return s.cw > 0 && s.ch > 0;
+}
+
+// Composition « source over » d'une couleur opaque sur un pixel, ponderee par
+// une couverture 0..255. C'est la seule operation de melange du rasteriseur :
+// tout le reste (rectangle, coin arrondi, bande) s'y ramene.
+//
+// ⚠ ENTIERS SEULEMENT, ET L'ARRONDI COMPTE. `(a * c + 127) / 255` et
+// `(a * c) >> 8` ne sont pas la meme chose : la seconde perd un niveau et une
+// grande surface unie composee deux fois s'assombrit visiblement. On garde la
+// division exacte par 255, que le compilateur transforme en multiplication.
+inline unsigned int blend_over(unsigned int dst, unsigned int src, unsigned int cov) {
+  if (cov == 0) return dst;
+  if (cov >= 255) return src;
+  const unsigned int inv = 255u - cov;
+  const unsigned int dr = (dst >> 16) & 0xFFu, sr = (src >> 16) & 0xFFu;
+  const unsigned int dg = (dst >>  8) & 0xFFu, sg = (src >>  8) & 0xFFu;
+  const unsigned int db =  dst        & 0xFFu, sb =  src        & 0xFFu;
+  const unsigned int da = (dst >> 24) & 0xFFu, sa = (src >> 24) & 0xFFu;
+  const unsigned int r = (dr * inv + sr * cov + 127u) / 255u;
+  const unsigned int g = (dg * inv + sg * cov + 127u) / 255u;
+  const unsigned int b = (db * inv + sb * cov + 127u) / 255u;
+  const unsigned int a = (da * inv + sa * cov + 127u) / 255u;
+  return (a << 24) | (r << 16) | (g << 8) | b;
+}
+
+// UN pixel compose, decoupe. C'est le seul point par lequel les primitives
+// ecrivent : centraliser le test de decoupe ici est ce qui rend impossible
+// d'en oublier un.
+inline void blend_px(const Surface& s, int x, int y,
+                     unsigned int col, unsigned int cov) {
+  if (x < s.cx || y < s.cy || x >= s.cx + s.cw || y >= s.cy + s.ch) return;
+  unsigned int* p = s.px + (size_t)y * s.stride + x;
+  *p = blend_over(*p, col, cov);
+}
+
+inline unsigned int argb(unsigned int a, unsigned int r, unsigned int g, unsigned int b) {
+  return (a << 24) | (r << 16) | (g << 8) | b;
+}
+
+} // namespace gfx
+} // namespace cp
+
+#endif // CP_SURFACE_H
+
