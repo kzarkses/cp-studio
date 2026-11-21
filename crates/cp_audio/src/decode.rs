@@ -97,8 +97,87 @@ fn chunk_frames(srate: f64) -> usize {
     }
 }
 
+/// Une vignette a calculer : le min et le max de `points` tranches du
+/// fichier entier (canaux fondus). Basse priorite : seulement quand aucune
+/// ecoute n'attend.
+pub struct ThumbJob {
+    pub path: String,
+    pub src: Box<dyn Reader>,
+    pub shape: Shape,
+    pub points: usize,
+}
+
+struct ThumbActive {
+    job: ThumbJob,
+    pos: usize,
+    acc: Vec<[f32; 2]>,
+    buf: Vec<f64>,
+}
+
+impl ThumbActive {
+    fn new(job: ThumbJob) -> ThumbActive {
+        let n = job.points.max(1);
+        ThumbActive {
+            job,
+            pos: 0,
+            acc: vec![[f32::MAX, f32::MIN]; n],
+            buf: Vec::new(),
+        }
+    }
+
+    /// Un morceau. Rend vrai si c'est fini.
+    fn step(&mut self) -> bool {
+        let sh = self.job.shape;
+        let chunk = chunk_frames(sh.srate);
+        let want = chunk.min(sh.frames.saturating_sub(self.pos));
+        if want == 0 {
+            return true;
+        }
+        self.buf.resize(chunk * sh.nch, 0.0);
+        let got = self.job.src.read(
+            self.pos as f64 / sh.srate,
+            sh.srate,
+            sh.nch,
+            &mut self.buf[..want * sh.nch],
+        );
+        let n = self.acc.len();
+        for f in 0..got {
+            let b = ((self.pos + f) * n / sh.frames.max(1)).min(n - 1);
+            for c in 0..sh.nch {
+                let v = self.buf[f * sh.nch + c] as f32;
+                let e = &mut self.acc[b];
+                e[0] = e[0].min(v);
+                e[1] = e[1].max(v);
+            }
+        }
+        self.pos += got;
+        got < want || self.pos >= sh.frames
+    }
+
+    fn result(mut self) -> (String, Box<dyn Reader>, Vec<[f32; 2]>) {
+        for e in &mut self.acc {
+            if e[0] > e[1] {
+                *e = [0.0, 0.0];
+            }
+        }
+        (self.job.path, self.job.src, self.acc)
+    }
+}
+
+/// Le travail confie au fil.
+pub enum Work {
+    Clip(Job),
+    Thumb(ThumbJob),
+}
+
 /// Ce que le fil dit au fil principal.
 pub enum Msg {
+    /// Une vignette (vide si le fichier n'a rien rendu).
+    Thumb {
+        path: String,
+        src: Box<dyn Reader>,
+        data: Vec<[f32; 2]>,
+    },
     /// Le debut est la : on peut jouer.
     First { ticket: u32 },
     /// Fini (ou abandonne) : la source revient pour etre detruite, avec les
@@ -171,11 +250,12 @@ fn finish(a: Active, out: &Sender<Msg>) {
     });
 }
 
-fn worker(jobs: Receiver<Job>, out: Sender<Msg>) {
+fn worker(jobs: Receiver<Work>, out: Sender<Msg>) {
     let mut active: Vec<Active> = Vec::new();
+    let mut thumbs: std::collections::VecDeque<ThumbActive> = std::collections::VecDeque::new();
     loop {
         // Recevoir : attendre s'il n'y a rien a faire, sinon juste regarder.
-        let next = if active.is_empty() {
+        let next = if active.is_empty() && thumbs.is_empty() {
             match jobs.recv() {
                 Ok(j) => Some(j),
                 Err(_) => return,
@@ -187,15 +267,35 @@ fn worker(jobs: Receiver<Job>, out: Sender<Msg>) {
                 Err(RecvTimeoutError::Disconnected) => return,
             }
         };
-        if let Some(j) = next {
-            active.push(Active {
-                job: j,
-                pos: 0,
-                buf: Vec::new(),
-                tmp: Vec::new(),
-                first_sent: false,
-            });
-            continue; // d'abord tout recevoir : le plus recent passe devant
+        match next {
+            Some(Work::Clip(j)) => {
+                active.push(Active {
+                    job: j,
+                    pos: 0,
+                    buf: Vec::new(),
+                    tmp: Vec::new(),
+                    first_sent: false,
+                });
+                continue; // d'abord tout recevoir : le plus recent passe devant
+            }
+            Some(Work::Thumb(t)) => {
+                thumbs.push_back(ThumbActive::new(t));
+                continue;
+            }
+            None => {}
+        }
+        // Les vignettes seulement quand aucune ecoute n'attend.
+        if active.is_empty() {
+            if let Some(mut t) = thumbs.pop_front() {
+                let done = cp_sys::guard(|| t.step()).unwrap_or(true);
+                if done {
+                    let (path, src, data) = t.result();
+                    let _ = out.send(Msg::Thumb { path, src, data });
+                } else {
+                    thumbs.push_front(t);
+                }
+            }
+            continue;
         }
         // Le plus recent d'abord.
         let Some(mut a) = active.pop() else { continue };
@@ -210,14 +310,14 @@ fn worker(jobs: Receiver<Job>, out: Sender<Msg>) {
 
 /// Le fil de travail. Il s'arrete quand le `Decoder` est lache.
 pub struct Decoder {
-    tx: Option<Sender<Job>>,
+    tx: Option<Sender<Work>>,
     rx: Receiver<Msg>,
     thread: Option<JoinHandle<()>>,
 }
 
 impl Decoder {
     pub fn new() -> Decoder {
-        let (tx, jobs) = channel::<Job>();
+        let (tx, jobs) = channel::<Work>();
         let (out, rx) = channel::<Msg>();
         let thread = std::thread::Builder::new()
             .name("cp_decode".into())
@@ -233,9 +333,18 @@ impl Decoder {
     /// Rend le travail s'il n'a pas pu etre confie.
     pub fn submit(&self, job: Job) -> Result<(), Box<Job>> {
         match &self.tx {
-            Some(t) => t.send(job).map_err(|e| Box::new(e.0)),
+            Some(t) => t.send(Work::Clip(job)).map_err(|e| match e.0 {
+                Work::Clip(j) => Box::new(j),
+                Work::Thumb(_) => unreachable!("on a envoye un clip"),
+            }),
             None => Err(Box::new(job)),
         }
+    }
+
+    pub fn submit_thumb(&self, job: ThumbJob) -> bool {
+        self.tx
+            .as_ref()
+            .is_some_and(|t| t.send(Work::Thumb(job)).is_ok())
     }
 
     pub fn try_msg(&self) -> Option<Msg> {
@@ -333,6 +442,7 @@ pub(crate) mod tests {
                         assert!(error.is_none() && peaks.is_some());
                         done = true;
                     }
+                    Some(Msg::Thumb { .. }) => {}
                     None => std::thread::yield_now(),
                 }
                 assert!(t0.elapsed().as_secs() < 10);

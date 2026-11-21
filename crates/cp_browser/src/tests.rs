@@ -25,6 +25,7 @@ struct Fake {
     item: Option<(String, f64)>,
     fx_added: Vec<String>,
     rate: f64,
+    thumbs_asked: std::collections::HashSet<String>,
 }
 
 impl Fake {
@@ -38,6 +39,7 @@ impl Fake {
             item: Some(("C:\\orig.wav".into(), 0.0)),
             fx_added: Vec::new(),
             rate: 1.0,
+            thumbs_asked: std::collections::HashSet::new(),
         }
     }
 
@@ -151,6 +153,55 @@ impl Host for Fake {
     fn add_fx(&mut self, name: &str) -> Result<(), String> {
         self.fx_added.push(name.to_string());
         Ok(())
+    }
+    fn thumb(&mut self, path: &str, min: &mut [f32], max: &mut [f32]) -> i32 {
+        self.a.poll();
+        let st = if self.thumbs_asked.insert(path.to_string()) {
+            self.a
+                .thumb_reader(path, Box::new(SynthReader(synth(path))))
+        } else {
+            self.a.thumb(path)
+        };
+        match st {
+            cp_audio::Thumb::Pending => 0,
+            cp_audio::Thumb::Failed => -1,
+            cp_audio::Thumb::Ready(d) => {
+                let n = min.len();
+                for i in 0..n {
+                    let e = d[i * d.len() / n];
+                    min[i] = e[0];
+                    max[i] = e[1];
+                }
+                1
+            }
+        }
+    }
+}
+
+/// Une matiere synthetique lue comme un fichier (stereo, 48 kHz).
+struct SynthReader(Vec<f32>);
+
+impl cp_audio::decode::Reader for SynthReader {
+    fn channels(&mut self) -> i32 {
+        2
+    }
+    fn sample_rate(&mut self) -> f64 {
+        48000.0
+    }
+    fn length(&mut self) -> f64 {
+        (self.0.len() / 2) as f64 / 48000.0
+    }
+    fn read(&mut self, time_s: f64, _sr: f64, nch: usize, out: &mut [f64]) -> usize {
+        let start = (time_s * 48000.0).round() as usize;
+        let frames = (self.0.len() / 2)
+            .saturating_sub(start)
+            .min(out.len() / nch);
+        for f in 0..frames {
+            for c in 0..nch {
+                out[f * nch + c] = self.0[(start + f) * 2 + c.min(1)] as f64;
+            }
+        }
+        frames
     }
 }
 
@@ -503,4 +554,37 @@ fn v2_collections_hasard_echange_effets_tempo() {
     // Le tempo : un fichier « 120 bpm » joue a 100/120 dans un projet a 100.
     assert_eq!(v2::bpm_from_name("Loop 120 bpm.wav"), Some(120.0));
     assert!((v2::sync_rate(120.0, 100.0).unwrap() - 100.0 / 120.0).abs() < 1e-12);
+}
+
+#[test]
+fn la_vue_samples_montre_une_forme_d_onde_par_fichier() {
+    let root = library();
+    let mut h = Fake::new();
+    let mut b = Browser::new(&shortcuts(&root), Path::new("."), None, Vec::new());
+    let mut sc = Screen::new(460, 520);
+    b.layout(460.0, 520.0, 1.0);
+    let lib = b
+        .rows
+        .iter()
+        .position(|&r| matches!(r, Row::Node(id) if b.tree.nodes[id].name == "Sound Library"))
+        .unwrap();
+    b.sel = Some(lib);
+    key(&mut b, &mut h, vk::RIGHT);
+    key(&mut b, &mut h, vk::DOWN); // Drums
+    key(&mut b, &mut h, vk::RIGHT);
+    key(&mut b, &mut h, vk::DOWN); // Hats
+    key(&mut b, &mut h, vk::RIGHT);
+    key(&mut b, &mut h, 0x57); // W
+    assert!(b.samples_view);
+    assert_eq!(b.lay.row_h, 44.0);
+    // Dessiner jusqu'a ce que les vignettes visibles soient pretes.
+    let t0 = std::time::Instant::now();
+    loop {
+        sc.shot(&mut b, &mut h, "6_samples");
+        if !b.thumbs_pending.get() {
+            break;
+        }
+        assert!(t0.elapsed().as_secs() < 20, "vignettes trop lentes");
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
 }

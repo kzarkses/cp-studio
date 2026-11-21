@@ -209,6 +209,9 @@ impl BrowserHost for Adapter<'_> {
     fn add_fx(&mut self, name: &str) -> Result<(), String> {
         self.r.add_fx(name)
     }
+    fn thumb(&mut self, path: &str, min: &mut [f32], max: &mut [f32]) -> i32 {
+        self.host.audio_thumb(path, min, max)
+    }
 }
 
 /// La fenetre du navigateur.
@@ -739,6 +742,7 @@ impl Module for App {
         }
         browser.looping = r.ext_get(SECTION, "browser_loop").as_deref() == Some("1");
         browser.sync = r.ext_get(SECTION, "browser_sync").as_deref() == Some("1");
+        browser.samples_view = r.ext_get(SECTION, "browser_samples").as_deref() == Some("1");
         if let Some(v) = r
             .ext_get(SECTION, "browser_wave_h")
             .and_then(|v| v.parse().ok())

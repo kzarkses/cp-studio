@@ -34,7 +34,9 @@ use crate::lock;
 #[derive(Default)]
 struct Clock {
     want: Vec<Hwnd>,
-    pending: Vec<Hwnd>,
+    /// Les vues qui n'ont pas fini leur image, et l'instant de la
+    /// composition qui l'a declenchee.
+    pending: Vec<(Hwnd, i64)>,
     info: FrameInfo,
     stop: bool,
 }
@@ -52,6 +54,49 @@ static CLOCK: Mutex<Clock> = Mutex::new(Clock {
     stop: false,
 });
 static WAKE: Condvar = Condvar::new();
+
+/// Ce que coute chaque image, mesure par le chargeur : le RETARD (de la
+/// composition de l'ecran au traitement du message par la fenetre : le fil
+/// principal etait-il occupe ?) et le DESSIN (le temps passe dans le module).
+#[derive(Clone, Copy, Debug, Default)]
+pub struct FrameCost {
+    pub frames: u64,
+    pub max_late_ms: f64,
+    pub max_draw_ms: f64,
+    pub late_over_period: u64,
+}
+
+static COST: Mutex<FrameCost> = Mutex::new(FrameCost {
+    frames: 0,
+    max_late_ms: 0.0,
+    max_draw_ms: 0.0,
+    late_over_period: 0,
+});
+
+pub fn cost() -> FrameCost {
+    *lock(&COST)
+}
+
+pub fn reset_cost() {
+    *lock(&COST) = FrameCost::default();
+}
+
+/// Une image traitee : `late` de la composition au debut du traitement,
+/// `draw` le temps du module (en compteur).
+pub fn record(late_qpc: i64, draw_qpc: i64) {
+    let (freq, period) = {
+        let c = lock(&CLOCK);
+        (c.info.qpc_freq.max(1), c.info.period_qpc)
+    };
+    let ms = |q: i64| q as f64 * 1000.0 / freq as f64;
+    let mut k = lock(&COST);
+    k.frames += 1;
+    k.max_late_ms = k.max_late_ms.max(ms(late_qpc));
+    k.max_draw_ms = k.max_draw_ms.max(ms(draw_qpc));
+    if period > 0 && late_qpc + draw_qpc > period {
+        k.late_over_period += 1;
+    }
+}
 static THREAD: Mutex<Option<JoinHandle<()>>> = Mutex::new(None);
 
 fn clock_thread() {
@@ -100,12 +145,12 @@ fn clock_thread() {
         let count = c.info.count;
         let want = c.want.clone();
         for h in want {
-            if c.pending.contains(&h) {
+            if c.pending.iter().any(|p| p.0 == h) {
                 c.info.missed += 1;
                 continue;
             }
             if win::post_message(h, WM_CP_FRAME, count as usize, 0) {
-                c.pending.push(h);
+                c.pending.push((h, now));
             }
         }
     }
@@ -115,7 +160,7 @@ pub fn frames(h: Hwnd, on: bool) {
     {
         let mut c = lock(&CLOCK);
         c.want.retain(|&x| x != h);
-        c.pending.retain(|&x| x != h);
+        c.pending.retain(|p| p.0 != h);
         if on {
             c.want.push(h);
         }
@@ -131,9 +176,17 @@ pub fn frames(h: Hwnd, on: bool) {
     WAKE.notify_all();
 }
 
-/// L'image a ete traitee : la vue peut en recevoir une autre.
-pub fn frame_done(h: Hwnd) {
-    lock(&CLOCK).pending.retain(|&x| x != h);
+/// L'image a ete traitee : la vue peut en recevoir une autre. Rend l'instant
+/// de la composition qui l'a declenchee.
+pub fn frame_done(h: Hwnd) -> i64 {
+    let mut c = lock(&CLOCK);
+    let posted = c
+        .pending
+        .iter()
+        .find(|p| p.0 == h)
+        .map_or(c.info.vblank_qpc, |p| p.1);
+    c.pending.retain(|p| p.0 != h);
+    posted
 }
 
 pub fn frame_info() -> FrameInfo {
@@ -143,7 +196,7 @@ pub fn frame_info() -> FrameInfo {
 pub fn forget(h: Hwnd) {
     let mut c = lock(&CLOCK);
     c.want.retain(|&x| x != h);
-    c.pending.retain(|&x| x != h);
+    c.pending.retain(|p| p.0 != h);
 }
 
 pub fn stop_clock() {

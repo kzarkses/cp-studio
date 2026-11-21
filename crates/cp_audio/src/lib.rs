@@ -63,6 +63,19 @@ struct ClipEntry {
     peaks: Option<Arc<Peaks>>,
 }
 
+/// Une vignette de forme d'onde (vue « samples ») : min et max de tranches.
+#[derive(Clone, Debug)]
+pub enum Thumb {
+    Pending,
+    Ready(Arc<Vec<[f32; 2]>>),
+    Failed,
+}
+
+/// Les vignettes : 200 tranches, pour les fichiers de 10 minutes au plus.
+pub const THUMB_POINTS: usize = 200;
+const THUMB_MAX_SECONDS: f64 = 600.0;
+const THUMBS_KEPT: usize = 4000;
+
 /// Un fichier ne depasse pas 1,5 Go en memoire (23 min en stereo a 48 kHz).
 const MAX_FILE_BYTES: usize = 1_500_000_000;
 
@@ -139,6 +152,7 @@ pub struct AudioHost {
     tickets: Vec<(u32, Ticket)>,
     /// Les decodages en cours : ticket -> clip (pour y poser les pics).
     in_flight: Vec<(u32, ClipH)>,
+    thumbs: std::collections::HashMap<String, Thumb>,
     next_ticket: u32,
     decoding: usize,
     /// Les voix lancees par `play`, rendues des qu'elles ont fini de sonner.
@@ -178,6 +192,7 @@ impl AudioHost {
             decoder: Decoder::new(),
             tickets: Vec::new(),
             in_flight: Vec::new(),
+            thumbs: std::collections::HashMap::new(),
             next_ticket: 1,
             decoding: 0,
             voices: Vec::new(),
@@ -464,6 +479,48 @@ impl AudioHost {
         }
     }
 
+    /// La vignette d'un fichier : demandee au premier appel (basse priorite),
+    /// rendue quand elle est prete.
+    pub fn thumb(&mut self, path: &str) -> Thumb {
+        if let Some(t) = self.thumbs.get(path) {
+            return t.clone();
+        }
+        if self.thumbs.len() >= THUMBS_KEPT {
+            self.thumbs.clear();
+        }
+        let src = self
+            .reaper
+            .as_ref()
+            .and_then(|r| cp_sys::audio::open_file(r, path));
+        let Some(src) = src else {
+            self.thumbs.insert(path.to_string(), Thumb::Failed);
+            return Thumb::Failed;
+        };
+        self.thumb_reader(path, Box::new(src))
+    }
+
+    /// Une vignette depuis une source quelconque (tests).
+    pub fn thumb_reader(&mut self, path: &str, mut src: Box<dyn Reader>) -> Thumb {
+        let st = match decode::shape(src.as_mut()) {
+            Ok(sh) if (sh.frames as f64) / sh.srate <= THUMB_MAX_SECONDS => {
+                let job = decode::ThumbJob {
+                    path: path.to_string(),
+                    src,
+                    shape: sh,
+                    points: THUMB_POINTS,
+                };
+                if self.decoder.submit_thumb(job) {
+                    Thumb::Pending
+                } else {
+                    Thumb::Failed
+                }
+            }
+            _ => Thumb::Failed,
+        };
+        self.thumbs.insert(path.to_string(), st.clone());
+        st
+    }
+
     /// Le clip est-il entierement decode ?
     pub fn clip_complete(&self, h: ClipH) -> bool {
         self.clip(h).is_some_and(|(c, _)| c.complete())
@@ -474,6 +531,15 @@ impl AudioHost {
     pub fn poll(&mut self) {
         while let Some(m) = self.decoder.try_msg() {
             match m {
+                decode::Msg::Thumb { path, src, data } => {
+                    drop(src);
+                    let st = if data.is_empty() {
+                        Thumb::Failed
+                    } else {
+                        Thumb::Ready(Arc::new(data))
+                    };
+                    self.thumbs.insert(path, st);
+                }
                 decode::Msg::First { ticket } => {
                     if let Some(e) = self.tickets.iter_mut().find(|(k, _)| *k == ticket) {
                         if let Ticket::Pending(h) = e.1 {

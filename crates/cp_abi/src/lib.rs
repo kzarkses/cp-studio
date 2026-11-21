@@ -13,7 +13,7 @@ use core::ffi::{c_char, c_void};
 
 /// Version du contrat. Un entier : jamais de mineure (le piege du double de
 /// l'ancien moteur, ou `1.10` valait `1.1`).
-pub const ABI: u32 = 4;
+pub const ABI: u32 = 5;
 
 /// Le symbole exporte par le module.
 pub const ENTRY_SYMBOL: &[u8] = b"cp_module_entry\0";
@@ -181,6 +181,11 @@ pub struct AudioApi {
     pub set: extern "C" fn(voice: u32, param: u32, value: f64) -> i32,
     /// Le taux du peripherique audio.
     pub srate: extern "C" fn() -> f64,
+    /// La vignette d'un fichier (min et max de `n` tranches, canaux fondus),
+    /// demandee au premier appel et calculee en basse priorite. Rend 1 (rendue
+    /// dans `min`/`max`), 0 (en cours) ou -1 (impossible). ABI 5.
+    pub thumb:
+        extern "C" fn(path: *const u8, len: usize, min: *mut f32, max: *mut f32, n: usize) -> i32,
 }
 
 /// Ce que le module offre au chargeur. Tous les appels se font sur le fil

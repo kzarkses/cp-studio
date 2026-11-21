@@ -283,6 +283,29 @@ impl Host for LoaderHost {
         audio(0.0, |a| a.core().srate())
     }
 
+    fn audio_thumb(&self, path: &str, min: &mut [f32], max: &mut [f32]) -> i32 {
+        match audio(cp_audio::Thumb::Failed, |a| a.thumb(path)) {
+            cp_audio::Thumb::Pending => 0,
+            cp_audio::Thumb::Failed => -1,
+            cp_audio::Thumb::Ready(d) => {
+                // Reechantillonne les tranches a la taille demandee.
+                let n = min.len().min(max.len());
+                for i in 0..n {
+                    let a = i * d.len() / n.max(1);
+                    let b = ((i + 1) * d.len() / n.max(1)).max(a + 1).min(d.len());
+                    let (mut lo, mut hi) = (f32::MAX, f32::MIN);
+                    for e in &d[a..b] {
+                        lo = lo.min(e[0]);
+                        hi = hi.max(e[1]);
+                    }
+                    min[i] = lo;
+                    max[i] = hi;
+                }
+                1
+            }
+        }
+    }
+
     fn create_view(
         &self,
         title: &str,
@@ -723,13 +746,20 @@ fn wnd_proc(m: &WinMsg) -> isize {
         lock(&WINDOWS).retain(|h| *h != m.hwnd);
         views::forget(m.hwnd);
     }
-    if m.msg == WM_CP_FRAME {
-        views::frame_done(m.hwnd);
-    }
+    let frame_vblank = if m.msg == WM_CP_FRAME {
+        Some(views::frame_done(m.hwnd))
+    } else {
+        None
+    };
     if let Some(hot) = HOT.get() {
         let sane = hot.fault().is_none();
         let mut out: isize = 0;
-        match hot.call(|api| (api.wnd_proc)(m.hwnd.0, m.msg, m.wp, m.lp, &mut out)) {
+        let t0 = cp_sys::ui::qpc();
+        let r = hot.call(|api| (api.wnd_proc)(m.hwnd.0, m.msg, m.wp, m.lp, &mut out));
+        if let Some(vb) = frame_vblank {
+            views::record(t0 - vb, cp_sys::ui::qpc() - t0);
+        }
+        match r {
             Some(1) => return out,
             Some(FAULT) => check_fault(sane, "fenetre"),
             _ => {}

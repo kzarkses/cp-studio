@@ -108,6 +108,10 @@ pub trait Host {
     fn add_fx(&mut self, _name: &str) -> Result<(), String> {
         Err("effects are not available".into())
     }
+    /// La vignette d'un fichier : 1 rendue, 0 en cours, -1 impossible.
+    fn thumb(&mut self, _path: &str, _min: &mut [f32], _max: &mut [f32]) -> i32 {
+        -1
+    }
 }
 
 /// Une ligne de menu (`id` 0 = separateur).
@@ -191,6 +195,7 @@ pub struct Layout {
     pub vol_w: f32,
     pub star_x: f32,
     pub sync_x: f32,
+    pub view_x: f32,
 }
 
 /// Un appui de souris en cours sur la liste.
@@ -268,6 +273,11 @@ pub struct Browser {
     pub wave_h_pref: f32,
     /// La racine des effets demande sa liste au prochain evenement.
     fx_wanted: bool,
+    /// La vue « samples » : une forme d'onde sous chaque fichier.
+    pub samples_view: bool,
+    /// Des vignettes visibles sont en cours de calcul (ecrit pendant le
+    /// dessin).
+    pub thumbs_pending: std::cell::Cell<bool>,
 }
 
 impl Browser {
@@ -314,6 +324,8 @@ impl Browser {
             seed: v2::seed(),
             wave_h_pref: 120.0,
             fx_wanted: false,
+            samples_view: false,
+            thumbs_pending: std::cell::Cell::new(false),
         };
         b.rebuild();
         b
@@ -349,6 +361,7 @@ impl Browser {
             || self.db_job.is_some()
             || self.grab != Grab::None
             || (self.wave.has() && !self.wave.info.complete())
+            || self.thumbs_pending.get()
     }
 
     // -----------------------------------------------------------------------
@@ -422,7 +435,7 @@ impl Browser {
         let s = |v: f32| (v * scale).round();
         let bar_h = s(34.0);
         let status_h = s(22.0);
-        let row_h = s(22.0);
+        let row_h = if self.samples_view { s(44.0) } else { s(22.0) };
         let wave_h = s(self.wave_h_pref.clamp(40.0, 2000.0))
             .min((h - bar_h - status_h - s(80.0)).max(s(30.0)))
             .max(s(30.0).min(h * 0.3));
@@ -434,8 +447,9 @@ impl Browser {
         let play_x = vol_x - s(8.0) - btn;
         let loop_x = play_x - s(4.0) - btn;
         let sync_x = loop_x - s(4.0) - btn;
+        let view_x = sync_x - s(4.0) - btn;
         let search_x = pad;
-        let search_w = (sync_x - s(8.0) - search_x).max(s(40.0));
+        let search_w = (view_x - s(8.0) - search_x).max(s(40.0));
         let list_y = bar_h + 1.0;
         let wave_y = h - status_h - wave_h;
         self.lay = Layout {
@@ -459,6 +473,7 @@ impl Browser {
             vol_w,
             star_x,
             sync_x,
+            view_x,
         };
         self.wave.layout(w);
         self.layout_scroll();
@@ -956,7 +971,7 @@ impl Browser {
             0x43 if m.ctrl => KeyUse::Eat,                   // Ctrl+C : le chemin
             0x46 | 0x4C if !m.ctrl && !m.alt => KeyUse::Eat, // F favori, L boucle
             0x31..=0x37 if !m.ctrl && !m.alt => KeyUse::Eat, // 1-7 collections
-            0x52 | 0x51 | 0x54 if !m.ctrl && !m.alt => KeyUse::Eat, // R hasard, Q echange, T tempo
+            0x52 | 0x51 | 0x54 | 0x57 if !m.ctrl && !m.alt => KeyUse::Eat, // R hasard, Q echange, T tempo, W vue
             _ => KeyUse::NotMine,
         }
     }
@@ -1064,6 +1079,7 @@ impl Browser {
             0x31..=0x37 => self.toggle_collection((k - 0x30) as u8),
             0x52 => self.random_pick(h, m.shift),
             0x51 => self.swap_toggle(h),
+            0x57 => self.toggle_samples_view(h),
             0x54 => {
                 self.sync = !self.sync;
                 h.save("sync", if self.sync { "1" } else { "0" });
@@ -1123,6 +1139,18 @@ impl Browser {
     // -----------------------------------------------------------------------
     // La souris
     // -----------------------------------------------------------------------
+
+    /// W : la vue « samples » (une forme d'onde sous chaque fichier).
+    pub fn toggle_samples_view(&mut self, h: &mut dyn Host) {
+        // Garder la ligne du haut en vue en changeant la hauteur des lignes.
+        let top = (self.scroll.pos / self.lay.row_h.max(1.0)).floor();
+        self.samples_view = !self.samples_view;
+        h.save("samples", if self.samples_view { "1" } else { "0" });
+        let (w, hh, sc) = (self.lay.w, self.lay.h, self.scale);
+        self.layout(w, hh, sc);
+        self.scroll.pos = top * self.lay.row_h;
+        self.scroll.clamp();
+    }
 
     /// Sur la couture entre la liste et la forme d'onde (a 4 px pres).
     pub fn over_split(&self, y: f32) -> bool {
@@ -1262,7 +1290,9 @@ impl Browser {
             if b != Button::Left {
                 return;
             }
-            if self.btn_hit(x, y, self.lay.sync_x) {
+            if self.btn_hit(x, y, self.lay.view_x) {
+                self.toggle_samples_view(h);
+            } else if self.btn_hit(x, y, self.lay.sync_x) {
                 self.sync = !self.sync;
                 h.save("sync", if self.sync { "1" } else { "0" });
                 if self.voice != 0 {

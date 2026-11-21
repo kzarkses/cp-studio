@@ -151,6 +151,17 @@ impl HostRef {
     pub fn audio_srate(&self) -> f64 {
         (self.0.audio.srate)()
     }
+    /// La vignette d'un fichier : 1 rendue, 0 en cours, -1 impossible.
+    pub fn audio_thumb(&self, path: &str, min: &mut [f32], max: &mut [f32]) -> i32 {
+        let n = min.len().min(max.len());
+        (self.0.audio.thumb)(
+            path.as_ptr(),
+            path.len(),
+            min.as_mut_ptr(),
+            max.as_mut_ptr(),
+            n,
+        )
+    }
 
     // --- les vues
 

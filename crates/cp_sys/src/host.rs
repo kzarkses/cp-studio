@@ -69,6 +69,10 @@ pub trait Host: Send + Sync {
     fn audio_srate(&self) -> f64 {
         0.0
     }
+    /// 1 rendue, 0 en cours, -1 impossible.
+    fn audio_thumb(&self, _path: &str, _min: &mut [f32], _max: &mut [f32]) -> i32 {
+        -1
+    }
 
     // --- les vues (ABI 3)
     #[allow(clippy::too_many_arguments)]
@@ -120,6 +124,7 @@ static API: HostApi = HostApi {
         voice: a_voice,
         set: a_set,
         srate: a_srate,
+        thumb: a_thumb,
     },
     create_view: v_create,
     destroy_window: v_destroy,
@@ -322,6 +327,22 @@ extern "C" fn a_voice(voice: u32, pos: *mut f64) -> i32 {
 
 extern "C" fn a_set(voice: u32, param: u32, value: f64) -> i32 {
     with(false, |h| h.audio_set(voice, param, value)) as i32
+}
+
+extern "C" fn a_thumb(path: *const u8, len: usize, min: *mut f32, max: *mut f32, n: usize) -> i32 {
+    if min.is_null() || max.is_null() || n == 0 {
+        return -1;
+    }
+    // SAFETY: le module passe un chemin valide et deux tableaux distincts de
+    // `n` f32, a lui, pendant l'appel.
+    let (p, lo, hi) = unsafe {
+        (
+            bytes(path, len),
+            std::slice::from_raw_parts_mut(min, n),
+            std::slice::from_raw_parts_mut(max, n),
+        )
+    };
+    with(-1, |h| h.audio_thumb(&String::from_utf8_lossy(p), lo, hi))
 }
 
 extern "C" fn a_srate() -> f64 {

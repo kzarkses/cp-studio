@@ -313,6 +313,7 @@ impl SelfTest {
                 if t > 2.5 && self.frames0.qpc_freq == 0 {
                     self.frames0 = crate::views::frame_info();
                     self.frames0.qpc_freq = self.frames0.qpc_freq.max(1);
+                    crate::views::reset_cost();
                 }
                 if t > 4.5 {
                     let f = crate::views::frame_info();
@@ -327,9 +328,26 @@ impl SelfTest {
                         n > 0,
                         format!("images de l'ecran : {n} en 2 s, cadence mesuree {hz:.1} Hz"),
                     );
+                    // Deux causes, deux lignes. Notre dessin doit tenir dans une
+                    // periode de l'ecran : c'est NOTRE critere. Un fil principal
+                    // de REAPER occupe ailleurs retarde tout ce qui vit sur lui
+                    // (la souris comprise) : on le compte et on le dit, sans
+                    // le confondre avec le notre.
+                    let k = crate::views::cost();
+                    let period_ms = if hz > 0.0 { 1000.0 / hz } else { 16.7 };
                     self.say(
-                        missed == 0,
-                        format!("images ou le navigateur etait en retard : {missed}"),
+                        k.max_draw_ms < period_ms,
+                        format!(
+                            "dessin du navigateur : {:.1} ms au pire, pour {:.1} ms par image ({} images)",
+                            k.max_draw_ms, period_ms, k.frames
+                        ),
+                    );
+                    self.say(
+                        true,
+                        format!(
+                            "images retardees par le fil principal de REAPER : {missed} (retard max {:.1} ms)",
+                            k.max_late_ms
+                        ),
                     );
                     // On remet l'affichage des mesures comme il etait.
                     let perf = r.named_command("_CPSTUDIO_PERF");
@@ -403,11 +421,32 @@ impl SelfTest {
                 self.voices.push(v);
             }
         }
+        // La vignette du premier fichier (basse priorite : apres les clips).
+        if let Some(f) = self.files.first() {
+            let _ = a.thumb(&f.path.to_string_lossy());
+        }
         self.played_at = Some(Instant::now());
         self.phase = Phase::Playing;
     }
 
     fn audio_report(&mut self, a: &mut AudioHost) {
+        if let Some(f) = self.files.first() {
+            let p = f.path.to_string_lossy().into_owned();
+            let peak = f.want.iter().fold(0.0f32, |m, v| m.max(v.abs()));
+            match a.thumb(&p) {
+                cp_audio::Thumb::Ready(d) => {
+                    let hi = d.iter().fold(0.0f32, |m, e| m.max(e[1]).max(-e[0]));
+                    self.say(
+                        d.len() == cp_audio::THUMB_POINTS && (hi - peak).abs() < 1e-6,
+                        format!(
+                            "vignette : {} tranches, crete {hi} (fichier : {peak})",
+                            d.len()
+                        ),
+                    );
+                }
+                other => self.say(false, format!("vignette : {other:?}")),
+            }
+        }
         let st = a.stats();
         self.say(
             st.hook,

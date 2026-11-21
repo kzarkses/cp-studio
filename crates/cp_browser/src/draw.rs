@@ -58,7 +58,8 @@ impl Browser {
         cv.clear(th.bg);
         self.draw_bar(cv, g);
         cv.fill_rect(0.0, l.bar_h, l.w, 1.0, th.seam);
-        self.draw_list(cv, g);
+        self.thumbs_pending.set(false);
+        self.draw_list(cv, g, h);
         cv.fill_rect(0.0, l.wave_y - 1.0, l.w, 1.0, th.seam);
         self.draw_wave(cv, g, h);
         let rate = self
@@ -138,6 +139,20 @@ impl Browser {
                 filled,
             );
         };
+        let view_tint = if self.samples_view {
+            th.accent
+        } else {
+            th.text_dim
+        };
+        button(
+            cv,
+            g,
+            l.view_x,
+            Icon::AudioLines,
+            self.samples_view,
+            false,
+            view_tint,
+        );
         let sync_tint = if self.sync { th.accent } else { th.text_dim };
         button(cv, g, l.sync_x, Icon::Music, self.sync, false, sync_tint);
         let loop_tint = if self.looping { th.accent } else { th.text_dim };
@@ -245,6 +260,7 @@ impl Browser {
         &self,
         cv: &mut Canvas<'_>,
         g: &mut Gfx<'_>,
+        h: &mut dyn Host,
         i: usize,
         r: Row,
         y: f32,
@@ -271,6 +287,14 @@ impl Browser {
             th.bg
         };
         cv.fill_rect(0.0, y, w, rh, bg);
+        // En vue « samples », le nom occupe le haut de la ligne, la forme
+        // d'onde le bas : tout ce qui suit se place dans la bande du nom.
+        let full_rh = rh;
+        let rh = if self.samples_view {
+            th.s(22.0).min(rh)
+        } else {
+            rh
+        };
         let f = th.font();
         let s = |v: f32| th.s(v);
         let (depth, name, container, expanded, section) = match r {
@@ -417,9 +441,43 @@ impl Browser {
             g.text
                 .draw_in(cv, f, x, y, avail, rh, name, col, Align::Left);
         }
+        // La vue « samples » : la forme d'onde du fichier sous son nom.
+        if self.samples_view && self.row_is_file(r) && full_rh > rh {
+            if let Some(p) = self.row_path(r) {
+                let tx = x;
+                let tw = (w - tx - s(10.0)).max(0.0) as usize;
+                let ty = y + rh;
+                let thh = full_rh - rh - s(4.0);
+                if tw > 4 && thh > 2.0 {
+                    let mut lo = vec![0.0f32; tw];
+                    let mut hi = vec![0.0f32; tw];
+                    match h.thumb(&p.to_string_lossy(), &mut lo, &mut hi) {
+                        1 => {
+                            let mid = ty + thh * 0.5;
+                            let half = thh * 0.5;
+                            let c = if sel {
+                                cp_gfx::rgb(200, 225, 255)
+                            } else {
+                                th.wave.fade(0.75)
+                            };
+                            for k in 0..tw {
+                                let a = (mid - hi[k].clamp(-1.0, 1.0) * half).floor();
+                                let b = (mid - lo[k].clamp(-1.0, 1.0) * half).ceil();
+                                cv.fill_rect(tx + k as f32, a, 1.0, (b - a).max(1.0), c);
+                            }
+                        }
+                        0 => {
+                            self.thumbs_pending.set(true);
+                            cv.fill_rect(tx, ty + thh * 0.5, tw as f32, 1.0, th.seam);
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
     }
 
-    fn draw_list(&mut self, cv: &mut Canvas<'_>, g: &mut Gfx<'_>) {
+    fn draw_list(&mut self, cv: &mut Canvas<'_>, g: &mut Gfx<'_>, h: &mut dyn Host) {
         let th = g.th;
         let l = self.lay;
         if !cv.push_clip(0.0, l.list_y, l.w, l.list_h) {
@@ -437,14 +495,14 @@ impl Browser {
         let n = (l.list_h / rh).ceil() as usize + 1;
         for i in first..(first + n).min(self.rows.len()) {
             let y = l.list_y + i as f32 * rh - self.scroll.pos;
-            self.draw_row(cv, g, i, self.rows[i], y, w, false);
+            self.draw_row(cv, g, h, i, self.rows[i], y, w, false);
         }
         // Les en-tetes colles, empiles.
         let sticky = self.sticky();
         for (k, &id) in sticky.iter().enumerate() {
             let y = l.list_y + k as f32 * rh;
             if let Some(i) = self.rows.iter().position(|&r| r == Row::Node(id)) {
-                self.draw_row(cv, g, i, Row::Node(id), y, w, true);
+                self.draw_row(cv, g, h, i, Row::Node(id), y, w, true);
             }
         }
         if !sticky.is_empty() {
