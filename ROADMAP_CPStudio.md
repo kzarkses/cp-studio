@@ -54,7 +54,7 @@ Ce que ces mots veulent dire, en critères :
 | ✅ B3 (base) : texte par GDI, cache de glyphes, mesure, « … » | 2026-11-21 | captures du vrai REAPER |
 | ✅ B4 (base) : icônes Lucide en vecteur (SVG avec arcs) | 2026-11-21 | test : chaque icône se dessine dans son carré |
 | ✅ B5 : horloge calée sur le vrai rafraîchissement de l'écran (`D3DKMTWaitForVerticalBlankEvent` ; `DwmFlush` s'arrêtait sur un écran immobile) ; ne repeindre que ce qui change (la forme d'onde seule pendant l'écoute) et n'envoyer à l'écran que les rangées changées ; une garde laisse toujours au moins la moitié du fil principal à REAPER | 2026-11-21 | vrai REAPER, ancré en 870 × 1298 : 0,4 ms par image d'animation, 1,8 ms par redessin complet, battement de REAPER 42 ms au pire (le gel signalé par Cedric : 32 s) ; reste : le geste de 10 s compté à la main, la latence souris → écran |
-| ✅ B6 (base) : souris (capture, double-clic, molette verticale et horizontale, curseurs), caractères par `WM_CHAR` (AZERTY), menus contextuels natifs, presse-papiers, glisser-déposer Windows vers REAPER | 2026-11-21 | tests ; vrai REAPER pour le clavier ; reste : infobulles, glisser depuis l'Explorateur vers nos fenêtres |
+| ✅ B6 (base) : souris (capture, double-clic, molette verticale et horizontale, curseurs), caractères par `WM_CHAR` (AZERTY), menus contextuels natifs, presse-papiers, glisser-déposer Windows vers REAPER, infobulles natives (CP Transport) | 2026-11-21, infobulles le 2026-11-22 | tests ; vrai REAPER pour le clavier ; reste : glisser depuis l'Explorateur vers nos fenêtres, infobulles dans le navigateur |
 | ✅ B7 (base) : mesures à l'écran (temps d'image, cadence, images sautées) | 2026-11-21 | action « Performance overlay » |
 | ✅ A2 (base) : écoute en flux (jouable dès la première seconde décodée), pics à plusieurs résolutions | 2026-11-21 | tests ; limite 1,5 Go par fichier (23 min stéréo 48 kHz) ; reste : le vrai flux disque pour les fichiers de plusieurs heures |
 | ✅ A3 (premier critère) : une section de N échantillons rend N échantillons, N de 1 à 4096 | 2026-11-21 | test `cp_audio` |
@@ -63,7 +63,7 @@ Ce que ces mots veulent dire, en critères :
 | ✅ Premier retour de Cedric : « stable et fonctionnel, barebone mais c'est là », sauf un gel de REAPER en mode ancré | 2026-11-21 | gel trouvé et corrigé à la racine (voir B5), l'auto-test mesure désormais ce cas |
 | ✅ Les places natives (ABI 6) : une vue de CP Studio à la place d'une vue de REAPER (l'arrangement, le transport), tenue et rendue par la DLL fixe | 2026-11-22 | vrai REAPER : CP Transport posé sur le transport natif masqué (2560 × 36 en 0,0) et lui cède la place quand Cédric le rallume ; le navigateur à la place de l'arrangement (2557 × 1310), clavier, rechargement à chaud, Arrange / Browser |
 | ✅ CP Transport : transport, compteur, tempo (glisser, molette, saisie), signature, Tap, métronome, vitesse, icônes d'actions (ajouter par la liste des actions de REAPER, retirer, déplacer), sélecteur de vues avec la place de chaque vue | 2026-11-22 | 6 tests et planches PNG ; démarre seul avec REAPER |
-| ✅ CP Guitar Tab en Rust : l'item choisi devient une piste MIDI (pour comparer à l'oreille) et une partition MusicXML (portée et tablature, rythme calé sur le tempo du projet), ouverte dans MuseScore ; icône dans CP Transport | 2026-11-22 | réseau à 3,8e-5 d'onnxruntime ; vrai REAPER : un riff de 8 noires retrouvé note pour note en 0,5 s |
+| ✅ CP Guitar Tab en Rust : l'item choisi devient une piste MIDI (pour comparer à l'oreille) et une partition MusicXML (portée et tablature, rythme calé sur le tempo du projet, marteaux et tirés), ouverte dans MuseScore ; réglages (seuils, note la plus courte, grille, accordage) ; icône dans CP Transport | 2026-11-22 | réseau à 3,8e-5 d'onnxruntime ; vrai REAPER : un riff de 8 noires retrouvé note pour note en 0,5 s |
 | ▶ **Maintenant : le jalon 1 à l'usage.** Cedric s'en sert au quotidien ; on corrige et on polit à partir de ses retours. Ensuite, le choix de l'application suivante | | |
 
 **Le but immédiat est le jalon 1** (voir plus bas) : un navigateur de fichiers
@@ -472,7 +472,7 @@ REAPER, et en fait un vrai retour.
 | FX Constellation | moteur de modulation, pad, graphe, liens | mémoires `project-fx-constellation-refonte`, `project-moteur-modulation-plan`, `ROADMAP_FXConstellation.md` |
 | Séquenceur / Sound Gen | séquenceur à la Pigments, synthé JSFX | mémoires `project-sequenceur`, `project-soundgen-modulation`, `ROADMAP_Sequenceur.md` |
 | Vidéo | caméra, stop motion, calage par le son | mémoire `project-video`, `ROADMAP_Video.md` |
-| Guitar Tab | audio → tablature dans MuseScore | **construit le 2026-11-22** (`cp_tab`) ; à venir : liés (hammer-on, pull-off), bends écrits, triolets, accordages, réglage de sensibilité |
+| Guitar Tab | audio → tablature dans MuseScore | **construit le 2026-11-22** (`cp_tab`) ; à venir : bends écrits, triolets, plusieurs voix |
 | ChordLab, PaintSynth, barres d'outils… | les plus petits outils | mémoires et anciennes ROADMAP |
 
 Pour chaque application, une ROADMAP à elle (`ROADMAP_<Nom>.md`) sera écrite au
