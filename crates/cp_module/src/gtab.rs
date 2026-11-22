@@ -32,6 +32,7 @@ use std::sync::atomic::Ordering;
 use std::thread::JoinHandle;
 use std::time::Instant;
 
+use crate::tview::cmd;
 use cp_abi::{
     PLACE_ARRANGE, PLACE_HELD, VIEW_DOCK, VIEW_FLOAT, VIEW_PLACED, WM_CP_ACCEL, WM_CP_FRAME,
 };
@@ -180,6 +181,8 @@ pub(crate) struct GPart {
     peak_retry: HashMap<String, Instant>,
     /// La touche dont on a pris l'appui (on prend aussi son relachement).
     key_down: Option<u32>,
+    /// L'ecoute a la souris en cours (la touche tenue).
+    audition: Option<Audition>,
     /// La vue de l'arrangement telle qu'on l'a lue (debut s, pixels par
     /// seconde), et celle de Guitar Tab telle qu'on l'a posee (noire au bord,
     /// zoom) : celle qui a change entraine l'autre.
@@ -264,6 +267,7 @@ impl GPart {
             midi_of: HashMap::new(),
             sel_sig: None,
             key_down: None,
+            audition: None,
             view_seen: None,
             view_pushed: None,
         }
@@ -1895,6 +1899,99 @@ impl App {
         )
     }
 
+    /// La touche d'ecoute de Cedric (², SWS/BR « Play from mouse cursor
+    /// position and solo track under mouse for the duration (perform until
+    /// shortcut released) »), reconnue a son action dans `reaper-kb.ini` :
+    /// sur Guitar Tab, la lecture part de la date sous la souris, la guitare
+    /// sous elle seule, jusqu'au relachement. La souris ailleurs, la touche
+    /// reste a REAPER (et a SWS).
+    fn gtab_audition_key(
+        &mut self,
+        hwnd: Hwnd,
+        message: u32,
+        vk: u32,
+        ext: bool,
+        md: cp_ui::Mods,
+    ) -> Option<isize> {
+        let down = matches!(message, msg::KEYDOWN | msg::SYSKEYDOWN);
+        let up = matches!(message, msg::KEYUP | msg::SYSKEYUP);
+        if self.gt.audition.as_ref().is_some_and(|a| a.vk == vk) {
+            if up {
+                self.gtab_audition_end();
+            }
+            // Les repetitions de la touche tenue : mangees.
+            return Some(1);
+        }
+        if !down {
+            return None;
+        }
+        let solo = self.main_play(vk, ext, md)?;
+        let (x, y) = Self::mouse_over(hwnd)?;
+        let (qn, t) = self.gt.arr.play_target(x, y)?;
+        self.gtab_audition_start(vk, qn, t.filter(|_| solo));
+        Some(1)
+    }
+
+    /// La lecture depuis `qn`, la guitare `t` seule (son solo, les autres
+    /// retires) ; le curseur d'edition ne bouge pas, comme chez SWS.
+    fn gtab_audition_start(&mut self, vk: u32, qn: f64, t: Option<usize>) {
+        let r = self.r;
+        let ps = r.play_state();
+        if ps & play::RECORDING != 0 {
+            return;
+        }
+        let was_playing = ps & play::PLAYING != 0 && ps & play::PAUSED == 0;
+        let mut solos = Vec::new();
+        let head = t
+            .and_then(|t| self.gt.arr.tracks.get(t))
+            .map(|tr| tr.head.guid.clone());
+        if let Some(g) = head {
+            // La meme piste que le bouton Solo (le bus de la guitare), en
+            // place comme le reglage de REAPER.
+            let target = r.track_ext(&g, "CPGT_bus").unwrap_or(g);
+            let in_place = r.config_int("soloip").is_none_or(|v| v != 0);
+            solos = r.tracks_values("I_SOLO");
+            r.set_all_tracks_value("I_SOLO", 0.0);
+            r.set_track_value(&target, "I_SOLO", if in_place { 2.0 } else { 1.0 });
+        }
+        let cur = r.cursor_position();
+        let at = r.qn_to_time(qn);
+        if was_playing {
+            r.set_edit_cursor_ex(at, true);
+        } else {
+            if ps & play::PAUSED != 0 {
+                r.main_on_command(cmd::STOP);
+            }
+            r.set_edit_cursor_ex(at, false);
+            r.main_on_command(cmd::PLAY);
+        }
+        r.set_edit_cursor_ex(cur, false);
+        self.gt.audition = Some(Audition {
+            vk,
+            solos,
+            was_playing,
+        });
+        self.gtab_sync();
+        self.gtab_want_frames(true);
+    }
+
+    /// La touche relachee : la lecture s'arrete (si elle ne tournait pas
+    /// avant), les solos d'avant reviennent.
+    fn gtab_audition_end(&mut self) {
+        let Some(a) = self.gt.audition.take() else {
+            return;
+        };
+        let r = self.r;
+        let ps = r.play_state();
+        if !a.was_playing && ps & play::PLAYING != 0 && ps & play::RECORDING == 0 {
+            r.main_on_command(cmd::STOP);
+        }
+        if !a.solos.is_empty() {
+            r.set_tracks_values("I_SOLO", &a.solos);
+        }
+        self.gtab_sync();
+    }
+
     // -----------------------------------------------------------------------
     // Les actions
     // -----------------------------------------------------------------------
@@ -2697,6 +2794,13 @@ impl App {
     // -----------------------------------------------------------------------
 
     pub(crate) fn gtab_tick(&mut self) {
+        // L'ecoute a la souris : son relachement a pu aller ailleurs (une
+        // autre fenetre a pris le clavier).
+        if let Some(vk) = self.gt.audition.as_ref().map(|a| a.vk) {
+            if !ui::key_held(vk) {
+                self.gtab_audition_end();
+            }
+        }
         // La transcription en cours.
         if let Some(j) = &mut self.gt.job {
             let (done, total) = (
@@ -3262,6 +3366,7 @@ impl App {
     }
 
     pub(crate) fn gtab_close(&mut self, user: bool) {
+        self.gtab_audition_end();
         let in_band = self.gtab_in_band();
         if let Some(w) = &mut self.gt.win {
             w.closing = true;
@@ -3439,6 +3544,9 @@ impl App {
                 };
                 let vk = k.wp as u32;
                 let ext = (k.lp >> 24) & 1 == 1;
+                if let Some(r) = self.gtab_audition_key(hwnd, k.message, vk, ext, md) {
+                    return Some(r);
+                }
                 // Les editions au survol de Cedric (Q, D, S, Z, A, E dans
                 // l'arrangement) : sur ce qui est sous la souris, ici. La
                 // souris ailleurs : la touche reste a REAPER.
@@ -3675,6 +3783,16 @@ fn clean_name(s: &str) -> String {
         .collect();
     let t = t.trim().trim_end_matches('.').to_string();
     if t.is_empty() { "Guitar Tab".into() } else { t }
+}
+
+/// L'ecoute a la souris tant que la touche est tenue : ce qu'il faut rendre
+/// au relachement.
+pub(crate) struct Audition {
+    vk: u32,
+    /// Les solos d'avant (vide : aucun solo pose).
+    solos: Vec<(String, f64)>,
+    /// La lecture tournait deja : elle continue au relachement.
+    was_playing: bool,
 }
 
 /// Un chemin libre : « nom.musicxml », sinon « nom (2).musicxml »...

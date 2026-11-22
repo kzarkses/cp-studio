@@ -668,6 +668,16 @@ impl Reaper {
         }
     }
 
+    /// Le curseur d'edition, la lecture laissee ou elle est (`seek` faux) ou
+    /// emmenee avec lui (`seek` vrai). La vue ne bouge pas.
+    pub fn set_edit_cursor_ex(&self, t: f64, seek: bool) {
+        type F = unsafe extern "C" fn(f64, bool, bool);
+        if let Some(f) = self.f::<F>(c"SetEditCurPos") {
+            // SAFETY: fil principal.
+            unsafe { f(t.max(0.0), false, seek) };
+        }
+    }
+
     /// Le curseur d'edition (la lecture le suit si elle tourne).
     pub fn set_edit_cursor(&self, t: f64) {
         type F = unsafe extern "C" fn(f64, bool, bool);

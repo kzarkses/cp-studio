@@ -451,6 +451,49 @@ impl Reaper {
         }
     }
 
+    /// Une valeur de chaque piste, par GUID (pour la rendre ensuite telle
+    /// quelle : les solos d'avant une ecoute).
+    pub fn tracks_values(&self, key: &str) -> Vec<(String, f64)> {
+        let (Some(f), Ok(c)) = (
+            self.tf::<GetVal>(c"GetMediaTrackInfo_Value"),
+            CString::new(key),
+        ) else {
+            return Vec::new();
+        };
+        self.tracks_raw()
+            .into_iter()
+            .filter_map(|tr| {
+                let g = self.tr_str(tr, "GUID", None)?;
+                // SAFETY: piste vivante (lue a l'instant), cle terminee par
+                // zero.
+                Some((g, unsafe { f(tr, c.as_ptr()) }))
+            })
+            .collect()
+    }
+
+    /// Rend les valeurs lues par [`Reaper::tracks_values`] (une piste
+    /// supprimee depuis est ignoree).
+    pub fn set_tracks_values(&self, key: &str, vals: &[(String, f64)]) {
+        let (Some(f), Ok(c)) = (
+            self.tf::<SetVal>(c"SetMediaTrackInfo_Value"),
+            CString::new(key),
+        ) else {
+            return;
+        };
+        let by: std::collections::HashMap<&str, f64> =
+            vals.iter().map(|(g, v)| (g.as_str(), *v)).collect();
+        for tr in self.tracks_raw() {
+            let v = self
+                .tr_str(tr, "GUID", None)
+                .and_then(|g| by.get(g.as_str()).copied());
+            if let Some(v) = v {
+                // SAFETY: piste vivante (lue a l'instant), cle terminee par
+                // zero.
+                unsafe { f(tr, c.as_ptr(), v) };
+            }
+        }
+    }
+
     pub fn set_track_name(&self, guid: &str, name: &str) -> bool {
         self.track_of(guid)
             .is_some_and(|tr| self.tr_str(tr, "P_NAME", Some(name)).is_some())

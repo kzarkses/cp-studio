@@ -1715,3 +1715,30 @@ fn la_palette_d_une_note_et_ses_gestes() {
     assert_eq!(a, Some(Act::Edited { t: 0, i: 0 }));
     assert_eq!(v.tracks[0].items[0].doc.len(), 2);
 }
+
+/// La touche d'ecoute de Cedric (², SWS/BR « Play from mouse cursor position
+/// and solo track under mouse ») vise la date sous la souris et la guitare
+/// sous elle ; sur la regle, aucune guitare ; hors de la zone qui defile
+/// (les en-tetes), rien : la touche reste a REAPER.
+#[test]
+fn l_ecoute_vise_la_souris() {
+    let mut b = Bench::new(1600, 900);
+    let mut v = arranger();
+    b.draw(&mut v);
+    let l = v.lay;
+    let x = l.sx + 200.0;
+    let row = |t: usize| {
+        (0..2000)
+            .map(|k| k as f32)
+            .find(|&y| v.track_at(y) == Some(t))
+            .unwrap()
+            + 8.0
+    };
+    let (q, t) = v.play_target(x, row(0)).unwrap();
+    assert_eq!(t, Some(0));
+    assert!((q - v.qn_of(x)).abs() < 1e-9);
+    assert_eq!(v.play_target(x, row(1)).map(|p| p.1), Some(Some(1)));
+    assert_eq!(v.play_target(x, l.top + 2.0).map(|p| p.1), Some(None));
+    assert!(v.play_target(l.sx - 5.0, row(0)).is_none());
+    assert!(v.play_target(x, l.bottom - 1.0).is_none());
+}

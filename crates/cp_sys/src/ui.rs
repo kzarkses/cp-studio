@@ -630,6 +630,13 @@ pub fn mods() -> Mods {
     }
 }
 
+/// La touche `vk` est tenue, ou qu'aille le clavier (une ecoute « tant que
+/// la touche est tenue » se termine meme si son relachement va ailleurs).
+pub fn key_held(vk: u32) -> bool {
+    // SAFETY: aucune precondition.
+    unsafe { GetAsyncKeyState(vk as i32) < 0 }
+}
+
 /// Un bouton de la souris est tenu, ou qu'elle soit (un geste en cours dans
 /// REAPER : on n'ecrit rien sous ses doigts).
 pub fn mouse_held() -> bool {

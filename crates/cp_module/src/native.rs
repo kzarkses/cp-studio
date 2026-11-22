@@ -13,10 +13,38 @@ use crate::App;
 /// Les battements entre deux relectures des reglages (une seconde).
 const LOOK_EVERY: u32 = 30;
 
+/// Les ecoutes a la souris de SWS/BR que Guitar Tab reprend : vrai avec le
+/// solo de la piste sous la souris.
+fn play_of_name(n: &str) -> Option<bool> {
+    match n {
+        "_BR_CONT_PLAY_MOUSE_SOLO_TRACK" => Some(true),
+        "_BR_CONT_PLAY_MOUSE" => Some(false),
+        _ => None,
+    }
+}
+
 impl App {
     /// L'edition au survol que la fenetre principale de REAPER lie a cette
     /// touche (un script nvk, LKC, CP_DeleteUnderMouse : reconnu a son nom).
     pub(crate) fn main_hover(&mut self, vk: u32, ext: bool, md: Mods) -> Option<HoverEdit> {
+        match self.main_keymap()?.get(vk, ext, md)? {
+            Bind::Named(n) => HoverEdit::of_name(n),
+            Bind::Cmd(_) => None,
+        }
+    }
+
+    /// L'ecoute a la souris que la fenetre principale lie a cette touche
+    /// (SWS/BR, « perform until shortcut released ») : vrai avec le solo de
+    /// la piste sous la souris.
+    pub(crate) fn main_play(&mut self, vk: u32, ext: bool, md: Mods) -> Option<bool> {
+        match self.main_keymap()?.get(vk, ext, md)? {
+            Bind::Named(n) => play_of_name(n),
+            Bind::Cmd(_) => None,
+        }
+    }
+
+    /// La table des touches de la fenetre principale (lue une fois).
+    fn main_keymap(&mut self) -> Option<&KeyMap> {
         if self.main_keys.is_none() {
             let r = self.r;
             let defs = r.section_default_keys(0);
@@ -29,7 +57,9 @@ impl App {
             let hover: Vec<String> = km
                 .iter()
                 .filter_map(|(&(f, k), b)| match b {
-                    Bind::Named(n) => HoverEdit::of_name(n).map(|e| format!("{f}/{k} {e:?} {n}")),
+                    Bind::Named(n) => HoverEdit::of_name(n)
+                        .map(|e| format!("{f}/{k} {e:?} {n}"))
+                        .or_else(|| play_of_name(n).map(|s| format!("{f}/{k} Play(solo {s}) {n}"))),
                     _ => None,
                 })
                 .collect();
@@ -43,10 +73,7 @@ impl App {
             ));
             self.main_keys = Some(km);
         }
-        match self.main_keys.as_ref()?.get(vk, ext, md)? {
-            Bind::Named(n) => HoverEdit::of_name(n),
-            Bind::Cmd(_) => None,
-        }
+        self.main_keys.as_ref()
     }
 
     /// La souris est sur cette fenetre (une edition au survol ne vise

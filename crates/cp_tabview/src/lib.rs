@@ -2659,6 +2659,16 @@ impl Arr {
         }
     }
 
+    /// Ce que vise une ecoute a la souris en (x, y) (la touche de Cedric,
+    /// SWS/BR « Play from mouse cursor position and solo track under mouse ») :
+    /// la date sous la souris, et la guitare sous elle (aucune sur la regle).
+    /// Rien hors de la zone qui defile (en-tetes, inspecteur, barre).
+    pub fn play_target(&self, x: f32, y: f32) -> Option<(f64, Option<usize>)> {
+        let l = self.lay;
+        let inside = x >= l.sx && x < l.sx + l.sw && y >= l.top && y < l.bottom - l.hs_h;
+        inside.then(|| (self.qn_of(x).max(0.0), self.track_at(y)))
+    }
+
     /// La guitare sous l'ordonnee `y` (zone des pistes).
     pub fn track_at(&self, y: f32) -> Option<usize> {
         let l = self.lay;
