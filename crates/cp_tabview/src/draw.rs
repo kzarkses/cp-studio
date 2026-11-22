@@ -114,6 +114,124 @@ pub(crate) fn mark_spans(doc: &[cp_tab::doc::TNote], bit: u8) -> Vec<(f64, f64)>
     out
 }
 
+/// Le rythme sous la tablature (la partition cachee) : une hampe par
+/// signe de la voix 1, les ligatures par temps, les crochets d'une note
+/// seule, les points, les silences et les triolets ; `bottom` est la ligne
+/// du bas de la tablature.
+fn draw_rhythm(
+    cv: &mut Canvas<'_>,
+    text: &mut TextCache,
+    th: &Theme,
+    it: &mut Item,
+    geo: Geo,
+    bottom: f32,
+) {
+    let s = |v: f32| v * geo.s;
+    it.engraved();
+    let eng: Engraved = std::mem::take(&mut it.eng);
+    let ink = th.text_dim;
+    let pad = geo.pad;
+    let hx = |cell: i64| geo.x(eng.qn(cell)) + pad;
+    let (y0, y1) = (bottom + s(6.0), bottom + s(20.0));
+    let lw = s(1.1);
+    // Les groupes de ligature : signes brefs d'un meme temps (voix 1).
+    let mut groups: Vec<Vec<usize>> = Vec::new();
+    let mut last: Option<usize> = None;
+    for (si, sg) in eng.signs.iter().enumerate() {
+        if sg.voice != 1 || eng.events[sg.ev].notes.is_empty() || beams_of(sg.ty) == 0 {
+            last = None;
+            continue;
+        }
+        let beat = sg.start / eng.grid.max(1);
+        let joins = last.is_some_and(|l| {
+            let p = &eng.signs[l];
+            p.measure == sg.measure && p.start / eng.grid.max(1) == beat
+        });
+        if joins {
+            if let Some(g) = groups.last_mut() {
+                g.push(si);
+            }
+        } else {
+            groups.push(vec![si]);
+        }
+        last = Some(si);
+    }
+    let in_group = |si: usize| groups.iter().any(|g| g.len() > 1 && g.contains(&si));
+    let fr = Font::new(3, s(18.0) as u16, 400);
+    for (si, sg) in eng.signs.iter().enumerate() {
+        if sg.voice != 1 {
+            continue;
+        }
+        let x = hx(sg.start);
+        if !geo.visible(x) {
+            continue;
+        }
+        let ev = &eng.events[sg.ev];
+        if ev.notes.is_empty() {
+            let c = rest_char(sg.ty).to_string();
+            let w = text.measure(fr, &c);
+            text.draw(cv, fr, x - w * 0.5, y1 - s(1.0), &c, ink);
+            continue;
+        }
+        match sg.ty {
+            "whole" => {}
+            "half" => cv.line(x, y0 + (y1 - y0) * 0.5, x, y1, lw, ink),
+            _ => cv.line(x, y0, x, y1, lw, ink),
+        }
+        if sg.dots > 0 {
+            cv.fill_circle(x + s(3.5), y1 - s(2.0), s(1.3), ink);
+        }
+        // Une note seule breve : ses crochets.
+        if !in_group(si) {
+            for k in 0..beams_of(sg.ty) {
+                let yy = y1 - k as f32 * s(3.5);
+                cv.line(x, yy, x + s(5.0), yy - s(4.0), lw, ink);
+            }
+        }
+    }
+    // Les ligatures.
+    for g in groups.iter().filter(|g| g.len() > 1) {
+        let xs: Vec<f32> = g.iter().map(|&si| hx(eng.signs[si].start)).collect();
+        if xs.iter().all(|&x| !geo.visible(x)) {
+            continue;
+        }
+        let bh = s(2.2);
+        cv.fill_rect(xs[0], y1 - bh, xs[xs.len() - 1] - xs[0] + lw, bh, ink);
+        for k in 1..3 {
+            let yy = y1 - bh - k as f32 * s(3.5) + s(1.0);
+            for (j, &si) in g.iter().enumerate() {
+                if beams_of(eng.signs[si].ty) <= k {
+                    continue;
+                }
+                let next = g.get(j + 1).filter(|&&n| beams_of(eng.signs[n].ty) > k);
+                if next.is_some() {
+                    cv.fill_rect(xs[j], yy, xs[j + 1] - xs[j] + lw, bh, ink);
+                } else if j == 0 || beams_of(eng.signs[g[j - 1]].ty) <= k {
+                    let x0 = if j + 1 < xs.len() {
+                        xs[j]
+                    } else {
+                        xs[j] - s(5.0)
+                    };
+                    cv.fill_rect(x0, yy, s(5.0), bh, ink);
+                }
+            }
+        }
+    }
+    // Les triolets : un 3 sous le temps.
+    let f3 = Font::new(0, s(8.0) as u16, 700);
+    for (si, sg) in eng.signs.iter().enumerate() {
+        if !sg.tup_start || sg.voice != 1 {
+            continue;
+        }
+        if let Some(sj) = (si..eng.signs.len()).find(|&k| eng.signs[k].tup_stop) {
+            let xm = (hx(sg.start) + hx(eng.signs[sj].start)) * 0.5;
+            let w = text.measure(f3, "3");
+            text.draw(cv, f3, xm - w * 0.5, y1 + s(9.0), "3", ink);
+        }
+    }
+    it.eng = eng;
+}
+
 /// L'armure : ses dieses (ou bemols) a leurs places de la cle de sol, a
 /// partir de `x`, espaces de `step` ; `top` est la ligne du haut. Rend la
 /// largeur prise.
@@ -455,6 +573,21 @@ pub fn lane_h(l: Lane) -> f32 {
     }
 }
 
+/// La place du rythme sous la tablature quand la partition est cachee (a
+/// 96 DPI) : les hampes et les ligatures, comme dans Guitar Pro.
+pub const RHYTHM_H: f32 = 26.0;
+
+/// La hauteur d'une couche d'une piste : la tablature s'agrandit pour son
+/// rythme quand la partition n'est pas montree.
+pub fn lane_hl(l: Lane, lanes: crate::Lanes, vz: f32) -> f32 {
+    lane_hz(l, vz)
+        + if l == Lane::Tab && !lanes.on(Lane::Score) {
+            RHYTHM_H
+        } else {
+            0.0
+        }
+}
+
 /// La hauteur d'une couche, le zoom vertical compris (audio et MIDI
 /// seulement : la partition et la tab ont leur hauteur propre).
 pub fn lane_hz(l: Lane, vz: f32) -> f32 {
@@ -477,7 +610,7 @@ pub fn track_h(tr: &crate::Track, s: f32, vz: f32) -> f32 {
     let lanes: f32 = Lane::ALL
         .iter()
         .filter(|&&l| tr.head.lanes.on(l))
-        .map(|&l| lane_hz(l, vz) + 1.0)
+        .map(|&l| lane_hl(l, tr.head.lanes, vz) + 1.0)
         .sum();
     (lanes.max(HEAD_MIN_H) * s).round()
 }
@@ -1489,7 +1622,7 @@ impl Arr {
             if !lanes.on(lane) {
                 continue;
             }
-            let lh = s(lane_hz(lane, vz));
+            let lh = s(lane_hl(lane, lanes, vz));
             lane_ys.push((lane, y, lh));
             y += lh + 1.0;
         }
@@ -2464,6 +2597,7 @@ fn draw_item(
                         hover,
                         bx,
                         content_clip,
+                        !lay.shown.on(Lane::Score),
                     );
                 } else if !lay.shown.on(Lane::Score) {
                     draw_pending(
@@ -3222,7 +3356,13 @@ pub(crate) fn draw_tab(
     hover: Hit,
     bx: &mut Vec<HBox>,
     clip: (f32, f32, f32, f32),
+    rhythm: bool,
 ) {
+    if rhythm {
+        let nstr = it.detect.tuning().strings.len();
+        let bottom = tab_y + (nstr.max(1) - 1) as f32 * tab_gap;
+        draw_rhythm(cv, text, th, it, geo, bottom);
+    }
     let s = |v: f32| v * geo.s;
     it.engraved();
     let eng: Engraved = std::mem::take(&mut it.eng);

@@ -2183,3 +2183,52 @@ fn les_techniques_de_jeu_se_dessinent() {
     // La palette tient ses 14 icones.
     assert_eq!(Mark::ALL.len(), 14);
 }
+
+/// La partition cachee : la tablature porte son rythme dessous (hampes,
+/// ligatures, silences, triolets), dans la fenetre et dans le PDF.
+#[test]
+fn la_tab_seule_porte_son_rythme() {
+    use cp_tab::doc::TNote;
+    let mut b = Bench::new(1600, 900);
+    let mut v = arranger();
+    v.rec.clear();
+    let q0 = v.tracks[0].items[0].qn0;
+    let note = |q: f64, len: f64, fret: i32| TNote {
+        qn0: q0 + q,
+        qn1: q0 + q + len,
+        pitch: 55 + fret,
+        string: 3,
+        fret,
+        vel: 96,
+        ..Default::default()
+    };
+    let t = 1.0 / 3.0;
+    let mut d = vec![
+        note(0.0, 1.0, 5),
+        note(1.0, 0.5, 7),
+        note(1.5, 0.5, 5),
+        note(2.0, 0.25, 7),
+        note(2.25, 0.25, 9),
+        note(2.5, 0.25, 7),
+        note(2.75, 0.25, 5),
+        note(3.0, t, 7),
+        note(3.0 + t, t, 9),
+        note(3.0 + 2.0 * t, t, 10),
+        note(5.0, 1.5, 12),
+    ];
+    cp_tab::doc::sort(&mut d);
+    v.tracks[0].items[0].set_doc(d);
+    v.tracks[0].items[0].ghosts.clear();
+    let h0 = draw::track_h(&v.tracks[0], 1.0, 1.0);
+    v.tracks[0].head.lanes.0[Lane::Score as usize] = false;
+    let h1 = draw::track_h(&v.tracks[0], 1.0, 1.0);
+    // Sans la partition (118 px) mais avec le rythme (26 px).
+    assert_eq!(
+        h0 - h1,
+        (draw::lane_h(Lane::Score) + 1.0 - draw::RHYTHM_H).round()
+    );
+    b.shot(&mut v, "18_rythme_tab");
+    let it = v.tracks[0].items[0].clone();
+    let p = print::pdf(&it, v.tracks[0].head.lanes, &mut b.t);
+    assert!(p.pages >= 1);
+}

@@ -203,6 +203,10 @@ fn rows(score: bool, tab: bool, nstr: usize) -> Rows {
     });
     if tab {
         y += (nstr.max(1) - 1) as f32 * s(TAB_GAP) + s(14.0);
+        // La tablature seule porte son rythme dessous.
+        if !score {
+            y += s(draw::RHYTHM_H);
+        }
     }
     Rows {
         staff,
@@ -634,6 +638,7 @@ fn draw_system(
                 Hit::None,
                 &mut none,
                 clip,
+                staff.is_none(),
             );
         }
     }
