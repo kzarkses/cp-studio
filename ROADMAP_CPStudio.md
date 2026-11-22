@@ -582,6 +582,26 @@ chaque note, et un test le tient.
   - la table souris de REAPER complétée (clic droit = menu, Ctrl glisser sur
     la grille = copie, Maj+Win / Ctrl+Win, accords) ;
   - l'écoute des notes : un bouton.
+- Deuxième retour (2026-11-22, 15 h), traité le même jour, pour l'éditeur et
+  Guitar Tab ensemble :
+  - **des saccades** : mesurées sur des bancs (tests `banc_*`). Le cadre
+    pointillé d'une prise pas transcrite était tracé sur toute sa longueur
+    (13 ms, 45 ms de près) ; les rangs de l'éditeur avaient des bords entre
+    deux pixels (6 ms sur 7) ; chaque image de lecture redessinait toute la
+    fenêtre. Désormais une image complète coûte 1,4 ms (éditeur) et 4 à 8 ms
+    (Guitar Tab), une image de lecture 0,006 ms : la tête de lecture, le
+    curseur et la ligne de la souris sont des traits posés sur la scène
+    gardée (`cp_gfx::layers`, `cp_module/src/frame.rs`) ;
+  - la relecture de REAPER : la sélection à chaque battement (un tiers de
+    seconde avant), le reste quand le compteur du projet bouge, rien
+    pendant qu'un bouton de souris est tenu ;
+  - **l'audio et son MIDI forment un groupe** (celui qu'on bouge ou rogne
+    entraîne l'autre) ; les notes appartiennent à leur item ;
+  - comme REAPER : bords qui se rognent, poignées de fondu, ses touches au
+    survol de la fenêtre principale (Q, D, S, Z, A, E), ses curseurs de
+    souris (avec ses fichiers `Cursors`), la ligne à la souris et ses
+    réglages, les couleurs de son thème, des traits d'un pixel ; le clic
+    sur une note pose le curseur au clic.
 - Reste :
   - les couches CC et pitchbend (l'ancien éditeur n'en avait pas, décidé) ;
   - la probabilité (cases de la Session, à venir) ;
