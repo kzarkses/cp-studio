@@ -514,8 +514,29 @@ Rust. Il avait :
 - Les sources Lua (`CP_Editor/`, `CP_Engine/Roll.lua`, `RollUI.lua`,
   `Keymap.lua`) sont dans `E:\CP_Scripts_recovery_20261120\github_2026-08-22.git`.
   Ce dépôt est en lecture seule : on le lit pour porter, on ne le relance pas.
+- La copie la plus récente de `CP_Editor.lua` (9 620 lignes, 2026-10-25) est une
+  sauvegarde de l'historique de Claude, dans le même dossier de récupération :
+  `claude_file_history\90a0a624-…\c7d828512c4ee59e@v5`. `Roll` et `RollUI`
+  n'existent qu'à la date du 2026-08-22.
+- Perdus : `CP_Editor/Modules/AutoLane.lua`, le `Keymaps/editor.lua`
+  d'octobre, `CP_Engine/Env.lua`.
+- `Recherche/INVENTAIRE_CP_Editor.md` et `CONFRONTATION_CP_Editor.md` ont
+  survécu (2026-08-01 ; leurs numéros de ligne visent l'ancien fichier).
 - Les mémoires `project-midi-command-layer`, `project-keymap`,
   `project-editor-sound-workbench`.
+
+**Le piège pour Guitar Tab.** L'ancien `Roll` écrivait toute note neuve sur le
+canal 1 : dupliquer, coller, accords, glue, subdiviser, arpéger remettaient le
+canal à 1. Dans Guitar Tab le canal est la corde. Le port garde le canal de
+chaque note, et un test le tient.
+
+**La maquette (2026-11-22).** Deux vues du même clip, sans phrase à l'écran :
+- « Fit », par défaut : la vue cadre les notes à l'ouverture, avec 2 rangs de
+  marge ; le reste du clavier se replie en deux bandes fines qu'un clic rouvre ;
+- « Notes only » : seuls les rangs joués restent, chacun nommé.
+- Couleur par corde, par hauteur ou par vélocité.
+- La souris et la molette suivent la table REAPER de Cedric.
+- Tout ce qui s'explique vient au survol.
 
 **Le chemin.**
 1. Porter le modèle `Roll` dans une crate Rust pure (`cp_roll`), sans unité,
