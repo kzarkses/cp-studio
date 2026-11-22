@@ -136,6 +136,15 @@ impl Stats {
 
 static HOOK_CORE: OnceLock<Arc<Core>> = OnceLock::new();
 
+/// La clock MIDI externe : son calcul (fil audio, sous `try_lock`), le
+/// peripherique ecoute (-1 : aucun) et l'acces aux entrees MIDI.
+static CLOCK: OnceLock<std::sync::Mutex<cp_engine::extclock::ExtClock>> = OnceLock::new();
+static CLOCK_DEV: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(-1);
+static MIDI_IN: OnceLock<cp_sys::midi_in::MidiInputs> = OnceLock::new();
+/// Sa publication, lue par le fil principal sans jamais prendre le verrou
+/// du fil audio.
+static CLOCK_PUB: OnceLock<Arc<cp_engine::extclock::Published>> = OnceLock::new();
+
 fn on_audio(is_post: bool, frames: i32, srate: f64) {
     if !is_post {
         capture::on_block(frames);
@@ -145,7 +154,38 @@ fn on_audio(is_post: bool, frames: i32, srate: f64) {
         core.tick(frames);
     } else {
         core.set_srate(srate);
+        let dev = CLOCK_DEV.load(std::sync::atomic::Ordering::Relaxed);
+        if dev >= 0 {
+            if let (Some(m), Some(c)) = (MIDI_IN.get(), CLOCK.get()) {
+                clock_block(m, c, dev, core.clock_now() as f64, frames, srate);
+            }
+        }
     }
+}
+
+/// Un bloc de la clock externe : les messages temps reel de l'entree,
+/// dates en echantillons du moteur, puis la publication.
+fn clock_block(
+    m: &cp_sys::midi_in::MidiInputs,
+    c: &std::sync::Mutex<cp_engine::extclock::ExtClock>,
+    dev: i32,
+    base: f64,
+    frames: i32,
+    srate: f64,
+) {
+    let Ok(mut ck) = c.try_lock() else { return };
+    ck.set_srate(srate);
+    m.for_each(dev, |off, msg| {
+        let t = base + off as f64 * srate / 1_024_000.0;
+        match msg.first().copied() {
+            Some(s @ (0xF8 | 0xFA | 0xFB | 0xFC)) => ck.realtime(s, t),
+            Some(0xF2) if msg.len() >= 3 => {
+                ck.spp((msg[1] as i32 & 0x7F) | ((msg[2] as i32 & 0x7F) << 7))
+            }
+            _ => {}
+        }
+    });
+    ck.end_block(base + frames as f64);
 }
 
 pub struct AudioHost {
@@ -191,7 +231,11 @@ impl AudioHost {
     pub fn new(reaper: Option<Reaper>, srate: f64) -> AudioHost {
         let ctl = Ctl::new(if srate > 1.0 { srate } else { 48000.0 });
         let mut hook = false;
+        let ck = cp_engine::extclock::ExtClock::new();
+        let _ = CLOCK_PUB.set(ck.publication());
+        let _ = CLOCK.set(std::sync::Mutex::new(ck));
         if let Some(r) = &reaper {
+            let _ = MIDI_IN.set(cp_sys::midi_in::MidiInputs::new(r));
             if HOOK_CORE.set(ctl.core().clone()).is_ok() {
                 hook = AudioHook::register(r, on_audio);
             }
@@ -317,6 +361,30 @@ impl AudioHost {
         self.ports
             .get(port)
             .map_or([0.0; 2], |p| p.stats.take_peaks())
+    }
+
+    /// La clock MIDI externe : ecouter l'entree MIDI `dev` (son rang dans
+    /// les entrees de REAPER), ou rien (-1). Repart de zero.
+    pub fn set_clock_device(&mut self, dev: i32) {
+        if let Some(c) = CLOCK.get() {
+            if let Ok(mut ck) = c.lock() {
+                ck.reset();
+            }
+        }
+        CLOCK_DEV.store(dev, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// L'entree MIDI ecoutee (-1 : aucune).
+    pub fn clock_device(&self) -> i32 {
+        CLOCK_DEV.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// L'etat de la clock externe et la position du maitre en noires
+    /// maintenant (au bloc en cours).
+    pub fn clock_read(&self) -> Option<(cp_engine::extclock::Snap, f64)> {
+        let s = CLOCK_PUB.get()?.read()?;
+        let now = self.ctl.core().clock_now() as f64;
+        Some((s, cp_engine::extclock::qn_at(&s, now)))
     }
 
     /// Une piste de sortie effacee (ou deplacee dans un autre projet) : le

@@ -288,6 +288,9 @@ impl SelfTest {
             self.say(false, "sortie dans une piste : piste refusee".into());
             return;
         };
+        // La clock externe ecoute l'entree MIDI 0 pendant cet essai : le
+        // vrai objet MIDI de REAPER se lit dans le crochet audio.
+        a.set_clock_device(0);
         // Rien ne doit sortir des enceintes de Cedric : le master du projet
         // de test se tait (la piste l'alimente, pour que REAPER la traite).
         r.set_master_mute(true);
@@ -390,6 +393,20 @@ impl SelfTest {
                 a.route_port(3, None);
                 r.set_master_mute(false);
                 self.route = None;
+                let ins = r.midi_inputs();
+                let ck = a.clock_read();
+                self.say(
+                    ck.is_some() || a.stats().blocks == 0,
+                    format!(
+                        "clock externe : l'entree MIDI 0 lue dans le crochet ({} entree(s) MIDI ; {})",
+                        ins.len(),
+                        match ck {
+                            Some((s, _)) => format!("{} impulsion(s), {} Start", s.ticks, s.starts),
+                            None => "rien de publie".into(),
+                        }
+                    ),
+                );
+                a.set_clock_device(-1);
                 true
             }
         }

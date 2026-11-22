@@ -55,6 +55,9 @@ const M_TUNER_OFF: u32 = 20;
 const M_TUNER_CLOCK: u32 = 21;
 const M_TUNER_SLOT: u32 = 22;
 const M_TUNER_A4: u32 = 23;
+/// La clock externe : aucune, ou l'entree MIDI (100 + son rang).
+const M_CLOCK_OFF: u32 = 99;
+const M_CLOCK_DEV: u32 = 100;
 const M_REC_NORMAL: u32 = 30;
 const M_REC_TIMESEL: u32 = 31;
 const M_REC_ITEMS: u32 = 32;
@@ -99,6 +102,8 @@ pub(crate) struct TPart {
     hover: (cp_transport::Hit, std::time::Instant),
     /// L'accordeur.
     pub tu: crate::tuner::Tuner,
+    /// La clock MIDI externe et ce qu'elle a fait au transport.
+    pub clock: crate::clocksync::ClockSync,
 }
 
 impl TPart {
@@ -127,6 +132,7 @@ impl TPart {
             tip: None,
             hover: (cp_transport::Hit::None, std::time::Instant::now()),
             tu: crate::tuner::Tuner::new(r),
+            clock: crate::clocksync::ClockSync::load(*r),
         }
     }
 }
@@ -524,7 +530,23 @@ impl App {
 
     /// Le battement : l'etat de lecture, les icones, la liste des actions,
     /// et la place (Cedric a-t-il rallume le transport de REAPER ?).
+    /// La clock externe : l'entree ecoutee (-1 : aucune), retenue.
+    fn clock_set_device(&mut self, dev: i32) {
+        self.tp.clock = crate::clocksync::ClockSync::on(dev);
+        self.host.clock_device(dev);
+        self.r
+            .ext_set(SECTION, "ext_clock_dev", &dev.to_string(), true);
+        self.host
+            .info(&format!("clock externe : entree MIDI {dev}"));
+    }
+
     pub(crate) fn transport_tick(&mut self) {
+        // La clock externe suit le maitre, meme CP Transport ferme.
+        if self.tp.clock.dev >= 0 {
+            let v = self.host.clock_read();
+            let r = self.r;
+            self.tp.clock.step(&crate::clocksync::Reaper(r), v);
+        }
         let Some(hwnd) = self.tp.view.as_ref().map(|v| v.hwnd) else {
             return;
         };
@@ -881,6 +903,31 @@ impl App {
     fn bar_menu(&mut self, x: f32, y: f32) {
         let tm = self.tp.tu.mode;
         let a4 = format!("Tuner reference: A4 = {} Hz...", self.tp.tu.a4);
+        // La clock MIDI externe : suivre le tempo et le depart d'une autre
+        // machine (Ableton, une boite a rythmes) sur une entree MIDI.
+        let ins = self.r.midi_inputs();
+        let cur = self.tp.clock.dev;
+        let names: Vec<String> = ins
+            .iter()
+            .map(|(_, n)| format!("External MIDI clock: {n}"))
+            .collect();
+        let mut clock: Vec<Option<MenuItem<'_>>> = vec![
+            None,
+            Some(MenuItem {
+                id: M_CLOCK_OFF,
+                text: "External MIDI clock: off",
+                checked: cur < 0,
+                enabled: true,
+            }),
+        ];
+        for ((i, _), n) in ins.iter().zip(&names) {
+            clock.push(Some(MenuItem {
+                id: M_CLOCK_DEV + *i as u32,
+                text: n,
+                checked: cur == *i,
+                enabled: true,
+            }));
+        }
         let items = [
             Some(MenuItem {
                 id: M_ADD,
@@ -921,7 +968,23 @@ impl App {
                 enabled: true,
             }),
         ];
-        match self.menu_at(x, y, &items) {
+        let mut all: Vec<Option<MenuItem<'_>>> = items.into_iter().collect();
+        let close = all.pop();
+        all.pop();
+        all.extend(clock);
+        all.push(None);
+        all.extend(close);
+        let k = self.menu_at(x, y, &all);
+        if k == M_CLOCK_OFF || k >= M_CLOCK_DEV {
+            let dev = if k == M_CLOCK_OFF {
+                -1
+            } else {
+                (k - M_CLOCK_DEV) as i32
+            };
+            self.clock_set_device(dev);
+            return;
+        }
+        match k {
             M_ADD => self.add_item(),
             M_CLOSE => self.queue(crate::WinOp::TransportOff),
             M_TUNER_OFF => self.tuner_set_mode(cp_transport::TunerMode::Off),

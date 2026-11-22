@@ -13,7 +13,7 @@ use core::ffi::{c_char, c_void};
 
 /// Version du contrat. Un entier : jamais de mineure (le piege du double de
 /// l'ancien moteur, ou `1.10` valait `1.1`).
-pub const ABI: u32 = 9;
+pub const ABI: u32 = 10;
 
 /// Le symbole exporte par le module.
 pub const ENTRY_SYMBOL: &[u8] = b"cp_module_entry\0";
@@ -243,6 +243,16 @@ pub struct AudioApi {
     /// Les cretes d'un port (gauche, droite) depuis la derniere lecture,
     /// ecrites dans `out[0..2]` ; 1 si le port existe. ABI 9.
     pub levels: extern "C" fn(port: u32, out: *mut f32) -> i32,
+    /// La clock MIDI externe : l'entree MIDI ecoutee (son rang dans les
+    /// entrees de REAPER ; -1 : aucune). ABI 10.
+    pub clock_device: extern "C" fn(dev: i32),
+    /// L'etat de la clock externe dans `out[0..14]` : bpm, son ecart-type,
+    /// le bpm de la derniere noire, la gigue (ms), la fenetre (noires),
+    /// l'instant ajuste de la derniere impulsion, sa position, la position
+    /// suivante, les echantillons par impulsion, les drapeaux, les Start,
+    /// les Stop, les impulsions, puis la position du maitre MAINTENANT en
+    /// noires. 1 si publie. ABI 10.
+    pub clock_read: extern "C" fn(out: *mut f64) -> i32,
 }
 
 /// Ce que le module offre au chargeur. Tous les appels se font sur le fil

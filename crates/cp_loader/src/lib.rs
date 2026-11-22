@@ -296,6 +296,33 @@ impl Host for LoaderHost {
         audio(0.0, |a| a.core().srate())
     }
 
+    fn clock_device(&self, dev: i32) {
+        audio((), |a| a.set_clock_device(dev));
+    }
+
+    fn clock_read(&self) -> Option<[f64; 14]> {
+        audio(None, |a| {
+            a.clock_read().map(|(s, q)| {
+                [
+                    s.bpm,
+                    s.bpm_err,
+                    s.bpm_short,
+                    s.jitter_ms,
+                    s.beats,
+                    s.t_last,
+                    s.pos_last,
+                    s.pos_next,
+                    s.spt,
+                    s.flags as f64,
+                    s.starts as f64,
+                    s.stops as f64,
+                    s.ticks as f64,
+                    q,
+                ]
+            })
+        })
+    }
+
     fn audio_route(&self, port: u32, guid: Option<&str>) -> bool {
         audio(false, |a| a.route_port(port as usize, guid))
     }

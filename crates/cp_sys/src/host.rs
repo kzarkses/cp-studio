@@ -85,6 +85,12 @@ pub trait Host: Send + Sync {
     fn audio_levels(&self, _port: u32) -> Option<[f32; 2]> {
         None
     }
+    /// La clock externe : l'entree ecoutee.
+    fn clock_device(&self, _dev: i32) {}
+    /// La clock externe : ses 14 valeurs.
+    fn clock_read(&self) -> Option<[f64; 14]> {
+        None
+    }
 
     // --- les vues (ABI 3)
     #[allow(clippy::too_many_arguments)]
@@ -155,6 +161,8 @@ static API: HostApi = HostApi {
         stretch: a_stretch,
         route: a_route,
         levels: a_levels,
+        clock_device: a_clock_device,
+        clock_read: a_clock_read,
     },
     create_view: v_create,
     destroy_window: v_destroy,
@@ -398,6 +406,24 @@ extern "C" fn a_levels(port: u32, out: *mut f32) -> i32 {
         Some(v) => {
             // SAFETY: le module passe deux f32 a lui.
             unsafe { std::ptr::copy_nonoverlapping(v.as_ptr(), out, 2) };
+            1
+        }
+        None => 0,
+    }
+}
+
+extern "C" fn a_clock_device(dev: i32) {
+    with((), |h| h.clock_device(dev));
+}
+
+extern "C" fn a_clock_read(out: *mut f64) -> i32 {
+    if out.is_null() {
+        return 0;
+    }
+    match with(None, |h| h.clock_read()) {
+        Some(v) => {
+            // SAFETY: le module passe 14 f64 a lui.
+            unsafe { std::ptr::copy_nonoverlapping(v.as_ptr(), out, 14) };
             1
         }
         None => 0,

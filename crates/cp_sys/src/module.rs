@@ -169,6 +169,15 @@ impl HostRef {
         (self.0.audio.levels)(port, v.as_mut_ptr());
         v
     }
+    /// La clock MIDI externe : ecouter l'entree `dev` (-1 : aucune).
+    pub fn clock_device(&self, dev: i32) {
+        (self.0.audio.clock_device)(dev)
+    }
+    /// La clock MIDI externe : ses 14 valeurs (voir `cp_abi::AudioApi`).
+    pub fn clock_read(&self) -> Option<[f64; 14]> {
+        let mut v = [0f64; 14];
+        ((self.0.audio.clock_read)(v.as_mut_ptr()) == 1).then_some(v)
+    }
     /// La vignette d'un fichier : 1 rendue, 0 en cours, -1 impossible.
     pub fn audio_thumb(&self, path: &str, min: &mut [f32], max: &mut [f32]) -> i32 {
         let n = min.len().min(max.len());

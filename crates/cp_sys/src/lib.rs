@@ -32,6 +32,7 @@ pub mod guard;
 pub mod host;
 pub mod image;
 pub mod items;
+pub mod midi_in;
 pub mod module;
 pub mod pcm;
 pub mod pitch;

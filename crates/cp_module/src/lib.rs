@@ -35,6 +35,7 @@ use cp_sys::ui::{self, Cursor, MenuItem};
 use cp_sys::win::{self, Hwnd, WinMsg};
 use cp_ui::{Button, Ev, IconCache, Mods, Theme};
 
+mod clocksync;
 mod editor;
 mod frame;
 mod gtab;
@@ -1360,6 +1361,10 @@ impl Module for App {
             "CP Studio: Editor - open (the selected MIDI or audio item)",
         );
         let tp = tview::TPart::new(&r);
+        // La clock externe retenue : le chargeur l'ecoute de nouveau.
+        if tp.clock.dev >= 0 {
+            host.clock_device(tp.clock.dev);
+        }
         let mut app = App {
             host,
             r,

@@ -25,6 +25,7 @@
 //! Le fil audio donne les messages dates en echantillons du moteur ; le fil
 //! principal lit un instantane (seqlock).
 
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering, fence};
 
 /// La fenetre longue : seize noires.
@@ -96,8 +97,58 @@ pub struct ExtClock {
     stops: u32,
     ticks: u32,
     snap: Snap,
+    /// L'instantane publie, lu par le fil principal sans verrou.
+    publ: Arc<Published>,
+}
+
+/// L'instantane publie (seqlock) : le fil audio l'ecrit en fin de bloc, le
+/// fil principal le lit, chacun par son `Arc`.
+pub struct Published {
     seq: AtomicU32,
     publ: [AtomicU64; PUB_FIELDS],
+}
+
+impl Published {
+    fn new() -> Published {
+        Published {
+            seq: AtomicU32::new(0),
+            publ: std::array::from_fn(|_| AtomicU64::new(0f64.to_bits())),
+        }
+    }
+
+    /// Fil principal : l'instantane publie (rien tant qu'aucune publication).
+    pub fn read(&self) -> Option<Snap> {
+        for _ in 0..16 {
+            let s0 = self.seq.load(Ordering::Acquire);
+            if s0 == 0 {
+                return None;
+            }
+            if s0 & 1 != 0 {
+                continue;
+            }
+            let g = |i: usize| f64::from_bits(self.publ[i].load(Ordering::Relaxed));
+            let o = Snap {
+                bpm: g(0),
+                bpm_err: g(1),
+                bpm_short: g(2),
+                jitter_ms: g(3),
+                beats: g(4),
+                t_last: g(5),
+                pos_last: g(6),
+                pos_next: g(7),
+                spt: g(8),
+                flags: g(9) as i32,
+                starts: g(10) as u32,
+                stops: g(11) as u32,
+                ticks: g(12) as u32,
+            };
+            fence(Ordering::Acquire);
+            if self.seq.load(Ordering::Relaxed) == s0 {
+                return Some(o);
+            }
+        }
+        None
+    }
 }
 
 impl Default for ExtClock {
@@ -139,8 +190,7 @@ impl ExtClock {
             stops: 0,
             ticks: 0,
             snap: Snap::default(),
-            seq: AtomicU32::new(0),
-            publ: std::array::from_fn(|_| AtomicU64::new(0f64.to_bits())),
+            publ: Arc::new(Published::new()),
         }
     }
 
@@ -455,47 +505,24 @@ impl ExtClock {
             s.ticks as f64,
             0.0,
         ];
-        let q = self.seq.load(Ordering::Relaxed);
-        self.seq.store(q.wrapping_add(1), Ordering::Relaxed);
+        let pb = &self.publ;
+        let q = pb.seq.load(Ordering::Relaxed);
+        pb.seq.store(q.wrapping_add(1), Ordering::Relaxed);
         fence(Ordering::Release);
-        for (p, x) in self.publ.iter().zip(v) {
+        for (p, x) in pb.publ.iter().zip(v) {
             p.store(x.to_bits(), Ordering::Relaxed);
         }
-        self.seq.store(q.wrapping_add(2), Ordering::Release);
+        pb.seq.store(q.wrapping_add(2), Ordering::Release);
     }
 
     /// Fil principal : l'instantane publie (rien tant qu'aucune publication).
     pub fn read(&self) -> Option<Snap> {
-        for _ in 0..16 {
-            let s0 = self.seq.load(Ordering::Acquire);
-            if s0 == 0 {
-                return None;
-            }
-            if s0 & 1 != 0 {
-                continue;
-            }
-            let g = |i: usize| f64::from_bits(self.publ[i].load(Ordering::Relaxed));
-            let o = Snap {
-                bpm: g(0),
-                bpm_err: g(1),
-                bpm_short: g(2),
-                jitter_ms: g(3),
-                beats: g(4),
-                t_last: g(5),
-                pos_last: g(6),
-                pos_next: g(7),
-                spt: g(8),
-                flags: g(9) as i32,
-                starts: g(10) as u32,
-                stops: g(11) as u32,
-                ticks: g(12) as u32,
-            };
-            fence(Ordering::Acquire);
-            if self.seq.load(Ordering::Relaxed) == s0 {
-                return Some(o);
-            }
-        }
-        None
+        self.publ.read()
+    }
+
+    /// La publication, a garder sur le fil principal (lue sans verrou).
+    pub fn publication(&self) -> Arc<Published> {
+        self.publ.clone()
     }
 
     /// L'etat sans passer par la publication (les tests).

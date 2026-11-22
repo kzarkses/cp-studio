@@ -574,6 +574,32 @@ impl Reaper {
         unsafe { f(tr, 0).max(f(tr, 1)) as f32 }
     }
 
+    /// Les entrees MIDI : (rang, nom) de celles qui existent.
+    pub fn midi_inputs(&self) -> Vec<(i32, String)> {
+        type Num = unsafe extern "C" fn() -> i32;
+        type Name = unsafe extern "C" fn(i32, *mut c_char, i32) -> bool;
+        let (Some(n), Some(nm)) = (
+            self.tf::<Num>(c"GetNumMIDIInputs"),
+            self.tf::<Name>(c"GetMIDIInputName"),
+        ) else {
+            return Vec::new();
+        };
+        let mut out = Vec::new();
+        // SAFETY: tampon de 256 octets, termine par zero par REAPER.
+        unsafe {
+            for i in 0..n().clamp(0, 256) {
+                let mut buf = [0 as c_char; 256];
+                if nm(i, buf.as_mut_ptr(), 256) {
+                    out.push((
+                        i,
+                        CStr::from_ptr(buf.as_ptr()).to_string_lossy().into_owned(),
+                    ));
+                }
+            }
+        }
+        out
+    }
+
     /// Les entrees audio de la carte son : leurs noms.
     pub fn audio_inputs(&self) -> Vec<String> {
         type Num = unsafe extern "C" fn() -> i32;

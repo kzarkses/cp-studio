@@ -121,6 +121,21 @@ pub fn build_extclock() -> Result<PathBuf, String> {
     .clone()
 }
 
+/// L'entree MIDI de REAPER imitee en C++ contre le SDK (`cpp/midi_abi.cpp`,
+/// voir `tests/midi_abi.rs`).
+pub fn build_midi_abi() -> Result<PathBuf, String> {
+    static ONCE: std::sync::OnceLock<Result<PathBuf, String>> = std::sync::OnceLock::new();
+    ONCE.get_or_init(|| {
+        let sdk = reaper_sdk()?;
+        let unit = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("cpp")
+            .join("midi_abi.cpp");
+        let deps = [unit.clone(), sdk.join("reaper_plugin.h")];
+        build_dll("cp_midi_abi", std::slice::from_ref(&unit), &deps, &[sdk])
+    })
+    .clone()
+}
+
 /// L'etireur de REAPER imite en C++ contre le SDK (`cpp/pitch_abi.cpp`,
 /// voir `tests/pitch_abi.rs`).
 pub fn build_pitch_abi() -> Result<PathBuf, String> {
