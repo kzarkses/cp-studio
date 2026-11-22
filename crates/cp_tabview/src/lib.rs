@@ -854,11 +854,13 @@ impl Arr {
 
     /// Les zones de la scene a redessiner : toute la fenetre, ou celles d'un
     /// survol ; vide : rien.
-    pub fn take_damage(&mut self) -> Vec<cp_gfx::IRect> {
+    /// `w x h` : la taille de la fenetre (pas celle du dernier dessin, qui
+    /// n'existe pas encore apres une ouverture ou un rechargement : la vue
+    /// restait noire).
+    pub fn take_damage(&mut self, w: i32, h: i32) -> Vec<cp_gfx::IRect> {
         if std::mem::take(&mut self.dirty) {
             self.damage.clear();
-            let l = self.lay;
-            return vec![cp_gfx::IRect::new(0, 0, l.w.ceil() as i32, l.h.ceil() as i32)];
+            return vec![cp_gfx::IRect::new(0, 0, w, h)];
         }
         let v = std::mem::take(&mut self.damage);
         let v = cp_gfx::layers::merge(v);

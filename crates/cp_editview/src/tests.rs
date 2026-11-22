@@ -740,3 +740,10 @@ fn banc_image_editeur() {
         t.elapsed().as_secs_f64() * 1000.0 / 40.0
     );
 }
+
+/// Une vue jamais dessinee redessine toute sa fenetre (elle restait noire).
+#[test]
+fn une_vue_neuve_se_dessine_entiere() {
+    let mut v = riff();
+    assert_eq!(v.take_damage(640, 480), vec![cp_gfx::IRect::new(0, 0, 640, 480)]);
+}

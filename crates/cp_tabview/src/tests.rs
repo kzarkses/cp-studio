@@ -884,7 +884,7 @@ fn la_lecture_ne_redessine_pas_la_scene() {
     l.resize(2123, 1310);
     b.draw(&mut v);
     l.scene.px.copy_from_slice(&b.s.px);
-    let whole = v.take_damage();
+    let whole = v.take_damage(2123, 1310);
     assert_eq!(whole.len(), 1);
     l.compose(&whole, &v.strokes(&b.th));
     l.drawn();
@@ -893,7 +893,7 @@ fn la_lecture_ne_redessine_pas_la_scene() {
     for k in 0..60 {
         v.set_playhead(Some(42.0 + k as f64 * 0.05), true);
         assert!(!v.needs_draw(), "la tete de lecture salit la scene");
-        let rects = l.compose(&v.take_damage(), &v.strokes(&b.th));
+        let rects = l.compose(&v.take_damage(2123, 1310), &v.strokes(&b.th));
         sent += rects.iter().map(|r| r.w as i64 * r.h as i64).sum::<i64>();
     }
     let ms = t.elapsed().as_secs_f64() * 1000.0 / 60.0;
@@ -907,7 +907,7 @@ fn la_lecture_ne_redessine_pas_la_scene() {
         y,
         mods: Mods::default(),
     });
-    let d = v.take_damage();
+    let d = v.take_damage(2123, 1310);
     assert!(!d.is_empty());
     let area: i64 = d.iter().map(|r| r.w as i64 * r.h as i64).sum();
     assert!(area < 2123 * 1310 / 20, "le survol redessine {area} pixels");
@@ -1032,4 +1032,13 @@ fn rogner_fondre_et_editer_au_survol() {
     assert_eq!(H::of_name("LKC - HOVER EDIT D - Fadein.lua"), Some(H::FadeIn));
     assert_eq!(H::of_name("LKC - HOVER EDIT G - Fadeout.lua"), Some(H::FadeOut));
     assert_eq!(H::of_name("Item: Split items at time selection"), None);
+}
+
+/// Une vue jamais dessinee (ouverture, rechargement du module) redessine
+/// toute sa fenetre : sa taille vient de la fenetre, pas du dernier dessin
+/// (0 x 0 : la vue restait noire, 2026-11-22).
+#[test]
+fn une_vue_neuve_se_dessine_entiere() {
+    let mut v = arranger();
+    assert_eq!(v.take_damage(800, 600), vec![cp_gfx::IRect::new(0, 0, 800, 600)]);
 }

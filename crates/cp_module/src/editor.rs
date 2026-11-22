@@ -919,7 +919,7 @@ impl App {
         if w.frame.resize(cw, ch) || force {
             self.ed.ed.mark();
         }
-        let damage = self.ed.ed.take_damage();
+        let damage = self.ed.ed.take_damage(cw, ch);
         let ed = &mut self.ed.ed;
         let (text, icons, th) = (&mut self.text, &mut self.icons, &w.theme);
         w.frame.paint(&damage, &mut self.scratch, |cv| {

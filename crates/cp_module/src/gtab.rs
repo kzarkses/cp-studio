@@ -2896,7 +2896,7 @@ impl App {
         if w.frame.resize(cw, ch) || force {
             self.gt.arr.mark();
         }
-        let damage = self.gt.arr.take_damage();
+        let damage = self.gt.arr.take_damage(cw, ch);
         let arr = &mut self.gt.arr;
         let (text, icons, th) = (&mut self.text, &mut self.icons, &w.theme);
         w.frame.paint(&damage, &mut self.scratch, |cv| {
