@@ -114,6 +114,17 @@ fn hand(spots: &[Spot]) -> Option<i32> {
 /// Rend, pour chaque accord, une place par hauteur (dans l'ordre donne), ou
 /// `None` pour une hauteur qui ne se joue pas (trop de notes, hors manche).
 pub fn assign(groups: &[Vec<i32>], gaps: &[f64], t: &Tuning) -> Vec<Vec<Option<Spot>>> {
+    assign_bonded(groups, gaps, &[], t)
+}
+
+/// Comme [`assign`] ; `bonds[i]` : l'accord `i` (une note seule) glisse
+/// depuis le precedent (une note seule) et reste sur sa corde.
+pub fn assign_bonded(
+    groups: &[Vec<i32>],
+    gaps: &[f64],
+    bonds: &[bool],
+    t: &Tuning,
+) -> Vec<Vec<Option<Spot>>> {
     let n = groups.len();
     // Les candidats de chaque accord ; un accord injouable perd ses notes
     // les plus hautes jusqu'a l'etre.
@@ -170,7 +181,13 @@ pub fn assign(groups: &[Vec<i32>], gaps: &[f64], t: &Tuning) -> Vec<Vec<Option<S
                 };
                 // Une meme note rejouee reste a sa place.
                 let same = spots.iter().any(|s| pspots.contains(s)) as i32 as f64;
-                let c = cost[k - 1][j] + mv * ease - same * 0.3;
+                // Une glisse ne change pas de corde.
+                let bond = bonds.get(i).copied().unwrap_or(false)
+                    && prev + 1 == i
+                    && spots.len() == 1
+                    && pspots.len() == 1
+                    && spots[0].string != pspots[0].string;
+                let c = cost[k - 1][j] + mv * ease - same * 0.3 + if bond { 6.0 } else { 0.0 };
                 if c < best {
                     best = c;
                     arg = j;

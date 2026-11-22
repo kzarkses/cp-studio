@@ -881,6 +881,48 @@ impl SnapGrid {
 
 pub use cp_ui::Guide;
 
+/// Comment une note se joue, pour l'infobulle et la ligne d'etat :
+/// « · hammer-on », « · slide », « · slide in from below », « · bend full ».
+pub fn play_text(n: &TNote) -> String {
+    let mut s = String::new();
+    match n.tech {
+        Tech::Hammer => s += " \u{00b7} hammer-on",
+        Tech::Pull => s += " \u{00b7} pull-off",
+        Tech::Slide => s += " \u{00b7} slide",
+        Tech::Plain => {}
+    }
+    match n.slide_in() {
+        0 => {}
+        k if k < 0 => s += " \u{00b7} slide in from below",
+        _ => s += " \u{00b7} slide in from above",
+    }
+    if let Some(b) = n.bend_mark() {
+        s += &format!(" \u{00b7} bend {}", bend_label(b.amount));
+        if b.release.is_some() {
+            s += " and release";
+        }
+    }
+    s
+}
+
+/// Un bend comme les tablatures l'ecrivent, en tons : « ¼ », « ½ »,
+/// « full », « 1½ », « 2 ».
+pub fn bend_label(semis: f32) -> String {
+    let quarters = (semis * 2.0).round() as i32;
+    let (whole, frac) = (quarters / 4, quarters % 4);
+    let f = match frac {
+        1 => "\u{00bc}",
+        2 => "\u{00bd}",
+        3 => "\u{00be}",
+        _ => "",
+    };
+    match (whole, f) {
+        (0, "") | (1, "") => "full".into(),
+        (0, f) => f.into(),
+        (w, f) => format!("{w}{f}"),
+    }
+}
+
 /// Comment le lasso change la selection (les gestes de l'arrangement de
 /// REAPER) : seul, Maj en plus, Ctrl en inversant.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -2494,11 +2536,7 @@ impl Arr {
                     nt.pitch.div_euclid(12) - 1,
                     nstr - nt.string,
                     nt.fret,
-                    match nt.tech {
-                        Tech::Hammer => " \u{00b7} hammer-on",
-                        Tech::Pull => " \u{00b7} pull-off",
-                        Tech::Plain => "",
-                    },
+                    play_text(nt),
                     bar as i64 + 1,
                     beat + 1.0,
                 )
@@ -2691,11 +2729,7 @@ impl Arr {
             n.pitch.div_euclid(12) - 1,
             nstr - n.string,
             n.fret,
-            match n.tech {
-                Tech::Hammer => " · hammer-on",
-                Tech::Pull => " · pull-off",
-                Tech::Plain => "",
-            }
+            play_text(n)
         ))
     }
 }

@@ -23,6 +23,23 @@ pub struct QnNote {
 
 type GetStr = unsafe extern "C" fn(P, *const c_char, *mut c_char, bool) -> bool;
 
+/// Un evenement de canal ecrit avec les notes (noires du projet, plus
+/// `tick` tics du MIDI) : `status` 0xE0 (pitch bend, `d1` poids faible, `d2`
+/// poids fort) ou 0xB0 (CC `d1`, valeur `d2`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ChanEv {
+    pub qn: f64,
+    pub tick: i32,
+    pub chan: i32,
+    pub status: i32,
+    pub d1: i32,
+    pub d2: i32,
+}
+
+/// Les CC que l'ecriture d'une tablature remplace : la pedale legato et le
+/// reglage de l'etendue des pitch bends (RPN 0).
+const TAB_CCS: [i32; 5] = [68, 101, 100, 6, 38];
+
 /// Comment un lasso change la selection d'items.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SelMode {
@@ -415,8 +432,71 @@ impl Reaper {
         Some(out)
     }
 
-    /// Remplace toutes les notes d'un item MIDI. Un pas d'annulation.
-    pub fn set_midi_notes(&self, guid: &str, notes: &[QnNote], undo: &str) -> bool {
+    /// Les pitch bends d'un item MIDI : (noires du projet, canal, valeur
+    /// -8192..8191).
+    pub fn midi_bends(&self, guid: &str) -> Option<Vec<(f64, i32, i32)>> {
+        type Count = unsafe extern "C" fn(P, *mut i32, *mut i32, *mut i32) -> i32;
+        type GetCc = unsafe extern "C" fn(
+            P,
+            i32,
+            *mut bool,
+            *mut bool,
+            *mut f64,
+            *mut i32,
+            *mut i32,
+            *mut i32,
+            *mut i32,
+        ) -> bool;
+        type ToQn = unsafe extern "C" fn(P, f64) -> f64;
+        let take = self.midi_take(guid)?;
+        let count: Count = self.f(c"MIDI_CountEvts")?;
+        let get: GetCc = self.f(c"MIDI_GetCC")?;
+        let qn: ToQn = self.f(c"MIDI_GetProjQNFromPPQPos")?;
+        let mut out = Vec::new();
+        // SAFETY: prise MIDI vivante ; sorties a nous.
+        unsafe {
+            let mut n = 0i32;
+            count(take, null_mut(), &mut n, null_mut());
+            for i in 0..n {
+                let (mut s, mut m, mut pos) = (false, false, 0f64);
+                let (mut st, mut ch, mut d1, mut d2) = (0i32, 0i32, 0i32, 0i32);
+                if get(
+                    take, i, &mut s, &mut m, &mut pos, &mut st, &mut ch, &mut d1, &mut d2,
+                ) && !m
+                    && st == 0xE0
+                {
+                    out.push((qn(take, pos), ch, ((d2 << 7) | d1) - 8192));
+                }
+            }
+        }
+        Some(out)
+    }
+
+    /// Remplace toutes les notes d'un item MIDI, ses pitch bends et ses
+    /// pedales legato (`evs`) ; `bend_range` : l'etendue des pitch bends
+    /// (demi-tons), annoncee sur chaque canal avant sa premiere note (RPN 0).
+    /// Un pas d'annulation.
+    pub fn set_midi_notes(
+        &self,
+        guid: &str,
+        notes: &[QnNote],
+        evs: &[ChanEv],
+        bend_range: i32,
+        undo: &str,
+    ) -> bool {
+        type GetCc = unsafe extern "C" fn(
+            P,
+            i32,
+            *mut bool,
+            *mut bool,
+            *mut f64,
+            *mut i32,
+            *mut i32,
+            *mut i32,
+            *mut i32,
+        ) -> bool;
+        type DelCc = unsafe extern "C" fn(P, i32) -> bool;
+        type InsCc = unsafe extern "C" fn(P, bool, bool, f64, i32, i32, i32, i32) -> bool;
         type Count = unsafe extern "C" fn(P, *mut i32, *mut i32, *mut i32) -> i32;
         type Del = unsafe extern "C" fn(P, i32) -> bool;
         type FromQn = unsafe extern "C" fn(P, f64) -> f64;
@@ -438,6 +518,13 @@ impl Reaper {
         ) else {
             return false;
         };
+        let (Some(get_cc), Some(del_cc), Some(ins_cc)) = (
+            self.f::<GetCc>(c"MIDI_GetCC"),
+            self.f::<DelCc>(c"MIDI_DeleteCC"),
+            self.f::<InsCc>(c"MIDI_InsertCC"),
+        ) else {
+            return false;
+        };
         let ub = self.f::<UndoBegin>(c"Undo_BeginBlock2");
         let ue = self.f::<UndoEnd>(c"Undo_EndBlock2");
         let upd = self.f::<Update>(c"UpdateArrange");
@@ -452,20 +539,64 @@ impl Reaper {
             for i in (0..n).rev() {
                 del(take, i);
             }
+            // Les pitch bends et les CC de la tablature d'avant.
+            let mut nc = 0i32;
+            count(take, null_mut(), &mut nc, null_mut());
+            for i in (0..nc).rev() {
+                let (mut s, mut m, mut pos) = (false, false, 0f64);
+                let (mut st, mut ch, mut d1, mut d2) = (0i32, 0i32, 0i32, 0i32);
+                if get_cc(
+                    take, i, &mut s, &mut m, &mut pos, &mut st, &mut ch, &mut d1, &mut d2,
+                ) && (st == 0xE0 || (st == 0xB0 && TAB_CCS.contains(&d1)))
+                {
+                    del_cc(take, i);
+                }
+            }
             let nosort = true;
+            let mut first: [Option<f64>; 16] = [None; 16];
             for nt in notes {
                 let a = ppq(take, nt.qn0);
                 let b = ppq(take, nt.qn1).max(a + 1.0);
+                let ch = nt.chan.clamp(0, 15);
+                let f = &mut first[ch as usize];
+                *f = Some(f.map_or(a, |x| x.min(a)));
                 ins(
                     take,
                     false,
                     false,
                     a,
                     b,
-                    nt.chan.clamp(0, 15),
+                    ch,
                     nt.pitch.clamp(0, 127),
                     nt.vel.clamp(1, 127),
                     &nosort,
+                );
+            }
+            // L'etendue des pitch bends (RPN 0), un peu avant la premiere note
+            // de chaque canal.
+            if !evs.is_empty() {
+                for (ch, f) in first.iter().enumerate() {
+                    let Some(a) = *f else { continue };
+                    let at = (a.round() - 8.0).max(0.0);
+                    for (k, (cc, v)) in [(101, 0), (100, 0), (6, bend_range.clamp(1, 24)), (38, 0)]
+                        .into_iter()
+                        .enumerate()
+                    {
+                        ins_cc(take, false, false, at + k as f64, 0xB0, ch as i32, cc, v);
+                    }
+                }
+            }
+            for e in evs {
+                let at = (ppq(take, e.qn).round() + e.tick as f64).max(0.0);
+                ins_cc(
+                    take,
+                    false,
+                    false,
+                    at,
+                    e.status,
+                    e.chan.clamp(0, 15),
+                    e.d1.clamp(0, 127),
+                    e.d2.clamp(0, 127),
                 );
             }
             sort(take);
@@ -480,8 +611,8 @@ impl Reaper {
         true
     }
 
-    /// L'empreinte des notes d'un item MIDI : elle change a chaque
-    /// modification (dans REAPER ou par nous).
+    /// L'empreinte d'un item MIDI (notes et CC : un bend change compte) :
+    /// elle change a chaque modification (dans REAPER ou par nous).
     pub fn midi_hash(&self, guid: &str) -> Option<String> {
         type Hash = unsafe extern "C" fn(P, bool, *mut c_char, i32) -> bool;
         let take = self.midi_take(guid)?;
@@ -489,7 +620,7 @@ impl Reaper {
         let mut buf = vec![0u8; 128];
         // SAFETY: prise vivante, tampon de 128 octets annonce.
         unsafe {
-            if !h(take, true, buf.as_mut_ptr() as *mut c_char, 128) {
+            if !h(take, false, buf.as_mut_ptr() as *mut c_char, 128) {
                 return None;
             }
             Some(

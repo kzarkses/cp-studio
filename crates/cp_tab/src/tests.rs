@@ -242,6 +242,7 @@ fn la_partition_tient_dans_ses_mesures() {
             pitch: 52,
             legato: false,
             vel: 90,
+            ..Default::default()
         },
         TabNote {
             qn0: 9.02,
@@ -249,6 +250,7 @@ fn la_partition_tient_dans_ses_mesures() {
             pitch: 55,
             legato: false,
             vel: 90,
+            ..Default::default()
         },
         TabNote {
             qn0: 11.0,
@@ -256,6 +258,7 @@ fn la_partition_tient_dans_ses_mesures() {
             pitch: 45,
             legato: false,
             vel: 90,
+            ..Default::default()
         },
         TabNote {
             qn0: 11.0,
@@ -263,6 +266,7 @@ fn la_partition_tient_dans_ses_mesures() {
             pitch: 52,
             legato: false,
             vel: 90,
+            ..Default::default()
         },
         TabNote {
             qn0: 13.5,
@@ -270,6 +274,7 @@ fn la_partition_tient_dans_ses_mesures() {
             pitch: 28,
             legato: false,
             vel: 90,
+            ..Default::default()
         },
     ];
     let (xml, st) = musicxml(&notes, &spec);
@@ -312,6 +317,7 @@ fn un_marteau_et_un_tire_s_ecrivent_sur_la_meme_corde() {
         pitch: p,
         legato,
         vel: 90,
+        ..Default::default()
     };
     let notes = vec![
         n(0.0, 55, false),
@@ -342,6 +348,7 @@ fn tn(q: f64, len: f64, p: i32, legato: bool) -> TabNote {
         pitch: p,
         legato,
         vel: 90,
+        ..Default::default()
     }
 }
 
@@ -422,7 +429,7 @@ fn l_aller_retour_avec_le_midi_garde_cordes_liaisons_et_notes_tenues() {
             .any(|m| m.pitch == 64 && (m.chan == 0 || m.chan == 1))
     );
     let side = Sidecar::from_text(&Sidecar::of(&tab, &Default::default()).to_text());
-    let back = doc::from_midi(&midi, &t, &side);
+    let back = doc::from_midi(&midi, &[], &t, &side);
     assert_eq!(back, tab);
     // Une note ecrite dans REAPER sur un canal hors des cordes : replacee.
     let odd = vec![MidiQn {
@@ -432,7 +439,7 @@ fn l_aller_retour_avec_le_midi_garde_cordes_liaisons_et_notes_tenues() {
         chan: 9,
         vel: 100,
     }];
-    let n = doc::from_midi(&odd, &t, &Sidecar::default());
+    let n = doc::from_midi(&odd, &[], &t, &Sidecar::default());
     assert_eq!((n[0].string, n[0].fret), (0, 1));
 }
 
@@ -447,6 +454,7 @@ fn un_nouveau_decodage_respecte_les_corrections() {
         vel: 90,
         tech: Tech::Plain,
         locked,
+        ..Default::default()
     };
     let old = vec![
         note(0.0, 57, 3, 2, true),
@@ -504,6 +512,7 @@ fn la_tab_d_une_prise_suit_son_item() {
             vel: 90,
             tech: Tech::Plain,
             locked: false,
+            ..Default::default()
         },
         TNote {
             qn0: 8.5,
@@ -514,6 +523,7 @@ fn la_tab_d_une_prise_suit_son_item() {
             vel: 80,
             tech: Tech::Hammer,
             locked: true,
+            ..Default::default()
         },
     ];
     let mut sup = HashSet::new();
@@ -561,4 +571,139 @@ fn le_midi_modifie_fait_foi() {
     let merged = doc::merge(&now, tab.clone(), &sup, None);
     assert!(merged.iter().all(|n| n.pitch != 67));
     assert!(merged.iter().any(|n| n.pitch == 69));
+}
+
+/// Les bends et les glisses font l'aller-retour par le MIDI (pitch bends du
+/// canal de la corde, a la resolution de 14 bits), par le fichier de la tab
+/// et s'ecrivent en MusicXML.
+#[test]
+fn bends_et_glisses_font_l_aller_retour() {
+    use crate::doc::{CcKind, Tech, midi_events};
+    let t = Tuning::standard();
+    // Sol (corde 3, case 7 = D4 62) : approche d'en dessous de 2, puis bend
+    // d'un ton relache ; ensuite une glisse 7 -> 9 sur la meme corde.
+    let a = TNote {
+        qn0: 4.0,
+        qn1: 6.0,
+        pitch: 62,
+        string: 2,
+        fret: 7,
+        vel: 90,
+        bend: vec![
+            (0.0, -2.0),
+            (0.1, 0.0),
+            (0.5, 0.0),
+            (0.8, 2.0),
+            (1.3, 2.0),
+            (1.6, 0.0),
+        ],
+        ..Default::default()
+    };
+    let b = TNote {
+        qn0: 6.0,
+        qn1: 7.0,
+        pitch: 64,
+        string: 2,
+        fret: 9,
+        vel: 90,
+        tech: Tech::Slide,
+        ..Default::default()
+    };
+    let docs = vec![a.clone(), b.clone()];
+    assert_eq!(a.slide_in(), -2);
+    let bm = a.bend_mark().expect("le bend");
+    assert_eq!(bm.amount, 2.0);
+    assert!(bm.release.is_some());
+    let notes = doc::to_midi(&docs, &t);
+    let ev = midi_events(&docs, &t);
+    // Le MIDI : 14 bits, etendue de 12 demi-tons.
+    let q14 = |v: f32| {
+        let x = (8192.0 + v / doc::BEND_RANGE * 8192.0)
+            .round()
+            .clamp(0.0, 16383.0);
+        (x - 8192.0) / 8192.0 * doc::BEND_RANGE
+    };
+    let bends: Vec<(f64, u8, f32)> = ev
+        .iter()
+        .filter_map(|e| match e.kind {
+            CcKind::Bend(v) => Some((e.qn + e.tick as f64 / 960.0, e.chan, q14(v))),
+            _ => None,
+        })
+        .collect();
+    // La glisse ne se repince pas : la pedale legato l'entoure.
+    assert!(
+        ev.iter()
+            .any(|e| e.kind == CcKind::Legato(true) && (e.qn - 6.0).abs() < 1e-9)
+    );
+    let side = doc::Sidecar::of(&docs, &Default::default());
+    let back = doc::from_midi(&notes, &bends, &t, &side);
+    assert_eq!(back.len(), 2);
+    assert_eq!(back[1].tech, Tech::Slide);
+    assert!(back[1].bend.is_empty(), "{:?}", back[1].bend);
+    // La courbe de la premiere revient, sans la rampe de la glisse.
+    assert_eq!(back[0].slide_in(), -2, "{:?}", back[0].bend);
+    let bm2 = back[0].bend_mark().expect("le bend relu");
+    assert_eq!(bm2.amount, 2.0);
+    assert!(bm2.release.is_some());
+    for &(q, v) in &a.bend {
+        let w = doc::value_at(&back[0].bend, q);
+        assert!(
+            (w - v).abs() < 0.1,
+            "a {q} : {w} pour {v} ({:?})",
+            back[0].bend
+        );
+    }
+    assert!(
+        back[0].bend.iter().all(|p| p.0 < 2.0 - 0.1),
+        "{:?}",
+        back[0].bend
+    );
+    // Le fichier de la tab.
+    let txt = doc::tab_to_text(&docs, &Default::default(), "", 4.0);
+    let (d2, _, _) = doc::tab_from_text(&txt, 4.0).unwrap();
+    assert_eq!(d2[0].bend.len(), a.bend.len());
+    assert_eq!(d2[1].tech, Tech::Slide);
+    // Le MusicXML.
+    let spec = ScoreSpec {
+        title: "t".into(),
+        origin_qn: 4.0,
+        sig: (4, 4),
+        bpm: 120.0,
+        grid: 4,
+        tuning: t.clone(),
+    };
+    let (xml, _) = crate::score::write_musicxml(&docs, &spec, 0);
+    assert!(xml.contains("<scoop/>"), "{xml}");
+    assert!(xml.contains("<bend-alter>2</bend-alter>"), "{xml}");
+    assert!(xml.contains("<release/>"), "{xml}");
+    assert!(xml.contains("<slide type=\"start\""), "{xml}");
+    assert!(xml.contains("<slide type=\"stop\""), "{xml}");
+}
+
+/// Une glisse detectee reste sur sa corde au doigte.
+#[test]
+fn une_glisse_reste_sur_sa_corde() {
+    use crate::doc::Tech;
+    let t = Tuning::standard();
+    let n = vec![
+        TabNote {
+            qn0: 0.0,
+            qn1: 1.0,
+            pitch: 57,
+            vel: 90,
+            ..Default::default()
+        },
+        TabNote {
+            qn0: 1.0,
+            qn1: 2.0,
+            pitch: 64,
+            vel: 90,
+            slid: true,
+            ..Default::default()
+        },
+    ];
+    let (tab, _) = doc::finger(&n, 4, 120.0, &t);
+    assert_eq!(tab.len(), 2);
+    assert_eq!(tab[0].string, tab[1].string, "{tab:?}");
+    assert_eq!(tab[1].tech, Tech::Slide);
 }

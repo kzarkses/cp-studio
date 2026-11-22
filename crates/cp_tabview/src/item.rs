@@ -115,6 +115,7 @@ impl Item {
             vel: 96,
             tech: Tech::Plain,
             locked: true,
+            ..Default::default()
         };
         let k = n.key();
         self.doc.push(n);

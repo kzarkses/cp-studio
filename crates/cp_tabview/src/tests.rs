@@ -74,6 +74,7 @@ fn item(guid: &str, name: &str, bar0: usize, bars: usize, raw: &[Raw]) -> Item {
                 pitch: OPEN[s - 1] + f,
                 legato: mark == "L",
                 vel: 90,
+                ..Default::default()
             };
             if mark == "G" {
                 cands.push(n);
@@ -764,6 +765,7 @@ fn long_item(guid: &str, qn0: f64, qn: f64, n: usize, g: usize) -> Item {
             pitch: 40 + ((k * 7) % 30) as i32,
             legato: false,
             vel: 90,
+            ..Default::default()
         });
     }
     let mut cands = Vec::new();
@@ -775,6 +777,7 @@ fn long_item(guid: &str, qn0: f64, qn: f64, n: usize, g: usize) -> Item {
             pitch: 45 + ((k * 5) % 20) as i32,
             legato: false,
             vel: 60,
+            ..Default::default()
         });
     }
     let detect = Detect::default();

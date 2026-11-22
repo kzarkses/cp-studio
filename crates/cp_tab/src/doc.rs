@@ -7,9 +7,10 @@
 //!   phrase, les marteaux et les tires) ;
 //! - [`ghosts`] : les notes que le reseau a PRESQUE entendues (sous le seuil),
 //!   que Cedric garde d'un clic ;
-//! - [`to_midi`] / [`from_midi`] : l'aller-retour avec l'item MIDI, et
-//!   [`Sidecar`] : ce que le MIDI ne sait pas porter (liaisons, notes
-//!   touchees par Cedric, notes qu'il a effacees).
+//! - [`to_midi`] / [`from_midi`] : l'aller-retour avec l'item MIDI (les
+//!   bends et les glisses y sont des pitch bends du canal de la corde,
+//!   [`midi_events`]), et [`Sidecar`] : ce que le MIDI ne sait pas porter
+//!   (liaisons, notes touchees par Cedric, notes qu'il a effacees).
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 
@@ -25,10 +26,12 @@ pub enum Tech {
     Hammer,
     /// Tire (« P ») : plus basse, sans attaque.
     Pull,
+    /// Glisse depuis la precedente, sur la meme corde, sans attaque.
+    Slide,
 }
 
 /// Une note de la tablature.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Default)]
 pub struct TNote {
     /// Debut et fin, en noires du projet (le temps reel joue, pas la grille).
     pub qn0: f64,
@@ -43,9 +46,54 @@ pub struct TNote {
     /// Touchee par Cedric (deplacee, changee, ajoutee, gardee) : un nouveau
     /// decodage la respecte.
     pub locked: bool,
+    /// La hauteur jouee au fil de la note : (noires depuis son debut,
+    /// demi-tons par rapport a elle), lineaire entre les points ; vide : la
+    /// note juste. Une courbe qui part de plus bas (ou plus haut) et rejoint 0
+    /// est une glisse d'approche ; ce qui monte ensuite est un bend. C'est
+    /// elle que portent les pitch bends du MIDI.
+    pub bend: Vec<(f64, f32)>,
+}
+
+/// Le bend d'une note, pour l'ecrire : de combien (demi-tons, au demi
+/// pres), quand il atteint sa hauteur, et quand il est relache.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct BendMark {
+    pub amount: f32,
+    pub peak: f64,
+    pub release: Option<f64>,
 }
 
 impl TNote {
+    /// La glisse d'approche : d'ou elle part (demi-tons, negatif : d'en
+    /// dessous), 0 : aucune.
+    pub fn slide_in(&self) -> i8 {
+        match self.bend.first() {
+            Some(&(t, v)) if t < 1e-6 && v.abs() >= 0.75 => v.round().clamp(-24.0, 24.0) as i8,
+            _ => 0,
+        }
+    }
+
+    /// Le bend, s'il y en a un (apres la glisse d'approche).
+    pub fn bend_mark(&self) -> Option<BendMark> {
+        let from = if self.slide_in() != 0 {
+            self.bend.iter().position(|p| p.1.abs() < 0.3)?
+        } else {
+            0
+        };
+        let rest = &self.bend[from..];
+        let top = rest.iter().map(|p| p.1).fold(0f32, f32::max);
+        if top < 0.4 {
+            return None;
+        }
+        let pk = rest.iter().position(|p| p.1 >= top * 0.8)?;
+        let release = rest[pk..].iter().find(|p| p.1 <= top * 0.35).map(|p| p.0);
+        Some(BendMark {
+            amount: (top * 2.0).round().max(1.0) / 2.0,
+            peak: rest[pk].0,
+            release,
+        })
+    }
+
     /// La cle d'une note pour la retrouver d'une lecture a l'autre : son debut
     /// au 1/960 de noire et sa hauteur.
     pub fn key(&self) -> (i64, i32) {
@@ -63,8 +111,17 @@ pub fn sort(notes: &mut [TNote]) {
     });
 }
 
-/// Une note d'accord : (hauteur repliee, debut, fin, sans attaque, velocite).
-type Member = (i32, f64, f64, bool, u8);
+/// Une note d'accord.
+#[derive(Clone)]
+struct Member {
+    p: i32,
+    q0: f64,
+    q1: f64,
+    legato: bool,
+    vel: u8,
+    slid: bool,
+    bend: Vec<(f64, f32)>,
+}
 
 /// Des notes detectees a la tablature. Les notes qui commencent sur la meme
 /// case de la grille (`grid` par noire) forment un accord ; le doigte se
@@ -73,25 +130,42 @@ type Member = (i32, f64, f64, bool, u8);
 /// (tablature, notes injouables laissees de cote).
 pub fn finger(notes: &[TabNote], grid: u32, bpm: f64, tuning: &Tuning) -> (Vec<TNote>, usize) {
     let g = grid.max(1) as f64;
-    // Les accords : (hauteur repliee, debut, fin, sans attaque, velocite).
+    // Les accords.
     let mut groups: BTreeMap<i64, Vec<Member>> = BTreeMap::new();
     for n in notes {
         let s = (n.qn0 * g).round() as i64;
         let p = fret::fold(n.pitch, tuning);
         let gr = groups.entry(s).or_default();
-        if let Some(x) = gr.iter_mut().find(|x| x.0 == p) {
-            x.1 = x.1.min(n.qn0);
-            x.2 = x.2.max(n.qn1);
-            x.3 &= n.legato;
-            x.4 = x.4.max(n.vel);
+        if let Some(x) = gr.iter_mut().find(|x| x.p == p) {
+            x.q0 = x.q0.min(n.qn0);
+            x.q1 = x.q1.max(n.qn1);
+            x.legato &= n.legato;
+            x.vel = x.vel.max(n.vel);
+            x.slid &= n.slid;
+            if x.bend.is_empty() {
+                x.bend = n.bend.clone();
+            }
         } else {
-            gr.push((p, n.qn0, n.qn1, n.legato, n.vel));
+            gr.push(Member {
+                p,
+                q0: n.qn0,
+                q1: n.qn1,
+                legato: n.legato,
+                vel: n.vel,
+                slid: n.slid,
+                bend: n.bend.clone(),
+            });
         }
     }
     let starts: Vec<i64> = groups.keys().copied().collect();
     let pitches: Vec<Vec<i32>> = groups
         .values()
-        .map(|v| v.iter().map(|x| x.0).collect())
+        .map(|v| v.iter().map(|x| x.p).collect())
+        .collect();
+    // Une note seule glissee depuis une note seule : la meme corde.
+    let firsts: Vec<bool> = groups.values().map(|v| v.len() == 1 && v[0].slid).collect();
+    let bonds: Vec<bool> = (0..firsts.len())
+        .map(|i| i > 0 && firsts[i] && pitches[i - 1].len() == 1)
         .collect();
     let sec_per_cell = 60.0 / bpm.max(1.0) / g;
     let gaps: Vec<f64> = starts
@@ -105,7 +179,7 @@ pub fn finger(notes: &[TabNote], grid: u32, bpm: f64, tuning: &Tuning) -> (Vec<T
             }
         })
         .collect();
-    let spots = fret::assign(&pitches, &gaps, tuning);
+    let spots = fret::assign_bonded(&pitches, &gaps, &bonds, tuning);
     let mut out: Vec<TNote> = Vec::new();
     let mut dropped = 0;
     // Pour les liaisons : la note seule de l'accord precedent (indice, fin en
@@ -114,17 +188,18 @@ pub fn finger(notes: &[TabNote], grid: u32, bpm: f64, tuning: &Tuning) -> (Vec<T
     for (i, (&s, gr)) in groups.iter().enumerate() {
         let next = starts.get(i + 1).copied().unwrap_or(i64::MAX);
         let first = out.len();
-        for (k, &(p, q0, q1, _, vel)) in gr.iter().enumerate() {
+        for (k, m) in gr.iter().enumerate() {
             match spots[i].get(k).copied().flatten() {
                 Some(sp) => out.push(TNote {
-                    qn0: q0,
-                    qn1: q1.max(q0 + 1e-6),
-                    pitch: p,
+                    qn0: m.q0,
+                    qn1: m.q1.max(m.q0 + 1e-6),
+                    pitch: m.p,
                     string: sp.string,
                     fret: sp.fret,
-                    vel,
+                    vel: m.vel,
                     tech: Tech::Plain,
                     locked: false,
+                    bend: m.bend.clone(),
                 }),
                 None => dropped += 1,
             }
@@ -133,20 +208,22 @@ pub fn finger(notes: &[TabNote], grid: u32, bpm: f64, tuning: &Tuning) -> (Vec<T
         if placed == 1 && gr.len() == 1 {
             let b = first;
             if let Some((a, a_end)) = prev_single {
-                let legato = gr[0].3;
-                if legato
+                let (legato, slid) = (gr[0].legato, gr[0].slid);
+                if (legato || slid)
                     && a_end == s
                     && out[a].string == out[b].string
                     && out[a].pitch != out[b].pitch
                 {
-                    out[b].tech = if out[b].pitch > out[a].pitch {
+                    out[b].tech = if slid {
+                        Tech::Slide
+                    } else if out[b].pitch > out[a].pitch {
                         Tech::Hammer
                     } else {
                         Tech::Pull
                     };
                 }
             }
-            let e = ((gr[0].2 * g).round() as i64).min(next).max(s + 1);
+            let e = ((gr[0].q1 * g).round() as i64).min(next).max(s + 1);
             prev_single = Some((b, e));
         } else {
             prev_single = None;
@@ -205,6 +282,7 @@ pub fn ghosts(candidates: &[TabNote], doc: &[TNote], grid: u32, tuning: &Tuning)
             vel: c.vel,
             tech: Tech::Plain,
             locked: false,
+            bend: Vec::new(),
         });
     }
     sort(&mut out);
@@ -235,6 +313,198 @@ pub fn to_midi(doc: &[TNote], tuning: &Tuning) -> Vec<MidiQn> {
             vel: t.vel.max(1),
         })
         .collect()
+}
+
+/// Un evenement de canal ecrit avec les notes : un pitch bend (demi-tons,
+/// l'etendue est de [`BEND_RANGE`]) ou la pedale legato (CC 68 : la note
+/// suivante ne se repince pas).
+#[derive(Clone, Debug, PartialEq)]
+pub struct MidiCc {
+    pub qn: f64,
+    pub chan: u8,
+    /// Decalage en tics du MIDI (-1 : juste avant la note de ce moment).
+    pub tick: i32,
+    pub kind: CcKind,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum CcKind {
+    Bend(f32),
+    Legato(bool),
+}
+
+/// L'etendue des pitch bends ecrits (RPN 0 au debut de l'item) : une glisse
+/// d'une octave tient.
+pub const BEND_RANGE: f32 = 12.0;
+
+/// La duree de la rampe d'une glisse entre deux notes (noires), au plus.
+pub const SLIDE_QN: f64 = 0.125;
+
+fn slide_ramp(a: &TNote) -> f64 {
+    SLIDE_QN.min((a.qn1 - a.qn0) * 0.5).max(1.0 / 64.0)
+}
+
+/// Les points d'une courbe, tous les 1/64 de noire entre ses points
+/// (les pitch bends sont des marches).
+fn dense(pts: &[(f64, f32)]) -> Vec<(f64, f32)> {
+    let step = 1.0 / 64.0;
+    let mut out: Vec<(f64, f32)> = Vec::new();
+    for w in pts.windows(2) {
+        let ((ta, va), (tb, vb)) = (w[0], w[1]);
+        out.push((ta, va));
+        if (vb - va).abs() > 0.02 {
+            let mut t = ta + step;
+            while t < tb - 1e-9 {
+                let k = ((t - ta) / (tb - ta)) as f32;
+                out.push((t, va + (vb - va) * k));
+                t += step;
+            }
+        }
+    }
+    if let Some(&l) = pts.last() {
+        out.push(l);
+    }
+    out
+}
+
+/// Les pitch bends et les pedales legato de la tablature : la courbe de
+/// chaque note sur le canal de sa corde ; une glisse vers la note suivante
+/// monte en fin de note ; le canal revient a 0 avant la note d'apres ; un
+/// marteau, un tire et une glisse ne se repincent pas (pedale legato le temps
+/// de la note).
+pub fn midi_events(doc: &[TNote], tuning: &Tuning) -> Vec<MidiCc> {
+    let n = tuning.strings.len();
+    let chan_of = |t: &TNote| (n.saturating_sub(1).saturating_sub(t.string)).min(15) as u8;
+    let mut by: BTreeMap<u8, Vec<&TNote>> = BTreeMap::new();
+    for t in doc {
+        by.entry(chan_of(t)).or_default().push(t);
+    }
+    let mut out = Vec::new();
+    for (ch, mut v) in by {
+        v.sort_by(|a, b| {
+            a.qn0
+                .partial_cmp(&b.qn0)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        let mut bent = false;
+        for (k, a) in v.iter().enumerate() {
+            let next = v.get(k + 1);
+            let mut pts: Vec<(f64, f32)> = a.bend.clone();
+            // La glisse vers la note suivante : la fin de celle-ci monte.
+            if let Some(b) = next.filter(|b| b.tech == Tech::Slide && (b.qn0 - a.qn1).abs() < 0.02)
+            {
+                let len = a.qn1 - a.qn0;
+                let r = slide_ramp(a);
+                let at = (len - r).max(0.0);
+                let from = value_at(&pts, at);
+                pts.retain(|p| p.0 < at - 1e-9);
+                pts.push((at, from));
+                pts.push((len - 1.0 / 128.0, (b.pitch - a.pitch) as f32));
+            }
+            if !pts.is_empty() || bent {
+                // Le canal part de la hauteur de la courbe (0 sans courbe).
+                let first = pts
+                    .first()
+                    .map_or(0.0, |p| if p.0 < 1e-9 { p.1 } else { 0.0 });
+                out.push(MidiCc {
+                    qn: a.qn0,
+                    chan: ch,
+                    tick: -1,
+                    kind: CcKind::Bend(first),
+                });
+                for (t, val) in dense(&pts).into_iter().filter(|p| p.0 > 1e-9) {
+                    out.push(MidiCc {
+                        qn: a.qn0 + t,
+                        chan: ch,
+                        tick: 0,
+                        kind: CcKind::Bend(val.clamp(-BEND_RANGE, BEND_RANGE)),
+                    });
+                }
+                bent = pts.iter().any(|p| p.1.abs() > 1e-3);
+                if bent {
+                    // Retour a 0 : avant la note suivante, ou apres la queue.
+                    let at = next.map_or(a.qn1 + 0.5, |b| b.qn0.min(a.qn1 + 0.5));
+                    if next.is_none_or(|b| at < b.qn0 - 1e-6) {
+                        out.push(MidiCc {
+                            qn: at,
+                            chan: ch,
+                            tick: 0,
+                            kind: CcKind::Bend(0.0),
+                        });
+                        bent = false;
+                    }
+                }
+            }
+            if matches!(a.tech, Tech::Hammer | Tech::Pull | Tech::Slide) {
+                out.push(MidiCc {
+                    qn: a.qn0,
+                    chan: ch,
+                    tick: -1,
+                    kind: CcKind::Legato(true),
+                });
+                out.push(MidiCc {
+                    qn: a.qn0,
+                    chan: ch,
+                    tick: 1,
+                    kind: CcKind::Legato(false),
+                });
+            }
+        }
+    }
+    out.sort_by(|a, b| {
+        (a.qn, a.tick)
+            .partial_cmp(&(b.qn, b.tick))
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    out
+}
+
+/// La valeur d'une courbe a `t` (lineaire, tenue aux bouts).
+pub fn value_at(pts: &[(f64, f32)], t: f64) -> f32 {
+    match pts.iter().position(|p| p.0 > t) {
+        None => pts.last().map_or(0.0, |p| p.1),
+        Some(0) => pts[0].1,
+        Some(k) => {
+            let ((ta, va), (tb, vb)) = (pts[k - 1], pts[k]);
+            if tb - ta < 1e-12 {
+                vb
+            } else {
+                va + (vb - va) * ((t - ta) / (tb - ta)) as f32
+            }
+        }
+    }
+}
+
+/// Garde les points qui comptent d'une courbe lue (une rampe dense de pitch
+/// bends redevient deux points).
+pub fn simplify_curve(v: &[(f64, f32)], tol: f32) -> Vec<(f64, f32)> {
+    if v.len() <= 2 {
+        return v.to_vec();
+    }
+    let mut keep = vec![false; v.len()];
+    keep[0] = true;
+    keep[v.len() - 1] = true;
+    let mut stack = vec![(0usize, v.len() - 1)];
+    while let Some((a, b)) = stack.pop() {
+        if b <= a + 1 {
+            continue;
+        }
+        let (mut worst, mut wi) = (0f32, a);
+        for k in a + 1..b {
+            let lin = value_at(&[v[a], v[b]], v[k].0);
+            let e = (v[k].1 - lin).abs();
+            if e > worst {
+                worst = e;
+                wi = k;
+            }
+        }
+        if worst > tol {
+            keep[wi] = true;
+            stack.push((a, wi));
+            stack.push((wi, b));
+        }
+    }
+    v.iter().zip(&keep).filter(|x| *x.1).map(|x| *x.0).collect()
 }
 
 /// Ce que le MIDI ne porte pas : les liaisons, les notes touchees par Cedric,
@@ -271,7 +541,11 @@ impl Sidecar {
         let mut tech: Vec<_> = self.tech.iter().collect();
         tech.sort();
         for (&(q, p), &t) in tech {
-            let c = if t == Tech::Hammer { 'H' } else { 'P' };
+            let c = match t {
+                Tech::Hammer => 'H',
+                Tech::Slide => 'G',
+                _ => 'P',
+            };
             v.push(format!("{c}:{q}:{p}"));
         }
         let mut l: Vec<_> = self.locked.iter().collect();
@@ -304,6 +578,9 @@ impl Sidecar {
                 "P" => {
                     out.tech.insert((q, p), Tech::Pull);
                 }
+                "G" => {
+                    out.tech.insert((q, p), Tech::Slide);
+                }
                 "L" => {
                     out.locked.insert((q, p));
                 }
@@ -320,8 +597,15 @@ impl Sidecar {
 /// L'item MIDI relu : la corde vient du canal ; une note dont la case sort du
 /// manche (ou d'un canal hors des cordes) est replacee sur la corde jouable la
 /// plus proche. Une note que le pense-bete ne connait pas a ete ecrite par
-/// Cedric dans REAPER : elle est tenue.
-pub fn from_midi(notes: &[MidiQn], tuning: &Tuning, side: &Sidecar) -> Vec<TNote> {
+/// Cedric dans REAPER : elle est tenue. `bends` : les pitch bends de l'item
+/// (noires, canal, demi-tons) ; chaque note prend ceux de son canal pendant
+/// qu'elle sonne (sa courbe), moins la rampe d'une glisse vers la suivante.
+pub fn from_midi(
+    notes: &[MidiQn],
+    bends: &[(f64, u8, f32)],
+    tuning: &Tuning,
+    side: &Sidecar,
+) -> Vec<TNote> {
     let n = tuning.strings.len();
     let mut out: Vec<TNote> = notes
         .iter()
@@ -351,14 +635,47 @@ pub fn from_midi(notes: &[MidiQn], tuning: &Tuning, side: &Sidecar) -> Vec<TNote
                 vel: m.vel,
                 tech: Tech::Plain,
                 locked: false,
+                bend: Vec::new(),
             };
             let k = t.key();
             t.tech = side.tech.get(&k).copied().unwrap_or_default();
             t.locked = side.locked.contains(&k);
-            t
+            // La courbe : les pitch bends du canal pendant la note (celui
+            // pose juste avant son debut compris).
+            let eps = 1.0 / 480.0;
+            let mut pts: Vec<(f64, f32)> = bends
+                .iter()
+                .filter(|b| b.1 == m.chan && b.0 >= m.qn0 - eps && b.0 < m.qn1 - 1e-9)
+                .map(|b| ((b.0 - m.qn0).max(0.0), b.2))
+                .collect();
+            pts.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+            if pts.iter().any(|p| p.1.abs() > 0.05) {
+                t.bend = simplify_curve(&pts, 0.06);
+            }
+            (t, m.chan)
         })
+        .collect::<Vec<(TNote, u8)>>()
+        .into_iter()
+        .map(|x| x.0)
         .collect();
     sort(&mut out);
+    // La rampe d'une glisse appartient a la liaison, pas a la note d'avant.
+    for k in 0..out.len() {
+        if out[k].tech != Tech::Slide {
+            continue;
+        }
+        let (q0, s) = (out[k].qn0, out[k].string);
+        if let Some(a) = (0..k)
+            .rev()
+            .find(|&j| out[j].string == s && (out[j].qn1 - q0).abs() < 0.02)
+        {
+            let at = (out[a].qn1 - out[a].qn0) - slide_ramp(&out[a]);
+            out[a].bend.retain(|p| p.0 < at - 1e-6);
+            if out[a].bend.iter().all(|p| p.1.abs() <= 0.05) {
+                out[a].bend.clear();
+            }
+        }
+    }
     out
 }
 
@@ -453,9 +770,17 @@ pub fn tab_to_text(
                 Tech::Plain => 0,
                 Tech::Hammer => 1,
                 Tech::Pull => 2,
+                Tech::Slide => 3,
             },
             t.locked as u8
         );
+        if !t.bend.is_empty() {
+            s += "b";
+            for (q, v) in &t.bend {
+                s += &format!(" {q:.5} {v:.3}");
+            }
+            s += "\n";
+        }
     }
     let mut sup: Vec<_> = suppressed.iter().collect();
     sup.sort();
@@ -501,10 +826,19 @@ pub fn tab_from_text(s: &str, at_qn: f64) -> Option<TabFile> {
                     tech: match te as i32 {
                         1 => Tech::Hammer,
                         2 => Tech::Pull,
+                        3 => Tech::Slide,
                         _ => Tech::Plain,
                     },
                     locked: lo != 0.0,
+                    bend: Vec::new(),
                 });
+            }
+            // La courbe de la note d'avant.
+            Some(&"b") => {
+                if let Some(last) = doc.last_mut() {
+                    let v: Vec<f64> = v[1..].iter().filter_map(|x| x.parse().ok()).collect();
+                    last.bend = v.chunks_exact(2).map(|c| (c[0], c[1] as f32)).collect();
+                }
             }
             Some(&"s") if v.len() == 3 => {
                 if let (Ok(q), Ok(p)) = (v[1].parse::<i64>(), v[2].parse::<i32>()) {

@@ -118,6 +118,8 @@ struct Ana {
     frames: usize,
     env: Vec<f32>,
     onset: Vec<f32>,
+    /// La hauteur fine (octets), vide pour une analyse d'avant les glisses.
+    contour: Vec<u8>,
 }
 
 /// Ce que rend le fil : la source (detruite sur le fil principal), l'analyse.
@@ -397,7 +399,6 @@ fn file_hash(path: &str) -> String {
 
 /// La tranche de l'analyse d'un fichier qu'un item joue.
 fn slice_of(an: &Analysis, src: &Src) -> Analysis {
-    use cp_tab::model::NOTES;
     let fps = SR as f64 / HOP as f64;
     let n = (src.len.max(0.0) * src.rate.max(1e-6) * fps).ceil() as usize;
     if src.offs >= 0.0 {
@@ -410,19 +411,7 @@ fn slice_of(an: &Analysis, src: &Src) -> Analysis {
     // trop tot de la longueur ajoutee (2026-11-22).
     let lead = ((-src.offs * src.rate.max(1e-6)) * fps).round() as usize;
     let lead = lead.min(n);
-    let body = an.slice(0, n - lead);
-    let mut note = vec![0u8; lead * NOTES];
-    note.extend_from_slice(&body.note);
-    let mut onset = vec![0u8; lead * NOTES];
-    onset.extend_from_slice(&body.onset);
-    let mut env = vec![0u8; lead];
-    env.extend_from_slice(&body.env);
-    Analysis {
-        frames: lead + body.frames,
-        note,
-        onset,
-        env,
-    }
+    an.slice(0, n - lead).pad_front(lead)
 }
 
 fn ana_of(an: &Analysis) -> Ana {
@@ -431,6 +420,11 @@ fn ana_of(an: &Analysis) -> Ana {
         frames: an.frames,
         env: an.env.iter().map(|&v| v as f32 / 255.0).collect(),
         onset: an.onset_curve(),
+        contour: if an.has_contour() {
+            an.contour.clone()
+        } else {
+            Vec::new()
+        },
     }
 }
 
@@ -545,6 +539,28 @@ impl App {
         true
     }
 
+    /// L'analyse connue de ce son n'a pas la hauteur fine (faite avant les
+    /// glisses, le 2026-11-22) : ni bends ni glisses ne s'y lisent.
+    fn gtab_ana_flat(&self, akey: &str, path: &str) -> bool {
+        if let Some(a) = self.gt.anas.get(akey) {
+            return a.contour.is_empty();
+        }
+        if let Some(f) = self.gt.files.get(&file_key(path)) {
+            return !f.has_contour();
+        }
+        // Le fichier en cache : sa version (v1 : sans hauteur fine).
+        let ver = |p: PathBuf| -> Option<u32> {
+            use std::io::Read;
+            let mut h = [0u8; 8];
+            std::fs::File::open(p).ok()?.read_exact(&mut h).ok()?;
+            Some(u32::from_le_bytes([h[4], h[5], h[6], h[7]]))
+        };
+        [file_key(path), akey.to_string()]
+            .iter()
+            .filter_map(|k| ver(self.gtab_cache(k, "cpga")))
+            .any(|v| v < 2)
+    }
+
     fn gtab_has_ana(&self, akey: &str, path: &str) -> bool {
         self.gt.anas.contains_key(akey)
             || self.gt.files.contains_key(&file_key(path))
@@ -596,15 +612,40 @@ impl App {
         if n == 0 {
             return Vec::new();
         }
-        make_notes(&ana.post, &prm)
+        let notes = make_notes(&ana.post, &prm);
+        // Les bends et les glisses, lus dans la hauteur fine (pas pour les
+        // fantomes).
+        let has = ana.contour.len() == ana.frames * cp_tab::model::CONTOUR;
+        let c = cp_tab::glide::Contour {
+            frames: if has && !ghost { ana.frames } else { 0 },
+            v: &ana.contour,
+        };
+        let fq = |f: usize| it.frame_qn[f.min(n - 1)];
+        cp_tab::glide::shape(&notes, &c)
             .into_iter()
-            .filter(|x| x.start < n)
-            .map(|x| TabNote {
-                qn0: it.frame_qn[x.start],
-                qn1: it.frame_qn[x.end.min(n - 1)].max(it.frame_qn[x.start] + 1e-3),
-                pitch: x.pitch,
-                legato: x.peak == 0.0,
-                vel: (40.0 + x.amp.clamp(0.0, 1.0) * 87.0) as u8,
+            .filter(|x| x.note.start < n)
+            .map(|x| {
+                let qn0 = fq(x.note.start);
+                let mut bend: Vec<(f64, f32)> = Vec::new();
+                if x.slide_in != 0 {
+                    bend.push((0.0, x.slide_in as f32));
+                    bend.push(((fq(x.note.start + x.approach) - qn0).max(1e-3), 0.0));
+                }
+                for &(k, v) in &x.bend {
+                    let q = fq(x.note.start + k) - qn0;
+                    if bend.last().is_none_or(|l| q > l.0 + 1e-6) {
+                        bend.push((q, v));
+                    }
+                }
+                TabNote {
+                    qn0,
+                    qn1: fq(x.note.end).max(qn0 + 1e-3),
+                    pitch: x.note.pitch,
+                    legato: x.note.peak == 0.0 && x.slide_in == 0,
+                    vel: (40.0 + x.note.amp.clamp(0.0, 1.0) * 87.0) as u8,
+                    slid: x.slid,
+                    bend,
+                }
             })
             .collect()
     }
@@ -899,7 +940,33 @@ impl App {
                 vel: m.vel as i32,
             })
             .collect();
-        r.set_midi_notes(&g, &notes, undo);
+        let evs: Vec<cp_sys::items::ChanEv> = doc::midi_events(&it.doc, &tuning)
+            .into_iter()
+            .map(|e| match e.kind {
+                doc::CcKind::Bend(v) => {
+                    let x = (8192.0 + v / doc::BEND_RANGE * 8192.0)
+                        .round()
+                        .clamp(0.0, 16383.0) as i32;
+                    cp_sys::items::ChanEv {
+                        qn: e.qn,
+                        tick: e.tick,
+                        chan: e.chan as i32,
+                        status: 0xE0,
+                        d1: x & 127,
+                        d2: x >> 7,
+                    }
+                }
+                doc::CcKind::Legato(on) => cp_sys::items::ChanEv {
+                    qn: e.qn,
+                    tick: e.tick,
+                    chan: e.chan as i32,
+                    status: 0xB0,
+                    d1: 68,
+                    d2: if on { 127 } else { 0 },
+                },
+            })
+            .collect();
+        r.set_midi_notes(&g, &notes, &evs, doc::BEND_RANGE as i32, undo);
         r.set_item_ext(&g, "CPGT_take", &it.take);
         if let Some(h) = r.midi_hash(&g) {
             self.gt.midi_seen.insert(g.clone(), h);
@@ -936,6 +1003,26 @@ impl App {
             return None;
         }
         let notes = r.midi_notes(pm)?;
+        // Un temps du parent a sa place dans ce morceau du meme fichier.
+        let place = |qn: f64| -> f64 {
+            let s = pa.offs + (r.qn_to_time(qn) - pa.pos) * pa.rate;
+            is.pos + (s - tk.offs) / tk.rate
+        };
+        let bends: Vec<(f64, u8, f32)> = r
+            .midi_bends(pm)
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|(q, ch, v)| {
+                let u = place(q);
+                (u >= is.pos - 1e-3 && u < is.pos + is.len).then(|| {
+                    (
+                        r.time_to_qn(u),
+                        ch.clamp(0, 15) as u8,
+                        v as f32 / 8192.0 * doc::BEND_RANGE,
+                    )
+                })
+            })
+            .collect();
         let mut out: Vec<MidiQn> = Vec::new();
         for n in notes {
             // Le temps dans le fichier, puis sa place dans ce morceau.
@@ -954,7 +1041,7 @@ impl App {
                 vel: n.vel.clamp(1, 127) as u8,
             });
         }
-        let mut d = doc::from_midi(&out, &it.detect.tuning(), &Sidecar::default());
+        let mut d = doc::from_midi(&out, &bends, &it.detect.tuning(), &Sidecar::default());
         for x in &mut d {
             x.locked = true;
         }
@@ -980,7 +1067,20 @@ impl App {
                 vel: n.vel.clamp(1, 127) as u8,
             })
             .collect();
-        Some(doc::from_midi(&m, &it.detect.tuning(), &side))
+        let bends: Vec<(f64, u8, f32)> = self
+            .r
+            .midi_bends(midi)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|(q, ch, v)| {
+                (
+                    q,
+                    ch.clamp(0, 15) as u8,
+                    v as f32 / 8192.0 * doc::BEND_RANGE,
+                )
+            })
+            .collect();
+        Some(doc::from_midi(&m, &bends, &it.detect.tuning(), &side))
     }
 
     // -----------------------------------------------------------------------
@@ -1944,6 +2044,14 @@ impl App {
                     self.gt.requested.insert(g.clone());
                     self.gt.failed.remove(&tk);
                     let path = r.item_audio(&g).map(|a| a.path).unwrap_or_default();
+                    // Une analyse d'avant les glisses (sans hauteur fine) est
+                    // refaite : le reseau reecoute le fichier une fois.
+                    if self.gtab_ana_flat(&it.akey, &path) {
+                        self.gt.anas.remove(&it.akey);
+                        self.gt.files.remove(&file_key(&path));
+                        let _ = std::fs::remove_file(self.gtab_cache(&it.akey, "cpga"));
+                        let _ = std::fs::remove_file(self.gtab_cache(&file_key(&path), "cpga"));
+                    }
                     if self.gt.anas.contains_key(&it.akey) || self.gtab_has_ana(&it.akey, &path) {
                         self.gt.force.insert(g.clone());
                         self.gt.redecode.insert(g);
@@ -3567,6 +3675,7 @@ mod tests {
             note,
             onset: vec![0u8; frames * cp_tab::model::NOTES],
             env: vec![0u8; frames],
+            contour: Vec::new(),
         }
     }
 

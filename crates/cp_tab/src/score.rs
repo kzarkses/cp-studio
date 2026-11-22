@@ -5,7 +5,11 @@
 //! fenetre de Guitar Tab dessine la meme partition.
 //!
 //! Les LIES : un marteau ou un tire ([`Tech`]) s'ecrit comme une liaison sur
-//! la portee, et « H » ou « P » sur la tablature.
+//! la portee, et « H » ou « P » sur la tablature ; une glisse, un trait
+//! (`<slide>`). Un bend s'ecrit sur la tablature (`<bend>`, et son
+//! relachement), une glisse d'approche comme un « scoop » (d'en dessous) ou
+//! un « plop » (d'au-dessus), ce que MuseScore lit comme ses glisses
+//! d'entree.
 
 use std::fmt::Write as _;
 
@@ -14,7 +18,7 @@ use crate::engrave::engrave;
 use crate::fret::Tuning;
 
 /// Une note detectee, en noires du projet.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Default)]
 pub struct TabNote {
     pub qn0: f64,
     pub qn1: f64,
@@ -22,6 +26,10 @@ pub struct TabNote {
     /// Jouee sans attaque (liee a la precedente).
     pub legato: bool,
     pub vel: u8,
+    /// Arrivee en glissant depuis la note precedente (meme corde).
+    pub slid: bool,
+    /// La hauteur jouee au fil de la note (voir [`TNote::bend`]).
+    pub bend: Vec<(f64, f32)>,
 }
 
 #[derive(Clone, Debug)]
@@ -175,12 +183,10 @@ pub fn write_musicxml(notes: &[TNote], spec: &ScoreSpec, dropped: usize) -> (Str
                     let _ = writeln!(x, "<staff>{staff}</staff></note>");
                     continue;
                 }
-                let tag = |t: Tech| {
-                    if t == Tech::Hammer {
-                        "hammer-on"
-                    } else {
-                        "pull-off"
-                    }
+                let tag = |t: Tech| match t {
+                    Tech::Hammer => "hammer-on",
+                    Tech::Slide => "slide",
+                    _ => "pull-off",
                 };
                 let lstop = (sg.first && ev.lig_in != Tech::Plain).then(|| tag(ev.lig_in));
                 let lstart = (sg.last && ev.lig_out != Tech::Plain).then(|| tag(ev.lig_out));
@@ -210,11 +216,24 @@ pub fn write_musicxml(notes: &[TNote], spec: &ScoreSpec, dropped: usize) -> (Str
                     if sg.tie_out {
                         nots += "<tied type=\"start\"/>";
                     }
-                    if lstop.is_some() {
-                        nots += "<slur type=\"stop\" number=\"1\"/>";
+                    match lstop {
+                        Some("slide") => nots += "<slide type=\"stop\" number=\"1\"/>",
+                        Some(_) => nots += "<slur type=\"stop\" number=\"1\"/>",
+                        None => {}
                     }
-                    if lstart.is_some() {
-                        nots += "<slur type=\"start\" number=\"1\"/>";
+                    match lstart {
+                        Some("slide") => {
+                            nots += "<slide type=\"start\" number=\"1\" line-type=\"solid\"/>"
+                        }
+                        Some(_) => nots += "<slur type=\"start\" number=\"1\"/>",
+                        None => {}
+                    }
+                    if staff == 1 && sg.first && !sg.tie_in {
+                        match n.slide_in() {
+                            0 => {}
+                            k if k < 0 => nots += "<articulations><scoop/></articulations>",
+                            _ => nots += "<articulations><plop/></articulations>",
+                        }
                     }
                     if staff == 2 {
                         let mut tech = format!(
@@ -223,12 +242,23 @@ pub fn write_musicxml(notes: &[TNote], spec: &ScoreSpec, dropped: usize) -> (Str
                             n.fret
                         );
                         let mark = |k: &str| if k == "hammer-on" { "H" } else { "P" };
-                        if let Some(k) = lstop {
+                        if let Some(k) = lstop.filter(|&k| k != "slide") {
                             let _ = write!(tech, "<{k} number=\"1\" type=\"stop\"/>");
                         }
-                        if let Some(k) = lstart {
+                        if let Some(k) = lstart.filter(|&k| k != "slide") {
                             let _ =
                                 write!(tech, "<{k} number=\"1\" type=\"start\">{}</{k}>", mark(k));
+                        }
+                        if let Some(b) = n.bend_mark().filter(|_| sg.first) {
+                            let _ =
+                                write!(tech, "<bend><bend-alter>{}</bend-alter></bend>", b.amount);
+                            if b.release.is_some() {
+                                let _ = write!(
+                                    tech,
+                                    "<bend><bend-alter>{}</bend-alter><release/></bend>",
+                                    -b.amount
+                                );
+                            }
                         }
                         let _ = write!(nots, "<technical>{tech}</technical>");
                     }

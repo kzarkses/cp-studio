@@ -25,12 +25,15 @@ pub mod cache;
 pub mod doc;
 pub mod engrave;
 pub mod fret;
+pub mod glide;
 pub mod model;
 pub mod notes;
 pub mod resample;
 pub mod score;
 pub mod tuner;
 
+#[cfg(test)]
+mod synth_tests;
 #[cfg(test)]
 mod tests;
 

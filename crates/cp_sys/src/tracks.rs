@@ -220,7 +220,9 @@ impl Reaper {
                 let mut buf = vec![0u8; 128];
                 // SAFETY: prise vivante ; tampon de 128 octets annonce.
                 unsafe {
-                    if h(tk, true, buf.as_mut_ptr() as *mut c_char, 128) {
+                    // Notes et CC (les bends de Guitar Tab), comme
+                    // `midi_hash`.
+                    if h(tk, false, buf.as_mut_ptr() as *mut c_char, 128) {
                         hash = Some(
                             CStr::from_ptr(buf.as_ptr() as *const c_char)
                                 .to_string_lossy()
