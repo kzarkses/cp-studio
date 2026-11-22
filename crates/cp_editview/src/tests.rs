@@ -464,11 +464,14 @@ fn la_table_souris_de_reaper() {
     let mut b = Bench::new(1280, 760);
     let mut v = riff();
     b.draw(&mut v);
-    // Un clic : la note choisie, le curseur a son debut.
+    // Un clic : la note choisie, le curseur la ou l'on clique (la ligne de
+    // grille la plus proche), pas au debut de la note (Cedric, 2026-11-22).
     let (id, x, y) = note_xy(&v, 64, 25.0);
     down(&mut v, x, y, Button::Left, m0());
     let a = up(&mut v, x, y, Button::Left, m0());
-    assert!(a.contains(&Act::Seek(25.0)), "{a:?}");
+    let want = (v.qn_of(x) / v.grid).round() * v.grid;
+    assert!(want > 25.0, "le clic est dans la note, apres son debut");
+    assert!(a.contains(&Act::Seek(want)), "{a:?}");
     // Maj+Win : double la longueur ; Ctrl+Win : la divise.
     let sw = Mods {
         shift: true,
@@ -698,4 +701,42 @@ fn le_clip_audio() {
     mv(&mut e, gx, gy + 40.0, m0());
     up(&mut e, gx, gy + 40.0, Button::Left, m0());
     assert!(e.audio().unwrap().gain_db < -3.0);
+}
+
+/// Le cout d'une image de l'editeur, ancre en bas comme chez Cedric
+/// (2123 x 560), et pendant le glisser d'une note. `cargo test -p
+/// cp_editview --release -- --ignored --nocapture banc`
+#[test]
+#[ignore]
+fn banc_image_editeur() {
+    let mut b = Bench::new(2123, 560);
+    let mut v = riff();
+    b.draw(&mut v);
+    let t = std::time::Instant::now();
+    for _ in 0..20 {
+        v.mark();
+        b.draw(&mut v);
+    }
+    println!(
+        "banc editeur : {:.2} ms par image",
+        t.elapsed().as_secs_f64() * 1000.0 / 20.0
+    );
+    // Un glisser : 40 mouvements, une image chacun (comme avant).
+    let id = v.midi().unwrap().roll.notes[3].id;
+    let (x, y, _, _) = v.rect_of(Hit::Note { id, part: Part::Body }).unwrap();
+    let (x, y) = (x + 4.0, y + 3.0);
+    down(&mut v, x, y, Button::Left, m0());
+    let t = std::time::Instant::now();
+    for k in 0..40 {
+        v.event(&Ev::Move {
+            x: x + k as f32 * 3.0,
+            y: y - k as f32,
+            mods: m0(),
+        });
+        b.draw(&mut v);
+    }
+    println!(
+        "banc glisser : {:.2} ms par mouvement",
+        t.elapsed().as_secs_f64() * 1000.0 / 40.0
+    );
 }

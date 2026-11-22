@@ -3,7 +3,7 @@
 //! clip audio (onde, fondus, gain, bords).
 
 use cp_gfx::text::{Align, Font, TextCache};
-use cp_gfx::{Canvas, Color, Path, hex};
+use cp_gfx::{Canvas, Color, hex};
 use cp_roll::{Note, note_name};
 use cp_ui::{Icon, IconCache, Theme};
 
@@ -143,7 +143,8 @@ impl Ed {
                 );
             }
         }
-        self.draw_playhead(cv, th);
+        // La tete de lecture et les curseurs sont des traits, poses par-dessus
+        // la scene (`strokes`).
         self.draw_scrollbars(cv, th);
         self.boxes = bx;
     }
@@ -605,7 +606,8 @@ impl Ed {
         let dark = th.bg.mix(Color::BLACK, 0.18);
         for (i, &p) in self.rows.iter().enumerate() {
             let y = self.row_y(i);
-            if y + l.rh < l.gy || y > l.gy + l.gh {
+            let rh = self.row_h(i);
+            if y + rh < l.gy || y > l.gy + l.gh {
                 continue;
             }
             let pc = p.rem_euclid(12);
@@ -617,7 +619,7 @@ impl Ed {
             } else {
                 lane
             };
-            cv.fill_rect(l.sx, y, l.sw, l.rh, bg);
+            cv.fill_rect(l.sx, y, l.sw, rh, bg);
             // Le separateur ; un saut de hauteur (mode Notes) est plus epais,
             // le Do aussi.
             let jump = notes_mode && i > 0 && self.rows[i - 1] - p > 1;
@@ -633,7 +635,7 @@ impl Ed {
         }
         // L'exterieur de l'item, assombri.
         if let Some((a, b)) = self.span() {
-            let (xa, xb) = (self.x_of(a), self.x_of(b));
+            let (xa, xb) = (self.x_of(a).round(), self.x_of(b).round());
             let shade = Color::BLACK.with_alpha(70);
             if xa > l.sx {
                 cv.fill_rect(l.sx, l.gy, xa - l.sx, l.gh, shade);
@@ -815,7 +817,8 @@ impl Ed {
         let f = Font::new(0, fs as u16, 600);
         for (i, &p) in self.rows.iter().enumerate() {
             let y = self.row_y(i);
-            if y + l.rh < l.gy || y > l.gy + l.gh {
+            let rh = self.row_h(i);
+            if y + rh < l.gy || y > l.gy + l.gh {
                 continue;
             }
             let pc = p.rem_euclid(12);
@@ -836,7 +839,7 @@ impl Ed {
                 (hex(0xcfcfcf), hex(0x262626))
             };
             let bg = if hov { bg.mix(th.accent, 0.3) } else { bg };
-            cv.fill_rect(0.0, y, kw, l.rh, bg);
+            cv.fill_rect(0.0, y, kw, rh, bg);
             cv.fill_rect(0.0, y, kw, 1.0, Color::BLACK.with_alpha(60));
             // Hors gamme : une marque a gauche.
             if scale.is_some_and(|sc| !sc.contains(p)) {
@@ -1027,23 +1030,6 @@ impl Ed {
     // -----------------------------------------------------------------------
     // La tete de lecture, les barres de defilement
     // -----------------------------------------------------------------------
-
-    fn draw_playhead(&self, cv: &mut Canvas<'_>, th: &Theme) {
-        let l = self.lay;
-        let s = |v: f32| th.s(v);
-        let Some(p) = self.playhead else { return };
-        let x = self.x_of(p).round();
-        if x < l.sx || x > l.sx + l.sw {
-            return;
-        }
-        cv.fill_rect(x, l.top, s(1.5), l.hs_y - l.top, th.playhead);
-        let mut tri = Path::new();
-        tri.move_to(x - s(5.0), l.top + l.ruler_h - s(8.0))
-            .line_to(x + s(6.5), l.top + l.ruler_h - s(8.0))
-            .line_to(x + s(0.75), l.top + l.ruler_h - s(1.0))
-            .close();
-        cv.fill_path(&tri, th.playhead);
-    }
 
     fn draw_scrollbars(&self, cv: &mut Canvas<'_>, th: &Theme) {
         let l = self.lay;

@@ -31,6 +31,22 @@ opt-level = 3
 [profile.dev.package.cp_tab]
 opt-level = 3
 
+# Le dessin : chaque pixel de chaque vue passe par ces crates. Optimisees meme
+# en developpement (mesure du 2026-11-22, une image complete : Guitar Tab
+# 6,8 -> 4,4 ms, l'editeur 2,6 -> 1,3 ms ; la recompilation reste de l'ordre
+# de la seconde).
+[profile.dev.package.cp_gfx]
+opt-level = 3
+
+[profile.dev.package.cp_ui]
+opt-level = 3
+
+[profile.dev.package.cp_tabview]
+opt-level = 3
+
+[profile.dev.package.cp_editview]
+opt-level = 3
+
 [profile.release]
 opt-level = 3
 debug = "line-tables-only"

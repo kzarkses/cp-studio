@@ -103,6 +103,15 @@ pub mod vk {
 /// Une couleur (r, g, b).
 pub type Rgb = (u8, u8, u8);
 
+/// La ligne verticale a la souris, avec les reglages de REAPER.
+#[derive(Clone, Copy, Debug, PartialEq, Default)]
+pub struct Guide {
+    pub on: bool,
+    /// Calee sur la grille quand le magnetisme est la.
+    pub snap: bool,
+    pub color: Option<Color>,
+}
+
 /// Couleurs, tailles, polices. `scale` = DPI / 96.
 #[derive(Clone, Debug)]
 pub struct Theme {

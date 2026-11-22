@@ -455,6 +455,11 @@ pub struct Ed {
     pub follow: bool,
     pub playhead: Option<f64>,
     pub playing: bool,
+    /// Le curseur d'edition de REAPER (montre aussi pendant la lecture).
+    pub edit_cursor: Option<f64>,
+    /// La ligne verticale a la souris (les reglages de REAPER) et sa place.
+    pub guide: cp_ui::Guide,
+    pub guide_q: Option<f64>,
     /// Le passage choisi sur la regle (noires).
     pub range: Option<(f64, f64)>,
     pub status: String,
@@ -481,6 +486,8 @@ pub struct Ed {
     last_vel: i32,
     last_chan: i32,
     dirty: bool,
+    /// Les zones a redessiner quand tout ne l'est pas (un survol).
+    damage: Vec<cp_gfx::IRect>,
 }
 
 /// La hauteur d'un rang par defaut, et ses bornes (px a 96 DPI).
@@ -532,15 +539,116 @@ impl Ed {
             last_vel: 100,
             last_chan: 0,
             dirty: true,
+            edit_cursor: None,
+            guide: cp_ui::Guide::default(),
+            guide_q: None,
+            damage: Vec::new(),
         }
     }
 
+    /// Tout est a redessiner.
     pub fn mark(&mut self) {
         self.dirty = true;
     }
 
     pub fn take_dirty(&mut self) -> bool {
+        self.damage.clear();
         std::mem::take(&mut self.dirty)
+    }
+
+    /// Quelque chose est a redessiner (tout, ou des zones).
+    pub fn needs_draw(&self) -> bool {
+        self.dirty || !self.damage.is_empty()
+    }
+
+    /// Les zones de la scene a redessiner : toute la vue, ou celles d'un
+    /// survol ; vide : rien.
+    pub fn take_damage(&mut self) -> Vec<cp_gfx::IRect> {
+        if std::mem::take(&mut self.dirty) {
+            self.damage.clear();
+            let l = self.lay;
+            return vec![cp_gfx::IRect::new(0, 0, l.w.ceil() as i32, l.h.ceil() as i32)];
+        }
+        let v = cp_gfx::layers::merge(std::mem::take(&mut self.damage));
+        if v.len() > 4 {
+            return vec![v.iter().fold(cp_gfx::IRect::default(), |a, r| a.union(r))];
+        }
+        v
+    }
+
+    /// La cible survolee change : seules ses deux places se redessinent.
+    fn set_hover(&mut self, h: Hit) {
+        if h == self.hover {
+            return;
+        }
+        let pad = (3.0 * self.scale).ceil();
+        let old = self.hover;
+        for r in [self.rect_of(old), self.rect_of(h)].into_iter().flatten() {
+            self.damage.push(cp_gfx::IRect::new(
+                (r.0 - pad).floor() as i32,
+                (r.1 - pad).floor() as i32,
+                (r.2 + 2.0 * pad).ceil() as i32 + 1,
+                (r.3 + 2.0 * pad).ceil() as i32 + 1,
+            ));
+        }
+        if (old != Hit::None && self.rect_of(old).is_none())
+            || (h != Hit::None && self.rect_of(h).is_none())
+        {
+            self.dirty = true;
+        }
+        self.hover = h;
+    }
+
+    /// Les traits qui bougent seuls par-dessus la scene : la ligne a la
+    /// souris, le curseur d'edition, la tete de lecture (un pixel, comme
+    /// REAPER), de la regle au bas de la grille.
+    pub fn strokes(&self, th: &cp_ui::Theme) -> Vec<cp_gfx::layers::Stroke> {
+        use cp_gfx::layers::Stroke;
+        let l = self.lay;
+        let (top, bot) = (l.top as i32, l.hs_y as i32);
+        let mut out = Vec::new();
+        let mut line = |q: f64, c: cp_gfx::Color| {
+            let x = self.x_of(q).round();
+            if x >= l.sx && x < l.sx + l.sw && bot > top {
+                out.push(Stroke {
+                    r: cp_gfx::IRect::new(x as i32, top, 1, bot - top),
+                    c,
+                });
+            }
+        };
+        if let (true, Some(q)) = (self.guide.on, self.guide_q) {
+            line(q, self.guide.color.unwrap_or(th.text_faint));
+        }
+        if let Some(q) = self.edit_cursor {
+            line(q, th.edit_cursor);
+        }
+        if let (true, Some(q)) = (self.playing, self.playhead) {
+            line(q, th.playhead);
+        }
+        out
+    }
+
+    /// La ligne a la souris : sur la grille et la regle, calee sur la grille
+    /// si le magnetisme est la (la ou un clic poserait le curseur).
+    fn guide_at(&mut self, x: f32, y: f32) {
+        let l = self.lay;
+        let over = x >= l.sx && x < l.sx + l.sw && y >= l.top && y < l.hs_y;
+        self.guide_q = if self.guide.on && over && !matches!(self.clip, Clip::None) {
+            let q = self.qn_of(x);
+            Some(if self.guide.snap { self.snap_near(q, true) } else { q })
+        } else {
+            None
+        };
+    }
+
+    /// Une position calee sur la ligne de grille la plus proche (le curseur
+    /// d'edition, la ligne a la souris : comme REAPER).
+    pub fn snap_near(&self, q: f64, snap: bool) -> f64 {
+        if snap && self.snap && self.grid > 0.0 {
+            (q / self.grid).round() * self.grid
+        } else {
+            q
+        }
     }
 
     pub fn midi(&self) -> Option<&Midi> {
@@ -781,8 +889,15 @@ impl Ed {
         self.dirty = true;
     }
 
+    /// Le haut d'un rang, au pixel pres (des bords entiers : des traits nets
+    /// d'un pixel, et le remplissage rapide).
     pub(crate) fn row_y(&self, idx: usize) -> f32 {
-        self.lay.gy + idx as f32 * self.lay.rh - self.vscroll
+        (self.lay.gy + idx as f32 * self.lay.rh - self.vscroll).round()
+    }
+
+    /// La hauteur a l'ecran du rang `idx` (jusqu'au haut du suivant).
+    pub(crate) fn row_h(&self, idx: usize) -> f32 {
+        self.row_y(idx + 1) - self.row_y(idx)
     }
 
     pub(crate) fn row_of(&self, pitch: i32) -> Option<usize> {
@@ -802,9 +917,9 @@ impl Ed {
     /// Le rectangle d'une note : x, y, largeur, hauteur.
     pub(crate) fn note_rect(&self, n: &Note) -> Option<(f32, f32, f32, f32)> {
         let idx = self.row_of(n.pitch)?;
-        let x0 = self.x_of(n.qn0);
-        let x1 = self.x_of(n.end()).max(x0 + 2.0);
-        Some((x0, self.row_y(idx), x1 - x0, self.lay.rh))
+        let x0 = self.x_of(n.qn0).round();
+        let x1 = self.x_of(n.end()).round().max(x0 + 2.0);
+        Some((x0, self.row_y(idx), x1 - x0, self.row_h(idx)))
     }
 
     fn max_vscroll(&self) -> f32 {
@@ -866,9 +981,14 @@ impl Ed {
     /// Le battement : la tete de lecture suit, la page tourne.
     pub fn set_playhead(&mut self, qn: Option<f64>, playing: bool) {
         if qn != self.playhead || playing != self.playing {
+            // Un trait par-dessus la scene : il ne la salit que si la fin du
+            // contenu (la barre horizontale) bouge.
+            let end = self.end_qn();
             self.playhead = qn;
             self.playing = playing;
-            self.dirty = true;
+            if (self.end_qn() - end).abs() > 1e-9 {
+                self.dirty = true;
+            }
         }
         if let (true, true, Some(p)) = (self.follow, playing, qn) {
             let v = self.view_qn();
@@ -1067,10 +1187,8 @@ impl Ed {
         match *ev {
             Ev::Move { x, y, mods } => self.on_move(x, y, mods),
             Ev::Leave => {
-                if self.hover != Hit::None {
-                    self.hover = Hit::None;
-                    self.dirty = true;
-                }
+                self.set_hover(Hit::None);
+                self.guide_q = None;
                 Vec::new()
             }
             Ev::Down {
@@ -1208,8 +1326,9 @@ impl Ed {
                     }
                     return Vec::new();
                 }
-                // Sur la regle, c'est Ctrl qui ignore le magnetisme (REAPER).
-                let q = self.snap_q(q, !m.ctrl).max(0.0);
+                // Sur la regle, c'est Ctrl qui ignore le magnetisme (REAPER) ;
+                // la ligne de grille la plus proche.
+                let q = self.snap_near(q, !m.ctrl).max(0.0);
                 self.range = None;
                 self.drag = Some(Drag::Range { q0: q });
                 vec![Act::Seek(q)]
@@ -1622,12 +1741,10 @@ impl Ed {
 
     fn on_move(&mut self, x: f32, y: f32, mods: Mods) -> Vec<Act> {
         self.mouse = (x, y, mods);
+        self.guide_at(x, y);
         let Some(d) = self.drag.clone() else {
             let h = self.hit(x, y);
-            if h != self.hover {
-                self.hover = h;
-                self.dirty = true;
-            }
+            self.set_hover(h);
             return Vec::new();
         };
         self.dirty = true;
@@ -2029,6 +2146,7 @@ impl Ed {
             } => {
                 let bar = self.bar_qn();
                 let q_mouse = self.qn_of(x0).max(0.0);
+                let q_snap = self.snap_near(q_mouse, true).max(0.0);
                 let Some(md) = self.midi_mut() else {
                     return Vec::new();
                 };
@@ -2043,10 +2161,11 @@ impl Ed {
                 }
                 let mut out = vec![Act::AuditionOff];
                 match (m.shift, m.ctrl, m.alt, m.win) {
-                    // Choisir la note et y mettre le curseur.
+                    // Choisir la note ; le curseur la ou l'on clique (cale sur
+                    // la grille), pas au debut de la note.
                     (false, false, false, false) => {
                         md.roll.select_only(id);
-                        out.push(Act::Seek(n.qn0));
+                        out.push(Act::Seek(q_snap));
                     }
                     (true, false, false, false) => md.roll.select_range_to(id),
                     (false, true, false, false) => md.roll.toggle(id),

@@ -734,14 +734,7 @@ pub struct Arr {
     pub(crate) tracks_bottom: f32,
 }
 
-/// La ligne a la souris : les reglages de REAPER.
-#[derive(Clone, Copy, Debug, PartialEq, Default)]
-pub struct Guide {
-    pub on: bool,
-    /// Calee sur la grille quand le magnetisme est la.
-    pub snap: bool,
-    pub color: Option<cp_gfx::Color>,
-}
+pub use cp_ui::Guide;
 
 impl Default for Arr {
     fn default() -> Self {
