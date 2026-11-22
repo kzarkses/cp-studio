@@ -755,3 +755,68 @@ fn une_vue_neuve_se_dessine_entiere() {
         vec![cp_gfx::IRect::new(0, 0, 640, 480)]
     );
 }
+
+/// Le survol ne redessine que ses zones : chaque cible survolee doit donner,
+/// redessinee par zones, la meme image qu'un dessin complet (sinon il
+/// n'apparait qu'au prochain dessin complet).
+#[test]
+fn chaque_survol_se_redessine_tout_de_suite() {
+    let (w, h) = (1400, 760);
+    let mut b = Bench::new(w, h);
+    let mut v = riff();
+    b.draw(&mut v);
+    let _ = v.take_damage(w, h);
+    let targets: Vec<(f32, f32)> = v
+        .boxes
+        .iter()
+        .map(|bx| (bx.0 + bx.2 * 0.5, bx.1 + bx.3 * 0.5))
+        .collect();
+    let mut seen: Vec<Hit> = Vec::new();
+    let mut bad: Vec<String> = Vec::new();
+    for (x, y) in targets {
+        let hit = v.hit(x, y);
+        if seen.contains(&hit) {
+            continue;
+        }
+        seen.push(hit);
+        let prev = v.hover;
+        mv(&mut v, x, y, m0());
+        for r in v.take_damage(w, h) {
+            let mut cv = Canvas::new(&mut b.s, &mut b.k);
+            if cv.push_clip(r.x as f32, r.y as f32, r.w as f32, r.h as f32) {
+                v.draw(&mut cv, &mut b.t, &mut b.icons, &b.th, w as f32, h as f32);
+            }
+        }
+        let partial = b.s.px.clone();
+        let mut full = Surface::new(w, h);
+        {
+            let mut cv = Canvas::new(&mut full, &mut b.k);
+            v.draw(&mut cv, &mut b.t, &mut b.icons, &b.th, w as f32, h as f32);
+        }
+        let _ = v.take_damage(w, h);
+        let diff: Vec<usize> = (0..partial.len())
+            .filter(|&k| partial[k] != full.px[k])
+            .collect();
+        if !diff.is_empty() {
+            let (mut x0, mut y0, mut x1, mut y1) = (w, h, 0, 0);
+            for &k in &diff {
+                let (px, py) = (k as i32 % w, k as i32 / w);
+                x0 = x0.min(px);
+                y0 = y0.min(py);
+                x1 = x1.max(px);
+                y1 = y1.max(py);
+            }
+            bad.push(format!(
+                "{prev:?} -> {hit:?} en ({x:.0},{y:.0}) : {} px de ({x0},{y0}) a ({x1},{y1})",
+                diff.len()
+            ));
+            b.s.px.copy_from_slice(&full.px);
+        }
+    }
+    assert!(
+        bad.is_empty(),
+        "{} survols en retard :\n{}",
+        bad.len(),
+        bad.join("\n")
+    );
+}

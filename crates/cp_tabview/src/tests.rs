@@ -1873,3 +1873,77 @@ fn l_ecoute_vise_la_souris() {
     assert!(v.play_target(l.sx - 5.0, row(0)).is_none());
     assert!(v.play_target(x, l.bottom - 1.0).is_none());
 }
+
+/// Le survol ne redessine que ses zones : chaque cible survolee (les
+/// en-tetes, l'inspecteur, les prises, la barre) doit donner, redessinee
+/// par zones, la meme image qu'un dessin complet. Sinon le survol
+/// n'apparait qu'au prochain dessin complet (« il faut attendre »).
+#[test]
+fn chaque_survol_se_redessine_tout_de_suite() {
+    let mut b = Bench::new(1600, 900);
+    let mut v = arranger();
+    let (w, h) = (1600, 900);
+    b.draw(&mut v);
+    let _ = v.take_damage(w, h);
+    let mut seen: Vec<Hit> = Vec::new();
+    let targets: Vec<(f32, f32, Hit)> = v
+        .boxes
+        .iter()
+        .map(|bx| (bx.0 + bx.2 * 0.5, bx.1 + bx.3 * 0.5, bx.4))
+        .collect();
+    let mut bad: Vec<String> = Vec::new();
+    for (x, y, _) in targets {
+        let hit = v.hit(x, y);
+        if seen.contains(&hit) {
+            continue;
+        }
+        seen.push(hit);
+        let prev = v.hover;
+        v.event(&Ev::Move {
+            x,
+            y,
+            mods: Mods::default(),
+        });
+        // Ce que fait la fenetre : chaque zone redessinee seule.
+        for r in v.take_damage(w, h) {
+            let mut cv = Canvas::new(&mut b.s, &mut b.k);
+            if cv.push_clip(r.x as f32, r.y as f32, r.w as f32, r.h as f32) {
+                v.draw(&mut cv, &mut b.t, &mut b.icons, &b.th, w as f32, h as f32);
+            }
+        }
+        let partial = b.s.px.clone();
+        let mut full = Surface::new(w, h);
+        {
+            let mut cv = Canvas::new(&mut full, &mut b.k);
+            v.draw(&mut cv, &mut b.t, &mut b.icons, &b.th, w as f32, h as f32);
+        }
+        let _ = v.take_damage(w, h);
+        let diff: Vec<usize> = (0..partial.len())
+            .filter(|&k| partial[k] != full.px[k])
+            .collect();
+        if !diff.is_empty() {
+            let (mut x0, mut y0, mut x1, mut y1) = (w, h, 0, 0);
+            for &k in &diff {
+                let (px, py) = (k as i32 % w, k as i32 / w);
+                x0 = x0.min(px);
+                y0 = y0.min(py);
+                x1 = x1.max(px);
+                y1 = y1.max(py);
+            }
+            bad.push(format!(
+                "{prev:?} -> {hit:?} en ({x:.0},{y:.0}) : {} px de ({x0},{y0}) a ({x1},{y1}) ; {:08x} au lieu de {:08x}",
+                diff.len(),
+                partial[diff[0]],
+                full.px[diff[0]]
+            ));
+            // Repartir d'une image juste.
+            b.s.px.copy_from_slice(&full.px);
+        }
+    }
+    assert!(
+        bad.is_empty(),
+        "{} survols en retard :\n{}",
+        bad.len(),
+        bad.join("\n")
+    );
+}

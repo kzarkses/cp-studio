@@ -1170,25 +1170,46 @@ impl Arr {
         }
     }
 
-    /// La cible survolee change : seules ses deux places se redessinent.
+    /// Ce que le survol d'une cible change a l'ecran : toutes ses boites
+    /// (une note a la sienne dans la partition ET dans la tab), et ce
+    /// qu'elle allume hors d'elles (l'icone d'un fader, a sa gauche). Une
+    /// zone oubliee ici ne s'allume qu'au prochain dessin complet : le test
+    /// `chaque_survol_se_redessine_tout_de_suite` les passe toutes.
+    fn hover_rects(&self, h: Hit) -> Vec<(f32, f32, f32, f32)> {
+        if h == Hit::None {
+            return Vec::new();
+        }
+        let mut v: Vec<(f32, f32, f32, f32)> = self
+            .boxes
+            .iter()
+            .filter(|b| b.4 == h)
+            .map(|b| (b.0, b.1, b.2, b.3))
+            .collect();
+        if let Hit::Fader { .. } = h {
+            let row: Vec<_> = v.iter().map(|r| (0.0, r.1, r.0 + r.2, r.3)).collect();
+            v.extend(row);
+        }
+        v
+    }
+
+    /// La cible survolee change : seules ses places (l'ancienne, la
+    /// nouvelle) se redessinent.
     fn set_hover(&mut self, h: Hit) {
         if h == self.hover {
             return;
         }
         let pad = (4.0 * self.scale).ceil();
-        for r in [self.rect_of(self.hover), self.rect_of(h)]
-            .into_iter()
-            .flatten()
-        {
+        let old = self.hover_rects(self.hover);
+        if self.hover != Hit::None && old.is_empty() {
+            self.dirty = true;
+        }
+        for r in old.into_iter().chain(self.hover_rects(h)) {
             self.damage.push(cp_gfx::IRect::new(
                 (r.0 - pad).floor() as i32,
                 (r.1 - pad).floor() as i32,
                 (r.2 + 2.0 * pad).ceil() as i32 + 1,
                 (r.3 + 2.0 * pad).ceil() as i32 + 1,
             ));
-        }
-        if self.hover != Hit::None && self.rect_of(self.hover).is_none() {
-            self.dirty = true;
         }
         self.hover = h;
     }
