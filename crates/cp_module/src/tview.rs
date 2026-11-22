@@ -58,6 +58,9 @@ const M_TUNER_A4: u32 = 23;
 /// La clock externe : aucune, ou l'entree MIDI (100 + son rang).
 const M_CLOCK_OFF: u32 = 99;
 const M_CLOCK_DEV: u32 = 100;
+/// Le retard du maitre (sa propre latence) : 80 + son rang dans `DELAYS`.
+const M_CLOCK_DELAY: u32 = 80;
+const DELAYS: [f64; 7] = [-20.0, -10.0, -5.0, 0.0, 5.0, 10.0, 20.0];
 const M_REC_NORMAL: u32 = 30;
 const M_REC_TIMESEL: u32 = 31;
 const M_REC_ITEMS: u32 = 32;
@@ -532,7 +535,9 @@ impl App {
     /// et la place (Cedric a-t-il rallume le transport de REAPER ?).
     /// La clock externe : l'entree ecoutee (-1 : aucune), retenue.
     fn clock_set_device(&mut self, dev: i32) {
+        let delay = self.tp.clock.delay_ms;
         self.tp.clock = crate::clocksync::ClockSync::on(dev);
+        self.tp.clock.delay_ms = delay;
         self.host.clock_device(dev);
         self.r
             .ext_set(SECTION, "ext_clock_dev", &dev.to_string(), true);
@@ -928,6 +933,21 @@ impl App {
                 enabled: true,
             }));
         }
+        // Le retard du maitre : ce qui reste a caler a l'oreille (la
+        // latence de la carte est deja comptee).
+        let delays: Vec<String> = DELAYS
+            .iter()
+            .map(|d| format!("Clock delay: {d:+.0} ms"))
+            .collect();
+        clock.push(None);
+        for (k, (d, t)) in DELAYS.iter().zip(&delays).enumerate() {
+            clock.push(Some(MenuItem {
+                id: M_CLOCK_DELAY + k as u32,
+                text: t,
+                checked: (self.tp.clock.delay_ms - d).abs() < 1e-9,
+                enabled: cur >= 0,
+            }));
+        }
         let items = [
             Some(MenuItem {
                 id: M_ADD,
@@ -975,6 +995,13 @@ impl App {
         all.push(None);
         all.extend(close);
         let k = self.menu_at(x, y, &all);
+        if (M_CLOCK_DELAY..M_CLOCK_DELAY + DELAYS.len() as u32).contains(&k) {
+            let d = DELAYS[(k - M_CLOCK_DELAY) as usize];
+            self.tp.clock.delay_ms = d;
+            self.r
+                .ext_set(SECTION, "ext_clock_delay", &d.to_string(), true);
+            return;
+        }
         if k == M_CLOCK_OFF || k >= M_CLOCK_DEV {
             let dev = if k == M_CLOCK_OFF {
                 -1

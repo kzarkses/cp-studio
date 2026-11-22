@@ -46,6 +46,9 @@ pub struct SelfTest {
     rec: Option<(u32, i64, i64, Instant)>,
     /// Le long fichier de l'essai du flux.
     stream: Option<StreamT>,
+    /// La sonde du tempo : etape, heure, tempo et vitesse d'avant, et les
+    /// mesures (heure, position en secondes, en noires).
+    probe: Probe,
     ui_at: Option<Instant>,
     keys_step: u8,
     wheels: u32,
@@ -60,6 +63,9 @@ pub struct SelfTest {
     frames0: cp_abi::FrameInfo,
     snapped: bool,
 }
+
+/// La sonde du tempo : etape, heure, tempo et vitesse d'avant, mesures.
+type Probe = (u8, Option<Instant>, f64, f64, Vec<(Instant, f64, f64)>);
 
 /// L'essai du flux : le fichier, son ticket, son clip, la piste de sortie,
 /// la voix, l'etape et son heure.
@@ -143,6 +149,9 @@ enum Phase {
     /// Un long fichier lu en flux : la bonne seconde apres un saut, la
     /// memoire bornee, les pics de tout le fichier.
     Stream,
+    /// Ce que fait REAPER quand le tempo ou la vitesse change en jouant (la
+    /// phase d'une clock externe en depend).
+    TempoProbe,
     /// La suite se passe hors du moteur audio : insertion, interface.
     Insert,
     OpenUi,
@@ -177,6 +186,7 @@ pub fn requested() -> Option<SelfTest> {
         rt_pos0: 0.0,
         rec: None,
         stream: None,
+        probe: (0, None, 0.0, 1.0, Vec::new()),
         ui_at: None,
         keys_step: 0,
         wheels: 0,
@@ -596,6 +606,119 @@ impl SelfTest {
         done
     }
 
+    /// La sonde : REAPER joue (master muet) ; la vitesse passe a 1,01, puis
+    /// le tempo monte de 1 %. A chaque battement, la position (secondes,
+    /// noires) : la pente apres 300 ms, le plus grand ecart a la droite (un
+    /// arret, un saut). Rend vrai quand c'est fini.
+    fn tempo_probe(&mut self) -> bool {
+        let Some(r) = crate::REAPER.get() else {
+            return true;
+        };
+        let now = Instant::now();
+        let (step, t, ..) = self.probe;
+        let since = t.map_or(Duration::ZERO, |t| now.duration_since(t));
+        let pos = r.play_position();
+        if step > 0 {
+            self.probe.4.push((now, pos, r.time_to_qn(pos)));
+        }
+        // La pente et le plus grand ecart a la droite, sur les mesures
+        // posterieures a `from` (secondes depuis le changement).
+        let fit = |m: &[(Instant, f64, f64)], t0: Instant, from: f64, q: bool| -> (f64, f64, f64) {
+            let pts: Vec<(f64, f64)> = m
+                .iter()
+                .map(|x| {
+                    (
+                        x.0.duration_since(t0).as_secs_f64(),
+                        if q { x.2 } else { x.1 },
+                    )
+                })
+                .filter(|x| x.0 >= from)
+                .collect();
+            if pts.len() < 3 {
+                return (f64::NAN, f64::NAN, f64::NAN);
+            }
+            let n = pts.len() as f64;
+            let (sx, sy) = pts.iter().fold((0.0, 0.0), |a, p| (a.0 + p.0, a.1 + p.1));
+            let (mx, my) = (sx / n, sy / n);
+            let (sxy, sxx) = pts.iter().fold((0.0, 0.0), |a, p| {
+                (a.0 + (p.0 - mx) * (p.1 - my), a.1 + (p.0 - mx).powi(2))
+            });
+            let k = sxy / sxx;
+            let dev = pts
+                .iter()
+                .map(|p| (p.1 - (my + k * (p.0 - mx))).abs())
+                .fold(0.0, f64::max);
+            (k, dev, my - k * mx)
+        };
+        match step {
+            0 => {
+                r.set_master_mute(true);
+                self.probe = (1, Some(now), r.master_tempo(), r.play_rate(), Vec::new());
+                r.main_on_command(1007);
+            }
+            1 if since < Duration::from_millis(800) => {}
+            1 => {
+                self.probe.4.clear();
+                r.set_play_rate(1.01);
+                self.probe.0 = 2;
+                self.probe.1 = Some(Instant::now());
+            }
+            2 if since < Duration::from_millis(1600) => {}
+            2 => {
+                let m = std::mem::take(&mut self.probe.4);
+                let t0 = t.expect("heure");
+                let (k, dev, _) = fit(&m, t0, 0.3, false);
+                let (k_all, dev_all, _) = fit(&m, t0, 0.0, false);
+                self.say(
+                    true,
+                    format!(
+                        "sonde REAPER : vitesse 1,01 en jouant -> {k:.4} s par seconde apres 300 ms (ecart a la droite {:.1} ms) ; depuis le changement {k_all:.4} (ecart {:.1} ms), {} mesures",
+                        dev * 1000.0,
+                        dev_all * 1000.0,
+                        m.len()
+                    ),
+                );
+                r.set_play_rate(self.probe.3);
+                self.probe.0 = 3;
+                self.probe.1 = Some(Instant::now());
+            }
+            3 if since < Duration::from_millis(600) => {}
+            3 => {
+                self.probe.4.clear();
+                r.set_bpm(self.probe.2 * 1.01, false);
+                self.probe.0 = 4;
+                self.probe.1 = Some(Instant::now());
+            }
+            4 if since < Duration::from_millis(1000) => {}
+            _ => {
+                let m = std::mem::take(&mut self.probe.4);
+                let t0 = t.expect("heure");
+                let (kq, devq, bq) = fit(&m, t0, 0.3, true);
+                let (ks, devs, _) = fit(&m, t0, 0.0, false);
+                let bpm1 = self.probe.2 * 1.01;
+                // La noire au changement, prolongee de la droite d'apres,
+                // contre la noire juste avant (la premiere mesure).
+                let q_first = m.first().map_or(f64::NAN, |x| x.2);
+                self.say(
+                    true,
+                    format!(
+                        "sonde REAPER : tempo +1 % en jouant -> {:.4} x le tempo apres 300 ms (ecart {:.4} noire), noire au changement {:.3} contre {q_first:.3} ; secondes : {ks:.4} par seconde (ecart {:.1} ms)",
+                        kq / (bpm1 / 60.0),
+                        devq,
+                        bq,
+                        devs * 1000.0
+                    ),
+                );
+                r.set_bpm(self.probe.2, false);
+                r.set_play_rate(self.probe.3);
+                r.main_on_command(1016);
+                r.set_master_mute(false);
+                return true;
+            }
+        }
+        false
+    }
+
     fn check_route(&mut self, a: &mut AudioHost) -> bool {
         let Some(r) = crate::REAPER.get() else {
             return true;
@@ -966,6 +1089,11 @@ impl SelfTest {
             }
             Phase::Stream => {
                 if self.check_stream(a) {
+                    self.phase = Phase::TempoProbe;
+                }
+            }
+            Phase::TempoProbe => {
+                if self.tempo_probe() {
                     self.phase = Phase::Insert;
                 }
             }
@@ -1679,6 +1807,7 @@ impl SelfTest {
                 | Phase::Route
                 | Phase::Record
                 | Phase::Stream
+                | Phase::TempoProbe
         )
     }
 

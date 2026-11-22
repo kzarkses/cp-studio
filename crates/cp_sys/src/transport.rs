@@ -44,6 +44,11 @@ impl Reaper {
         self.call0::<f64>(c"GetPlayPosition")
     }
 
+    /// Le bloc que REAPER calcule (sans la latence de sortie).
+    pub fn play_position2(&self) -> f64 {
+        self.call0::<f64>(c"GetPlayPosition2")
+    }
+
     /// Le zoom de l'arrangement : pixels par seconde.
     pub fn hzoom(&self) -> f64 {
         self.call0::<f64>(c"GetHZoomLevel")
