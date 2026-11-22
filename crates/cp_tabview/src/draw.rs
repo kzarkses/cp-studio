@@ -1114,10 +1114,25 @@ impl Arr {
             if matches!(lane, Lane::Audio | Lane::Midi) && cv.push_clip(l.sx, ly, l.sw, lh) {
                 let beat = 4.0 / self.sig.1.max(1) as f64;
                 let beat_px = beat as f32 * l.ppq;
+                // La grille de REAPER (sa division, elargie sous 8 px comme
+                // lui) : mesures, temps, et ses lignes entre les temps.
+                let step = self.grid.map(|g| g.step(l.ppq.max(1e-3)));
                 for m in first..=last {
                     let q = m as f64 * bq;
                     cv.fill_rect(geo.x(q).round(), ly, 1.0, lh, th.rp.grid_bar);
-                    if beat_px >= s(12.0) {
+                    if let Some(st) = step.filter(|&st| st < bq) {
+                        let n = (bq / st).round() as i64;
+                        for k in 1..n {
+                            let qq = q + k as f64 * st;
+                            let on_beat = ((qq / beat).round() * beat - qq).abs() < 1e-6;
+                            let c = if on_beat {
+                                th.rp.grid_beat
+                            } else {
+                                th.rp.grid_sub
+                            };
+                            cv.fill_rect(geo.x(qq).round(), ly, 1.0, lh, c);
+                        }
+                    } else if step.is_none() && beat_px >= s(12.0) {
                         for b in 1..self.sig.0.max(1) {
                             let xb = geo.x(q + b as f64 * beat).round();
                             cv.fill_rect(xb, ly, 1.0, lh, th.rp.grid_beat);

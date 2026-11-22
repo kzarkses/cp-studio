@@ -1049,7 +1049,8 @@ impl Arr {
 
     /// Zoome a `z`, la noire `q` restant a l'abscisse `x`.
     fn zoom_at(&mut self, z: f32, q: f64, x: f32) {
-        self.zoom = z.clamp(8.0, 600.0);
+        // Les bornes de l'arrangement de REAPER (le zoom est le sien).
+        self.zoom = z.clamp(0.05, 20000.0);
         self.lay.ppq = self.zoom * self.scale;
         self.scroll = (q - ((x - self.lay.sx) / self.lay.ppq) as f64).max(0.0);
     }
@@ -1893,6 +1894,11 @@ impl Arr {
 
     /// Le debut d'une prise glissee, cale par le magnetisme de REAPER.
     fn snap_item(&self, q: f64) -> f64 {
+        // Le magnetisme de REAPER lui-meme (tous ses reglages) : la vue a le
+        // zoom de l'arrangement, il cale comme lui.
+        if let Some(f) = &self.snapper {
+            return f(q);
+        }
         if let Some(g) = self.grid {
             if !g.on {
                 return q;
@@ -1900,10 +1906,7 @@ impl Arr {
             let step = g.step(self.lay.ppq.max(1e-3));
             return (q / step).round() * step;
         }
-        match &self.snapper {
-            Some(f) => f(q),
-            None => (q * 4.0).round() / 4.0,
-        }
+        (q * 4.0).round() / 4.0
     }
 
     /// La ligne a la souris : sur le contenu (regle comprise), la ou un clic

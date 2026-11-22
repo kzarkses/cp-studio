@@ -178,6 +178,11 @@ pub(crate) struct GPart {
     peak_retry: HashMap<String, Instant>,
     /// La touche dont on a pris l'appui (on prend aussi son relachement).
     key_down: Option<u32>,
+    /// La vue de l'arrangement telle qu'on l'a lue (debut s, pixels par
+    /// seconde), et celle de Guitar Tab telle qu'on l'a posee (noire au bord,
+    /// zoom) : celle qui a change entraine l'autre.
+    view_seen: Option<(f64, f64)>,
+    view_pushed: Option<(f64, f32)>,
     /// La derniere place connue de chaque paire (item audio -> audio, MIDI) :
     /// celui des deux qui a bouge depuis entraine l'autre, comme un groupe
     /// d'items de REAPER.
@@ -251,6 +256,8 @@ impl GPart {
             peak_retry: HashMap::new(),
             pairs: HashMap::new(),
             key_down: None,
+            view_seen: None,
+            view_pushed: None,
         }
     }
 }
@@ -2639,6 +2646,7 @@ impl App {
         if !open {
             return;
         }
+        self.gtab_view_sync();
         // La tete de lecture et les vumetres.
         let pos = if playing {
             r.play_position()
@@ -2675,6 +2683,60 @@ impl App {
             // REAPER) part d'ici ; rien de neuf ne coute rien.
             self.gtab_render(false);
         }
+    }
+
+    /// Le zoom et le defilement horizontaux de Guitar Tab sont ceux de
+    /// l'arrangement de REAPER (Cedric, 2026-11-22 : « il faut que les deux
+    /// soient sync ») : son magnetisme, sa ligne a la souris et ses gestes
+    /// tombent alors la ou on les voit. Celle des deux vues qui a bouge
+    /// depuis le battement d'avant entraine l'autre.
+    fn gtab_view_sync(&mut self) {
+        let r = self.r;
+        let Some((s0, e0)) = r.arrange_view() else {
+            return;
+        };
+        let hz = r.hzoom();
+        let bpm = self.gt.arr.bpm.max(1.0);
+        let scale = self.gt.arr.scale.max(0.1);
+        if hz <= 0.0 {
+            return;
+        }
+        let near = |a: f64, b: f64, k: f64| (a - b).abs() <= k * a.abs().max(b.abs()).max(1.0);
+        let reaper_moved = self
+            .gt
+            .view_seen
+            .is_none_or(|(s, z)| !near(s, s0, 1e-7) || !near(z, hz, 1e-6));
+        let a = &mut self.gt.arr;
+        let mine = (a.scroll, a.zoom);
+        let tab_moved = self
+            .gt
+            .view_pushed
+            .is_some_and(|(s, z)| !near(s, mine.0, 1e-7) || !near(z as f64, mine.1 as f64, 1e-6));
+        if reaper_moved || !tab_moved {
+            // L'arrangement a bouge (ou rien) : Guitar Tab le suit.
+            let scroll = r.time_to_qn(s0).max(0.0);
+            let zoom = (hz * 60.0 / bpm) as f32 / scale;
+            if !near(scroll, a.scroll, 1e-7) || !near(zoom as f64, a.zoom as f64, 1e-6) {
+                a.scroll = scroll;
+                a.zoom = zoom;
+                a.mark();
+            }
+            self.gt.view_seen = Some((s0, hz));
+            self.gt.view_pushed = Some((a.scroll, a.zoom));
+            return;
+        }
+        // Guitar Tab a bouge (molette, main, barre, page en lecture) :
+        // l'arrangement le suit, a la largeur qui est la sienne.
+        let width_px = (e0 - s0) * hz;
+        if width_px < 10.0 {
+            return;
+        }
+        let pxps = a.zoom as f64 * scale as f64 * bpm / 60.0;
+        let start = r.qn_to_time(a.scroll);
+        r.set_arrange_view(start, start + width_px / pxps);
+        let back = r.arrange_view().map_or(start, |v| v.0);
+        self.gt.view_seen = Some((back, r.hzoom()));
+        self.gt.view_pushed = Some((self.gt.arr.scroll, self.gt.arr.zoom));
     }
 
     /// Les formes d'onde de REAPER des prises visibles, a la resolution du

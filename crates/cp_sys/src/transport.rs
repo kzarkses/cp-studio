@@ -44,6 +44,39 @@ impl Reaper {
         self.call0::<f64>(c"GetPlayPosition")
     }
 
+    /// Le zoom de l'arrangement : pixels par seconde.
+    pub fn hzoom(&self) -> f64 {
+        self.call0::<f64>(c"GetHZoomLevel")
+    }
+
+    /// Ce que l'arrangement montre : (debut, fin) en secondes.
+    pub fn arrange_view(&self) -> Option<(f64, f64)> {
+        type F = unsafe extern "C" fn(*mut c_void, bool, i32, i32, *mut f64, *mut f64);
+        // SAFETY: void GetSet_ArrangeView2(ReaProject*, bool isSet, int
+        // screen_x_start, int screen_x_end, double* start, double* end) ;
+        // projet nul = courant ; 0, 0 = toute la largeur.
+        let f = unsafe { self.api::<F>(c"GetSet_ArrangeView2") }?;
+        let (mut a, mut b) = (0.0f64, 0.0f64);
+        // SAFETY: voir ci-dessus ; `a` et `b` vivent pendant l'appel.
+        unsafe { f(std::ptr::null_mut(), false, 0, 0, &mut a, &mut b) };
+        (b > a).then_some((a, b))
+    }
+
+    /// Montre `start..end` (s) dans l'arrangement : son zoom et son
+    /// defilement a la fois.
+    pub fn set_arrange_view(&self, start: f64, end: f64) {
+        type F = unsafe extern "C" fn(*mut c_void, bool, i32, i32, *mut f64, *mut f64);
+        // SAFETY: voir `arrange_view` ; isSet = vrai.
+        let Some(f) = (unsafe { self.api::<F>(c"GetSet_ArrangeView2") }) else {
+            return;
+        };
+        let (mut a, mut b) = (start, end);
+        if b > a {
+            // SAFETY: voir ci-dessus.
+            unsafe { f(std::ptr::null_mut(), true, 0, 0, &mut a, &mut b) };
+        }
+    }
+
     /// La division de la grille du projet, en rondes (0.25 : la noire),
     /// telle que la regle la fenetre « Grid » de REAPER.
     pub fn project_grid(&self) -> Option<f64> {
