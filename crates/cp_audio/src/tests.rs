@@ -721,3 +721,40 @@ fn le_fondu_au_point_de_boucle() {
     eprintln!("a 1,3 en sinc : {worst:.4}");
     assert!(worst < natural * 1.3 * 1.3 + 0.01, "{worst}");
 }
+
+// ---------------------------------------------------------------------------
+// L'enregistrement (A8)
+// ---------------------------------------------------------------------------
+
+/// Une prise de 4000 frames (latence 300) devient un clip de 4000 frames
+/// exactement, a la matiere jouee a son debut ; une prise a des entrees
+/// differentes pendant qu'une autre ecoute est refusee.
+#[test]
+fn une_prise_devient_un_clip() {
+    let mut h = AudioHost::new(None, 48000.0);
+    let id = h.rec_start_lat(0, 1, Some(1000), 300).unwrap();
+    assert!(
+        h.rec_start_lat(2, 3, None, 0).is_none(),
+        "autres entrees refusees"
+    );
+    h.rec_stop(id, Some(5000));
+    let ring = h.rec_ring().unwrap();
+    let mut t = 0i64;
+    while t < 7000 {
+        let l: Vec<f64> = (0..512).map(|k| (t + k) as f64 / 10000.0).collect();
+        ring.push_block(t, &l, None);
+        t += 512;
+        if matches!(h.rec_state(id), RecState::Recording(_) | RecState::Unknown) {
+            h.poll();
+        }
+    }
+    let RecState::Ready(c) = h.rec_state(id) else {
+        panic!("{:?}", h.rec_state(id));
+    };
+    let (frames, nch, _) = h.clip_info(c).unwrap();
+    assert_eq!((frames, nch), (4000, 2));
+    let s = h.clip_samples(c).unwrap();
+    assert!((s[0] - 0.13).abs() < 1e-6, "{}", s[0]);
+    // Plus de prise : l'entree n'est plus copiee.
+    assert_eq!(ring.inputs(), (-1, -1));
+}

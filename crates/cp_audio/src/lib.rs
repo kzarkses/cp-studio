@@ -16,6 +16,7 @@ pub mod capture;
 pub mod decode;
 pub mod feed;
 pub mod peaks;
+pub mod record;
 pub mod stretch;
 pub mod testloop;
 
@@ -141,6 +142,10 @@ static HOOK_CORE: OnceLock<Arc<Core>> = OnceLock::new();
 static CLOCK: OnceLock<std::sync::Mutex<cp_engine::extclock::ExtClock>> = OnceLock::new();
 static CLOCK_DEV: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(-1);
 static MIDI_IN: OnceLock<cp_sys::midi_in::MidiInputs> = OnceLock::new();
+/// L'anneau de l'enregistrement, rempli par le crochet (pose a la premiere
+/// prise).
+static REC_RING: OnceLock<Arc<record::RecRing>> = OnceLock::new();
+
 /// Sa publication, lue par le fil principal sans jamais prendre le verrou
 /// du fil audio.
 static CLOCK_PUB: OnceLock<Arc<cp_engine::extclock::Published>> = OnceLock::new();
@@ -154,6 +159,15 @@ fn on_audio(is_post: bool, frames: i32, srate: f64) {
         core.tick(frames);
     } else {
         core.set_srate(srate);
+        // L'enregistrement : l'entree choisie, datee au frame du bloc.
+        if let Some(ring) = REC_RING.get() {
+            let (c0, c1) = ring.inputs();
+            if c0 >= 0 {
+                if let Some(l) = AudioHook::input(c0, frames) {
+                    ring.push_block(core.clock_now(), l, AudioHook::input(c1, frames));
+                }
+            }
+        }
         let dev = CLOCK_DEV.load(std::sync::atomic::Ordering::Relaxed);
         if dev >= 0 {
             if let (Some(m), Some(c)) = (MIDI_IN.get(), CLOCK.get()) {
@@ -219,6 +233,19 @@ pub struct AudioHost {
     lent: Vec<(VoiceH, cp_engine::shift::ShiftSlot)>,
     /// Fabrique un etireur hors de REAPER (les tests).
     shift_factory: Option<Box<dyn Fn() -> Box<dyn cp_engine::shift::RtShift> + Send>>,
+    /// L'enregistrement (cree a la premiere prise), et les prises finies.
+    rec: Option<record::Recorder>,
+    rec_done: Vec<(u32, Result<ClipH, String>)>,
+}
+
+/// Ou en est une prise.
+#[derive(Clone, Debug, PartialEq)]
+pub enum RecState {
+    /// En cours : les frames deja pris.
+    Recording(usize),
+    Ready(ClipH),
+    Failed(String),
+    Unknown,
 }
 
 /// Au plus tant d'etireurs temps reel (elastique coute 2 a 3 % du fil audio
@@ -270,6 +297,8 @@ impl AudioHost {
             shifters: Vec::new(),
             lent: Vec::new(),
             shift_factory: None,
+            rec: None,
+            rec_done: Vec::new(),
         }
     }
 
@@ -361,6 +390,95 @@ impl AudioHost {
         self.ports
             .get(port)
             .map_or([0.0; 2], |p| p.stats.take_peaks())
+    }
+
+    /// Une prise audio : les entrees `ch0` et `ch1` de la carte (-1 : mono),
+    /// a partir du temps `start` du moteur (rien : maintenant), la latence
+    /// d'entree et de sortie retiree. Refusee si une autre prise en cours
+    /// ecoute d'autres entrees.
+    pub fn rec_start(&mut self, ch0: i32, ch1: i32, start: Option<i64>) -> Option<u32> {
+        let lat = self.reaper.map_or(0, |r| {
+            // REAPER annonce 0 entree au crochet : le vrai nombre, relu.
+            AudioHook::refresh_inputs(&r);
+            let (i, o) = AudioHook::io_latency(&r);
+            (i + o) as i64
+        });
+        self.rec_start_lat(ch0, ch1, start, lat)
+    }
+
+    /// [`Self::rec_start`] avec une latence donnee (les tests).
+    pub fn rec_start_lat(
+        &mut self,
+        ch0: i32,
+        ch1: i32,
+        start: Option<i64>,
+        lat: i64,
+    ) -> Option<u32> {
+        if ch0 < 0 {
+            return None;
+        }
+        let rec = self.rec.get_or_insert_with(|| {
+            let ring = REC_RING.get_or_init(record::RecRing::new).clone();
+            record::Recorder::new(ring)
+        });
+        let ring = rec.ring().clone();
+        if rec.active() > 0 && ring.inputs() != (ch0, ch1) {
+            return None;
+        }
+        ring.set_inputs(ch0, ch1);
+        let at = start.unwrap_or_else(|| self.ctl.core().clock_now());
+        Some(rec.start(at, lat))
+    }
+
+    /// La prise s'arrete au temps `at` du moteur (rien : maintenant).
+    pub fn rec_stop(&mut self, id: u32, at: Option<i64>) {
+        let at = at.unwrap_or_else(|| self.ctl.core().clock_now());
+        if let Some(r) = self.rec.as_mut() {
+            r.stop(id, at);
+        }
+    }
+
+    pub fn rec_state(&self, id: u32) -> RecState {
+        if let Some((_, r)) = self.rec_done.iter().find(|(i, _)| *i == id) {
+            return match r {
+                Ok(c) => RecState::Ready(*c),
+                Err(e) => RecState::Failed(e.clone()),
+            };
+        }
+        match self.rec.as_ref().and_then(|r| r.frames(id)) {
+            Some(n) => RecState::Recording(n),
+            None => RecState::Unknown,
+        }
+    }
+
+    /// Les tests : l'anneau de l'enregistrement, a remplir a la main.
+    pub fn rec_ring(&self) -> Option<Arc<record::RecRing>> {
+        self.rec.as_ref().map(|r| r.ring().clone())
+    }
+
+    /// Vide l'anneau dans les prises ; une prise finie devient un clip.
+    fn rec_poll(&mut self) {
+        let Some(rec) = self.rec.as_mut() else { return };
+        let done = rec.drain();
+        let idle = rec.active() == 0;
+        let ring = rec.ring().clone();
+        let sr = self.ctl.core().srate();
+        for (id, take) in done {
+            let r = match take {
+                record::Take::Done(d) if d.is_empty() => Err("empty take".to_string()),
+                record::Take::Done(d) => self.load_samples(d, 2, sr),
+                record::Take::Failed(e) => Err(e),
+                record::Take::Recording(_) => continue,
+            };
+            self.rec_done.push((id, r));
+        }
+        // Plus rien a prendre : l'entree n'est plus copiee.
+        if idle {
+            ring.set_inputs(-1, -1);
+        }
+        if self.rec_done.len() > 64 {
+            self.rec_done.drain(..self.rec_done.len() - 64);
+        }
     }
 
     /// La clock MIDI externe : ecouter l'entree MIDI `dev` (son rang dans
@@ -732,6 +850,7 @@ impl AudioHost {
     /// les voix finies sont rendues, la memoire liberable est liberee.
     pub fn poll(&mut self) {
         self.check_routes();
+        self.rec_poll();
         while let Some(m) = self.decoder.try_msg() {
             match m {
                 decode::Msg::Thumb { path, src, data } => {

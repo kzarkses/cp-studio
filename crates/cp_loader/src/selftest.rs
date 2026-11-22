@@ -42,6 +42,8 @@ pub struct SelfTest {
     route: Option<(String, cp_audio::VoiceH, u8, Instant)>,
     /// La position de la voix quand l'etirement temps reel commence.
     rt_pos0: f64,
+    /// La prise de l'essai : son numero, son debut, sa fin, son heure.
+    rec: Option<(u32, i64, i64, Instant)>,
     ui_at: Option<Instant>,
     keys_step: u8,
     wheels: u32,
@@ -77,6 +79,8 @@ enum Phase {
     Stretch,
     /// Une colonne qui joue DANS une piste, puis la piste effacee en jouant.
     Route,
+    /// Une prise de l'entree de la carte : sa duree exacte.
+    Record,
     /// La suite se passe hors du moteur audio : insertion, interface.
     Insert,
     OpenUi,
@@ -109,6 +113,7 @@ pub fn requested() -> Option<SelfTest> {
         stretch_at: None,
         route: None,
         rt_pos0: 0.0,
+        rec: None,
         ui_at: None,
         keys_step: 0,
         wheels: 0,
@@ -621,7 +626,67 @@ impl SelfTest {
             }
             Phase::Route => {
                 if self.check_route(a) {
+                    // Une prise d'une demi-seconde, dans 0,1 s.
+                    let s0 = a.core().clock_now() + 4800;
+                    let s1 = s0 + 24000;
+                    match a.rec_start(0, 1, Some(s0)) {
+                        Some(id) => {
+                            a.rec_stop(id, Some(s1));
+                            self.rec = Some((id, s0, s1, Instant::now()));
+                        }
+                        None => self.say(false, "prise : refusee".into()),
+                    }
+                    self.phase = Phase::Record;
+                }
+            }
+            Phase::Record => {
+                let Some((id, s0, s1, t)) = self.rec else {
                     self.phase = Phase::Insert;
+                    return false;
+                };
+                a.poll();
+                match a.rec_state(id) {
+                    cp_audio::RecState::Ready(c) => {
+                        let (frames, nch, _) = a.clip_info(c).unwrap_or((0, 0, 0.0));
+                        let lat = crate::REAPER
+                            .get()
+                            .map_or((0, 0), cp_sys::audio::AudioHook::io_latency);
+                        self.say(
+                            frames == s1 - s0 && nch == 2,
+                            format!(
+                                "prise de l'entree 1/2 : {frames} frames (attendu {}), latence entree {} + sortie {} retiree",
+                                s1 - s0,
+                                lat.0,
+                                lat.1
+                            ),
+                        );
+                        a.release(c);
+                        self.phase = Phase::Insert;
+                    }
+                    cp_audio::RecState::Failed(e) => {
+                        let rb = a.rec_ring().map(|r| r.last_block());
+                        let lat = crate::REAPER
+                            .get()
+                            .map_or((0, 0), cp_sys::audio::AudioHook::io_latency);
+                        self.say(
+                            false,
+                            format!(
+                                "prise : {e} (debut {s0}, fin {s1}, horloge {}, dernier bloc {rb:?}, latence {lat:?})",
+                                a.core().clock_now()
+                            ),
+                        );
+                        self.phase = Phase::Insert;
+                    }
+                    _ if t.elapsed() > Duration::from_secs(5) => {
+                        // Sans carte son ouverte, rien n'arrive : on le dit.
+                        let blocks = a.stats().blocks;
+                        self.say(
+                            blocks == 0,
+                            format!("prise : toujours en cours apres 5 s ({blocks} blocs audio)"),
+                        );
+                        self.phase = Phase::Insert;
+                    }
+                    _ => {}
                 }
             }
             Phase::Insert
@@ -1327,7 +1392,12 @@ impl SelfTest {
     pub fn wants_audio(&self) -> bool {
         matches!(
             self.phase,
-            Phase::Wait | Phase::Decoding | Phase::Playing | Phase::Stretch | Phase::Route
+            Phase::Wait
+                | Phase::Decoding
+                | Phase::Playing
+                | Phase::Stretch
+                | Phase::Route
+                | Phase::Record
         )
     }
 

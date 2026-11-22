@@ -147,6 +147,19 @@ impl AudioHook {
         Some(unsafe { std::slice::from_raw_parts(p, frames as usize) })
     }
 
+    /// Les latences de la carte (entree, sortie), en echantillons.
+    pub fn io_latency(r: &Reaper) -> (i32, i32) {
+        type F = unsafe extern "C" fn(*mut i32, *mut i32);
+        // SAFETY: void GetInputOutputLatency(int*, int*).
+        let Some(f) = (unsafe { r.api::<F>(c"GetInputOutputLatency") }) else {
+            return (0, 0);
+        };
+        let (mut i, mut o) = (0i32, 0i32);
+        // SAFETY: ecrit deux entiers a nous.
+        unsafe { f(&mut i, &mut o) };
+        (i.max(0), o.max(0))
+    }
+
     /// Relit le nombre d'entrees de la carte (fil principal).
     pub fn refresh_inputs(r: &Reaper) -> i32 {
         type Num = unsafe extern "C" fn() -> i32;
