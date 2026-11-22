@@ -5,6 +5,8 @@
 //! impulsions perdues, tempo divise par deux, Start / Stop / Continue / SPP,
 //! doublons, changement de taux) puis 300 graines au hasard.
 
+#![allow(clippy::missing_transmute_annotations)]
+
 use std::ffi::c_void;
 
 use cp_engine::extclock::{ExtClock, Snap, qn_at};

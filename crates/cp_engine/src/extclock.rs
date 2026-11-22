@@ -145,7 +145,8 @@ impl ExtClock {
     }
 
     pub fn set_srate(&mut self, sr: f64) {
-        if !(sr > 1.0) || sr == self.srate {
+        // (NaN compris, comme `!(sr > 1.0)` en C++.)
+        if sr.is_nan() || sr <= 1.0 || sr == self.srate {
             return;
         }
         // Les instants de la fenetre sont a l'ANCIEN taux ; la pente se
@@ -509,7 +510,7 @@ pub fn qn_at(s: &Snap, t: f64) -> f64 {
     if s.flags & HAS_POS == 0 {
         return 0.0;
     }
-    if s.flags & RUNNING == 0 || s.flags & WAITING != 0 || !(s.spt > 0.0) {
+    if s.flags & RUNNING == 0 || s.flags & WAITING != 0 || s.spt.is_nan() || s.spt <= 0.0 {
         return s.pos_next / 24.0;
     }
     // Sur la droite, a partir de la derniere impulsion ajustee ; bornee a
