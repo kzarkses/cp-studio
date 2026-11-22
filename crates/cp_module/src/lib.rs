@@ -35,6 +35,7 @@ use cp_sys::ui::{self, Cursor, MenuItem};
 use cp_sys::win::{self, Hwnd, WinMsg};
 use cp_ui::{Button, Ev, IconCache, Mods, Theme};
 
+mod editor;
 mod gtab;
 mod items;
 mod tuner;
@@ -294,6 +295,9 @@ pub(crate) enum WinOp {
     GtabOpen,
     GtabClose,
     GtabPlace(Place),
+    EdOpen,
+    EdClose,
+    EdPlace(Place),
 }
 
 /// La fenetre du navigateur.
@@ -337,6 +341,9 @@ pub(crate) struct App {
     cmd_gtab_set: i32,
     cmd_view_gtab: i32,
     cmd_gtab_make: i32,
+    cmd_editor: i32,
+    /// L'editeur : la fenetre, l'item ouvert.
+    ed: editor::EPart,
     /// Une transcription Guitar Tab en cours.
     /// Guitar Tab : la fenetre, la prise, la transcription.
     gt: gtab::GPart,
@@ -644,6 +651,9 @@ impl App {
                 WinOp::GtabOpen => self.gtab_open(),
                 WinOp::GtabClose => self.gtab_close(true),
                 WinOp::GtabPlace(p) => self.gtab_set_place(p),
+                WinOp::EdOpen => self.ed_open(),
+                WinOp::EdClose => self.ed_close(true),
+                WinOp::EdPlace(p) => self.ed_set_place(p),
             }
         }
         if self.tp.view.is_some() {
@@ -1248,6 +1258,10 @@ impl Module for App {
             "CPSTUDIO_GUITARTAB_MAKE",
             "CP Studio: Guitar Tab - make the selected track a guitar track",
         );
+        let cmd_editor = host.register_action(
+            "CPSTUDIO_EDITOR",
+            "CP Studio: Editor - open (the selected MIDI or audio item)",
+        );
         let tp = tview::TPart::new(&r);
         let mut app = App {
             host,
@@ -1266,6 +1280,8 @@ impl Module for App {
             cmd_gtab_set,
             cmd_view_gtab,
             cmd_gtab_make,
+            cmd_editor,
+            ed: editor::EPart::new(&r),
             gt: gtab::GPart::new(&r),
             browser,
             view: None,
@@ -1318,6 +1334,9 @@ impl Module for App {
                 if app.ext("gtab_open").as_deref() == Some("1") {
                     app.queue(WinOp::GtabOpen);
                 }
+                if app.ext("ed_open").as_deref() == Some("1") {
+                    app.queue(WinOp::EdOpen);
+                }
             }
         }
         // Guitar Tab : sa fenetre reprise apres un rechargement, et sa prise.
@@ -1330,6 +1349,16 @@ impl Module for App {
             app.gtab_adopt(h);
         }
         app.gt.pending = app.ext("gtab_take");
+        // L'editeur : sa fenetre reprise, et son item.
+        let eh = app
+            .ext("ed_hwnd")
+            .and_then(|v| v.parse::<isize>().ok())
+            .map(Hwnd)
+            .filter(|&h| h.0 != 0 && win::is_window(h));
+        if let Some(h) = eh {
+            app.ed.pending = app.ext("ed_item").filter(|g| !g.is_empty());
+            app.ed_adopt(h);
+        }
         host.info(&format!(
             "module pret : generation {}, navigateur {} ({}), transport {}",
             host.generation(),
@@ -1365,6 +1394,7 @@ impl Module for App {
             self.r.prompt_for_action(-1);
         }
         self.gtab_shutdown();
+        self.ed_shutdown();
         // Les fenetres restent au chargeur : le module suivant les reprend.
         // Elles ne recevront plus d'images d'ici la.
         if let Some(v) = &self.view {
@@ -1386,6 +1416,7 @@ impl Module for App {
             self.docker_tabs();
         }
         self.gtab_tick();
+        self.ed_tick();
         self.transport_tick();
         if self.view.is_none() {
             return;
@@ -1478,6 +1509,9 @@ impl Module for App {
         } else if cmd == self.cmd_gtab_make {
             self.gtab_make_selected();
             true
+        } else if cmd == self.cmd_editor {
+            self.ed_start();
+            true
         } else {
             false
         }
@@ -1504,6 +1538,8 @@ impl Module for App {
             Some(self.place == Place::Float)
         } else if cmd == self.cmd_gtab || cmd == self.cmd_view_gtab {
             Some(self.gt.win.is_some() || self.gtab_running())
+        } else if cmd == self.cmd_editor {
+            Some(self.ed.win.is_some())
         } else {
             None
         }
@@ -1514,6 +1550,9 @@ impl Module for App {
             return Some(r);
         }
         if let Some(r) = self.gtab_wnd(m) {
+            return Some(r);
+        }
+        if let Some(r) = self.ed_wnd(m) {
             return Some(r);
         }
         self.browser_wnd(m)

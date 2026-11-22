@@ -651,6 +651,7 @@ impl SelfTest {
                 let path = dir().join("riff.wav");
                 let _ = fs::write(&path, wav(&x, 1, sr, false));
                 r.ext_set("CP_Studio", "selftest_gtab", "", false);
+                r.ext_set("CP_Studio", "selftest_editor", "", false);
                 // Le riff seul choisi : InsertMedia AJOUTE a la selection.
                 let unsel = r.command_text(40289);
                 if !(unsel.to_lowercase().contains("unselect")
@@ -719,6 +720,17 @@ impl SelfTest {
                 self.say(
                     quarters >= 6,
                     format!("Guitar Tab : rythme, {quarters} noires sur la portee (8 jouees)"),
+                );
+                // L'editeur, sur le MIDI du riff.
+                let ed = r
+                    .ext_get("CP_Studio", "selftest_editor")
+                    .unwrap_or_default();
+                self.say(
+                    ed.contains("notes=8")
+                        && ed.contains("transpose=1")
+                        && ed.contains("canaux=1")
+                        && ed.contains("annule=1"),
+                    format!("Editeur : un demi-ton plus haut ecrit dans l'item, canaux gardes, annule ; {ed}"),
                 );
                 return true;
             }

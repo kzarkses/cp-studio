@@ -206,7 +206,7 @@ impl GPart {
     }
 }
 
-const LOOK: [&str; 8] = [
+pub(crate) const LOOK: [&str; 8] = [
     "genlist_bg",
     "genlist_fg",
     "genlist_selbg",
@@ -217,7 +217,7 @@ const LOOK: [&str; 8] = [
     "col_toolbar_text_on",
 ];
 
-fn selftest() -> bool {
+pub(crate) fn selftest() -> bool {
     std::env::var("CP_STUDIO_SELFTEST").is_ok()
 }
 
@@ -1427,6 +1427,16 @@ impl App {
             file.map(|p| p.display().to_string()).unwrap_or_default()
         );
         self.r.ext_set(SECTION, "selftest_gtab", &line, false);
+        // L'editeur sur le MIDI du riff : transposer, verifier, annuler.
+        let r = self.r;
+        let midi = r
+            .item_ext(&it.guid, "CPGT_midi")
+            .filter(|m| r.item_ext(m, "CPGT_src").as_deref() == Some(it.guid.as_str()));
+        let ed = match midi {
+            Some(m) => self.ed_selftest(&m),
+            None => "pas de MIDI".into(),
+        };
+        self.r.ext_set(SECTION, "selftest_editor", &ed, false);
     }
 
     /// Ecrit la partition d'un item (MusicXML) dans `Guitar Tab/<nom>.musicxml`.
@@ -1645,8 +1655,9 @@ impl App {
                     r.item_ext(&g, "CPGT_midi")
                         .filter(|m| r.item_ext(m, "CPGT_src").as_deref() == Some(g.as_str()))
                 });
+                // Le MIDI s'ouvre dans l'editeur de CP Studio.
                 match m {
-                    Some(m) if r.select_only_item(&m) => r.main_on_command(40153),
+                    Some(m) => self.ed_open_item(&m),
                     _ => self.gt.arr.status = "This item has no MIDI yet.".into(),
                 }
             }

@@ -353,6 +353,15 @@ impl App {
                     .as_ref()
                     .is_some_and(|w| w.place != Place::Arrange),
             },
+            ViewTab {
+                name: "Editor".into(),
+                active: self.ed_in_band(),
+                open: self
+                    .ed
+                    .win
+                    .as_ref()
+                    .is_some_and(|w| w.place != Place::Arrange),
+            },
         ]
     }
 
@@ -696,7 +705,8 @@ impl App {
             Act::View(i) => self.queue(match i {
                 0 => crate::WinOp::ViewArrange,
                 1 => crate::WinOp::ViewBrowser,
-                _ => crate::WinOp::GtabOpen,
+                2 => crate::WinOp::GtabOpen,
+                _ => crate::WinOp::EdOpen,
             }),
             Act::ViewMenu { i, x, y } => {
                 if i == 1 {
@@ -705,6 +715,11 @@ impl App {
                     if let Some(h) = self.tp.view.as_ref().map(|v| v.hwnd) {
                         let (sx, sy) = ui::client_to_screen(h, x as i32, y as i32);
                         self.gtab_place_menu_at(h, sx, sy);
+                    }
+                } else if i == 3 {
+                    if let Some(h) = self.tp.view.as_ref().map(|v| v.hwnd) {
+                        let (sx, sy) = ui::client_to_screen(h, x as i32, y as i32);
+                        self.ed_place_menu_at(h, sx, sy);
                     }
                 }
             }
