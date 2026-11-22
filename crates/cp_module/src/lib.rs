@@ -36,6 +36,7 @@ use cp_sys::win::{self, Hwnd, WinMsg};
 use cp_ui::{Button, Ev, IconCache, Mods, Theme};
 
 mod editor;
+mod frame;
 mod gtab;
 mod items;
 mod tuner;

@@ -35,7 +35,6 @@ use std::time::Instant;
 use cp_abi::{
     PLACE_ARRANGE, PLACE_HELD, VIEW_DOCK, VIEW_FLOAT, VIEW_PLACED, WM_CP_ACCEL, WM_CP_FRAME,
 };
-use cp_gfx::{Canvas, Surface};
 use cp_sys::items::QnNote;
 use cp_sys::module::key_event;
 use cp_sys::pcm::CppSource;
@@ -94,12 +93,10 @@ const SYNTH_NAME: &str = "CP Guitar Tab Synth";
 pub(crate) struct GWin {
     pub hwnd: Hwnd,
     pub place: Place,
-    surf: Surface,
-    present: Vec<u32>,
+    frame: crate::frame::Frame,
     theme: Theme,
     theme_key: Vec<Option<(u8, u8, u8)>>,
     tracking: bool,
-    frames_on: bool,
     closing: bool,
     /// L'infobulle, la cible survolee et depuis quand, le texte montre.
     tip: Option<ui::Tooltip>,
@@ -162,6 +159,8 @@ pub(crate) struct GPart {
     /// ... et a redecoder avec leur analyse neuve (puis reecrire).
     redecode: HashSet<String>,
     since_sync: u32,
+    /// Le compteur de changements du projet au dernier rafraichissement.
+    state_seen: i32,
     recording: bool,
     after_rec: u32,
     /// Un item a choisir des que possible (apres un rechargement).
@@ -177,6 +176,37 @@ pub(crate) struct GPart {
     requested: HashSet<String>,
     /// Les cretes que REAPER n'a pas encore : on reessaie plus tard.
     peak_retry: HashMap<String, Instant>,
+    /// La derniere place connue de chaque paire (item audio -> audio, MIDI) :
+    /// celui des deux qui a bouge depuis entraine l'autre, comme un groupe
+    /// d'items de REAPER.
+    pairs: HashMap<String, (Geo, Geo)>,
+}
+
+/// La place d'un item : debut, longueur, lane, decalage de sa prise (s).
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Geo {
+    pos: f64,
+    len: f64,
+    lane: i32,
+    offs: f64,
+}
+
+impl Geo {
+    fn of(i: &ItemSnap) -> Geo {
+        Geo {
+            pos: i.pos,
+            len: i.len,
+            lane: i.lane,
+            offs: i.take().map_or(0.0, |t| t.offs),
+        }
+    }
+
+    fn same(&self, o: &Geo) -> bool {
+        (self.pos - o.pos).abs() < 1e-6
+            && (self.len - o.len).abs() < 1e-6
+            && self.lane == o.lane
+            && (self.offs - o.offs).abs() < 1e-6
+    }
 }
 
 impl GPart {
@@ -207,6 +237,7 @@ impl GPart {
             force: HashSet::new(),
             redecode: HashSet::new(),
             since_sync: 1000,
+            state_seen: i32::MIN,
             recording: false,
             after_rec: 0,
             pending: None,
@@ -216,6 +247,7 @@ impl GPart {
             selftest_take: None,
             requested: HashSet::new(),
             peak_retry: HashMap::new(),
+            pairs: HashMap::new(),
         }
     }
 }
@@ -880,6 +912,7 @@ impl App {
     /// met en file ce qui n'est pas transcrit.
     pub(crate) fn gtab_sync(&mut self) {
         let r = self.r;
+        let before = arr_sig(&self.gt.arr);
         self.gtab_migrate();
         let snap = r.snapshot_tracks(&TKEYS, &IKEYS, &|e| {
             matches!(e[K_ROLE].as_deref(), Some("guitar") | Some("tab"))
@@ -903,6 +936,9 @@ impl App {
         let mut to_write: Vec<(String, String)> = Vec::new();
         let mut to_fix: Vec<(String, f64, f64, i32)> = Vec::new();
         let mut to_offs: Vec<(String, f64)> = Vec::new();
+        // Les items audio qui suivent leur MIDI : (item, debut, longueur,
+        // lane, decalage de la prise).
+        let mut to_follow: Vec<(String, f64, f64, i32, f64)> = Vec::new();
         let mut to_mark: Vec<(String, f64)> = Vec::new();
         let mut todos: Vec<(String, Todo)> = Vec::new();
         for a in snap
@@ -968,29 +1004,62 @@ impl App {
                     todos.push((is.guid.clone(), todo));
                 }
                 if let Some(m) = midi {
-                    // L'item MIDI suit son item audio (place, lane).
-                    if (m.pos - is.pos).abs() > 1e-6
-                        || (m.len - is.len).abs() > 1e-6
-                        || m.lane != is.lane
-                    {
-                        to_fix.push((m.guid.clone(), is.pos, is.len, is.lane));
-                    }
-                    // Le debut de l'audio rogne : le MIDI se decale dans sa
-                    // source d'autant, ses notes restent ou elles sonnent.
-                    match m.ext[I_AOFFS]
+                    // L'audio et son MIDI se tiennent comme un groupe de
+                    // REAPER : celui qu'on a bouge ou rogne (ici, dans REAPER)
+                    // entraine l'autre, et les notes restent ou elles sonnent
+                    // (le decalage de la prise MIDI suit celui de l'audio).
+                    let (ga, gm) = (Geo::of(is), Geo::of(m));
+                    let a0 = m.ext[I_AOFFS]
                         .as_deref()
-                        .and_then(|v| v.parse::<f64>().ok())
-                    {
-                        Some(a0) => {
-                            let want = ((tk.offs - a0) / tk.rate.max(1e-6)).max(0.0);
-                            let cur = m.take().map_or(0.0, |x| x.offs);
-                            if (want - cur).abs() > 1e-6 {
-                                to_offs.push((m.guid.clone(), want));
-                            }
+                        .and_then(|v| v.parse::<f64>().ok());
+                    let rate = tk.rate.max(1e-6);
+                    let prev = self.gt.pairs.get(&is.guid).copied();
+                    let midi_moved = prev.is_some_and(|(pa, pm)| ga.same(&pa) && !gm.same(&pm));
+                    match a0 {
+                        Some(a0) if midi_moved => {
+                            // Le MIDI a bouge seul : l'audio le suit.
+                            to_follow.push((
+                                is.guid.clone(),
+                                gm.pos,
+                                gm.len,
+                                gm.lane,
+                                a0 + gm.offs * rate,
+                            ));
+                            self.gt.pairs.insert(
+                                is.guid.clone(),
+                                (
+                                    Geo {
+                                        offs: a0 + gm.offs * rate,
+                                        ..gm
+                                    },
+                                    gm,
+                                ),
+                            );
                         }
-                        None => {
-                            let cur = m.take().map_or(0.0, |x| x.offs);
-                            to_mark.push((m.guid.clone(), tk.offs - cur * tk.rate));
+                        _ => {
+                            // L'audio a bouge (ou rien) : le MIDI le suit.
+                            if (m.pos - is.pos).abs() > 1e-6
+                                || (m.len - is.len).abs() > 1e-6
+                                || m.lane != is.lane
+                            {
+                                to_fix.push((m.guid.clone(), is.pos, is.len, is.lane));
+                            }
+                            let mut want_m = Geo { offs: gm.offs, ..ga };
+                            match a0 {
+                                Some(a0) => {
+                                    // Un MIDI boucle (le defaut de REAPER) ne
+                                    // recule pas avant sa source.
+                                    let want = ((tk.offs - a0) / rate).max(0.0);
+                                    if (want - gm.offs).abs() > 1e-6 {
+                                        to_offs.push((m.guid.clone(), want));
+                                    }
+                                    want_m.offs = want;
+                                }
+                                None => {
+                                    to_mark.push((m.guid.clone(), tk.offs - gm.offs * rate));
+                                }
+                            }
+                            self.gt.pairs.insert(is.guid.clone(), (ga, want_m));
                         }
                     }
                 }
@@ -1050,6 +1119,17 @@ impl App {
         for (g, offs) in to_offs {
             r.set_active_take_value(&g, "D_STARTOFFS", offs);
         }
+        for (g, pos, len, lane, offs) in &to_follow {
+            r.set_item_value(g, "D_POSITION", *pos);
+            r.set_item_value(g, "D_LENGTH", *len);
+            r.set_item_value(g, "I_FIXEDLANE", *lane as f64);
+            r.set_active_take_value(g, "D_STARTOFFS", *offs);
+        }
+        if !to_follow.is_empty() {
+            // L'audio a change de place : il se relit au prochain passage.
+            self.gt.since_sync = 1000;
+            r.refresh_arrange();
+        }
         for (g, a0) in to_mark {
             r.set_item_ext(&g, "CPGT_aoffs", &format!("{a0:.9}"));
         }
@@ -1090,7 +1170,11 @@ impl App {
                 }
             }
         }
-        self.gt.arr.mark();
+        // Rien n'a change dans ce qu'on montre : rien a redessiner (avant,
+        // chaque rafraichissement redessinait toute la fenetre).
+        if arr_sig(&self.gt.arr) != before {
+            self.gt.arr.mark();
+        }
     }
 
     /// Le synthe de la piste tab, s'il y est.
@@ -2240,11 +2324,19 @@ impl App {
                 self.gt.since_sync = 1000;
             }
         }
-        // Le rafraichissement, fenetre ouverte.
+        // Le rafraichissement, fenetre ouverte : seulement quand le projet a
+        // change (son compteur), un rafraichissement demande, ou toutes les
+        // deux secondes au cas ou (un reglage d'effet ne compte pas toujours).
+        // Jamais pendant qu'un bouton de la souris est tenu (un item qu'on
+        // rogne dans REAPER : rien ne bouge sous ses doigts).
         self.gt.since_sync += 1;
-        if self.gt.since_sync >= 15 && !rec && !self.gt.arr.dragging() {
+        let changed = self.gt.since_sync % 3 == 0 && r.state_count() != self.gt.state_seen;
+        let due = self.gt.since_sync >= 60 || changed;
+        if due && !rec && !self.gt.arr.dragging() && !ui::mouse_held() {
             self.gt.since_sync = 0;
+            self.gt.state_seen = r.state_count();
             self.gtab_sync();
+            self.gt.state_seen = r.state_count();
             if open {
                 self.gtab_follow_selection(playing);
                 self.gtab_select_pending();
@@ -2269,6 +2361,7 @@ impl App {
             r.cursor_position()
         };
         self.gt.arr.set_playhead(Some(r.time_to_qn(pos)), playing);
+        self.gt.arr.edit_cursor = Some(r.time_to_qn(r.cursor_position()));
         let meters: Vec<(usize, f32)> = self
             .gt
             .arr
@@ -2278,13 +2371,11 @@ impl App {
             .map(|(t, x)| (t, r.track_peak(&x.head.guid)))
             .collect();
         for (t, m) in meters {
-            let h = &mut self.gt.arr.tracks[t].head;
+            let cur = self.gt.arr.tracks[t].head.meter;
             let m = m.min(1.2);
-            let nv = if m > h.meter { m } else { h.meter * 0.85 };
-            if (nv - h.meter).abs() > 0.004 {
-                h.meter = nv;
-                self.gt.arr.mark();
-            }
+            let nv = if m > cur { m } else { cur * 0.85 };
+            // Seule la barre du vumetre se redessine.
+            self.gt.arr.set_meter(t, nv);
         }
         let shown = self.gt.win.as_ref().is_some_and(|w| ui::is_shown(w.hwnd));
         if !shown {
@@ -2294,8 +2385,9 @@ impl App {
         self.gtab_tip();
         if playing || self.gt.job.is_some() {
             self.gtab_want_frames(true);
-        } else if self.gt.arr.take_dirty() {
-            self.gt.arr.mark();
+        } else if !self.gt.win.as_ref().is_some_and(|w| w.frame.frames_on) {
+            // Horloge arretee : ce qui a change (un curseur deplace dans
+            // REAPER) part d'ici ; rien de neuf ne coute rien.
             self.gtab_render(false);
         }
     }
@@ -2538,12 +2630,10 @@ impl App {
         self.gt.win = Some(GWin {
             hwnd,
             place: self.gt.place,
-            surf: Surface::default(),
-            present: Vec::new(),
+            frame: crate::frame::Frame::default(),
             theme: Theme::reaper(scale, &|k| r.theme_color(k)),
             theme_key: LOOK.iter().map(|k| r.theme_color(k)).collect(),
             tracking: false,
-            frames_on: false,
             closing: false,
             tip: None,
             hover: (cp_tabview::Hit::None, Instant::now()),
@@ -2649,11 +2739,25 @@ impl App {
 
     fn gtab_want_frames(&mut self, on: bool) {
         if let Some(w) = &mut self.gt.win {
-            if w.frames_on != on {
-                w.frames_on = on;
+            if on {
+                w.frame.wake();
+            }
+            if w.frame.frames_on != on {
+                w.frame.frames_on = on;
                 self.host.frames(w.hwnd, on);
             }
         }
+    }
+
+    /// Un geste vient de changer la vue : au repos, l'image part tout de
+    /// suite et l'horloge demarre ; sinon la prochaine image la prend (les
+    /// mouvements de souris entre deux images n'en coutent qu'une).
+    fn gtab_kick(&mut self) {
+        let on = self.gt.win.as_ref().is_some_and(|w| w.frame.frames_on);
+        if !on {
+            self.gtab_render(false);
+        }
+        self.gtab_want_frames(true);
     }
 
     pub(crate) fn gtab_render(&mut self, force: bool) {
@@ -2672,38 +2776,26 @@ impl App {
         if (scale - w.theme.scale).abs() > 0.01 {
             let r = self.r;
             w.theme = Theme::reaper(scale, &|k| r.theme_color(k));
+            self.gt.arr.mark();
         }
-        let resized = w.surf.resize(cw, ch);
-        let dirty = self.gt.arr.take_dirty();
-        if !(dirty || force || resized) {
-            return;
+        if w.frame.resize(cw, ch) || force {
+            self.gt.arr.mark();
         }
-        {
-            let mut cv = Canvas::new(&mut w.surf, &mut self.scratch);
-            self.gt.arr.draw(
-                &mut cv,
-                &mut self.text,
-                &mut self.icons,
-                &w.theme,
-                cw as f32,
-                ch as f32,
-            );
-        }
-        ui::present(
-            w.hwnd,
-            &w.surf.px,
-            cw,
-            ch,
-            &[(0, 0, cw, ch)],
-            &mut w.present,
-        );
+        let damage = self.gt.arr.take_damage();
+        let arr = &mut self.gt.arr;
+        let (text, icons, th) = (&mut self.text, &mut self.icons, &w.theme);
+        w.frame.paint(&damage, &mut self.scratch, |cv| {
+            arr.draw(cv, text, icons, th, cw as f32, ch as f32);
+        });
+        let strokes = self.gt.arr.strokes(&w.theme);
+        w.frame.show(w.hwnd, &damage, &strokes);
     }
 
     fn gtab_feed(&mut self, ev: Ev) {
         if let Some(a) = self.gt.arr.event(&ev) {
             self.gtab_act(a);
         }
-        self.gtab_render(false);
+        self.gtab_kick();
     }
 
     /// Les messages de la fenetre.
@@ -2730,11 +2822,10 @@ impl App {
                     r.cursor_position()
                 };
                 self.gt.arr.set_playhead(Some(r.time_to_qn(pos)), playing);
-                if playing {
-                    self.gt.arr.mark();
-                }
+                self.gt.arr.edit_cursor = Some(r.time_to_qn(r.cursor_position()));
                 self.gtab_render(false);
-                if !playing && self.gt.job.is_none() {
+                let idle = self.gt.win.as_ref().is_none_or(|w| w.frame.idle());
+                if !playing && self.gt.job.is_none() && idle && !self.gt.arr.dragging() {
                     self.gtab_want_frames(false);
                 }
                 Some(0)
@@ -2765,13 +2856,9 @@ impl App {
             }
             msg::PAINT => {
                 drop(win::Paint::begin(hwnd));
-                if let Some(w) = &mut self.gt.win {
-                    let (cw, ch) = (w.surf.w, w.surf.h);
-                    if cw > 0 && ch > 0 {
-                        ui::present(hwnd, &w.surf.px, cw, ch, &[(0, 0, cw, ch)], &mut w.present);
-                    } else {
-                        self.gtab_render(true);
-                    }
+                let shown = self.gt.win.as_mut().is_some_and(|w| w.frame.repaint(hwnd));
+                if !shown {
+                    self.gtab_render(true);
                 }
                 Some(0)
             }
@@ -2880,6 +2967,32 @@ impl App {
             _ => None,
         }
     }
+}
+
+/// L'empreinte de ce que la vue montre des pistes : deux empreintes egales,
+/// rien a redessiner.
+fn arr_sig(a: &Arr) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    a.sig.hash(&mut h);
+    a.bpm.to_bits().hash(&mut h);
+    for t in &a.tracks {
+        format!("{:?}", t.head).hash(&mut h);
+        for it in &t.items {
+            (&it.guid, &it.take, &it.akey, &it.name).hash(&mut h);
+            (it.qn0.to_bits(), it.qn1.to_bits(), it.origin_qn.to_bits()).hash(&mut h);
+            format!("{:?}", it.state).hash(&mut h);
+            (it.midi, it.active, it.sig, it.peaks.len(), it.dropped).hash(&mut h);
+            for k in &it.takes {
+                (&k.name, k.done).hash(&mut h);
+            }
+            for n in it.doc.iter().chain(it.ghosts.iter()) {
+                (n.qn0.to_bits(), n.qn1.to_bits(), n.pitch, n.string, n.fret, n.vel).hash(&mut h);
+                (n.locked, format!("{:?}", n.tech)).hash(&mut h);
+            }
+        }
+    }
+    h.finish()
 }
 
 /// Le nom d'une prise, sans l'extension de son fichier.
