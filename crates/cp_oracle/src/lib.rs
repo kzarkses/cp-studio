@@ -101,6 +101,26 @@ pub fn build_pcm_abi() -> Result<PathBuf, String> {
     .clone()
 }
 
+/// L'ancienne clock externe (`cp_extclock.cpp`) et son enveloppe C
+/// (`cpp/extclock_shim.cpp`, voir `tests/extclock.rs`).
+pub fn build_extclock() -> Result<PathBuf, String> {
+    static ONCE: std::sync::OnceLock<Result<PathBuf, String>> = std::sync::OnceLock::new();
+    ONCE.get_or_init(|| {
+        let core = workspace_root()
+            .join("reference")
+            .join("cp_native")
+            .join("src")
+            .join("core");
+        let shim = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("cpp")
+            .join("extclock_shim.cpp");
+        let units = [core.join("cp_extclock.cpp"), shim.clone()];
+        let deps = [units[0].clone(), shim, core.join("cp_extclock.h")];
+        build_dll("cp_extclock", &units, &deps, &[])
+    })
+    .clone()
+}
+
 /// L'etireur de REAPER imite en C++ contre le SDK (`cpp/pitch_abi.cpp`,
 /// voir `tests/pitch_abi.rs`).
 pub fn build_pitch_abi() -> Result<PathBuf, String> {

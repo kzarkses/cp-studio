@@ -23,6 +23,7 @@
 
 pub mod curve;
 mod engine;
+pub mod extclock;
 pub mod pool;
 pub mod sinc;
 pub mod types;
