@@ -29,6 +29,7 @@ pub mod model;
 pub mod notes;
 pub mod resample;
 pub mod score;
+pub mod tuner;
 
 #[cfg(test)]
 mod tests;
