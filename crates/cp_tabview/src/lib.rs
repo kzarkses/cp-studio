@@ -27,6 +27,18 @@ use cp_tab::fret::Tuning;
 use cp_ui::{Button, Ev, Mods, vk};
 
 /// Les accordages proposes (de la corde grave a l'aigue).
+/// L'aide : les touches et les gestes (l'infobulle du « ? »).
+pub const HELP: &str = "Keys\n\
+R  arm   \u{00b7}   Ctrl+R  record   \u{00b7}   Space  play   \u{00b7}   Ctrl+Z  undo\n\
+Del  note or item   \u{00b7}   0\u{2013}9  fret   \u{00b7}   \u{2191}\u{2193}  string   \u{00b7}   \u{2190}\u{2192}  note\n\
+H  hammer-on   \u{00b7}   P  pull-off\n\
+\n\
+Mouse\n\
+Wheel  scroll   \u{00b7}   Alt+wheel  move in time\n\
+Shift+wheel  zoom   \u{00b7}   Ctrl+wheel  lane height\n\
+Middle drag  move the view (on the ruler, up/down zooms)\n\
+Double-click the MIDI  MIDI editor   \u{00b7}   double-click a string  add a note";
+
 pub const TUNINGS: [(&str, [i32; 6]); 5] = [
     ("Standard E", [40, 45, 50, 55, 59, 64]),
     ("Drop D", [38, 45, 50, 55, 59, 64]),
@@ -430,18 +442,14 @@ pub enum Hit {
         t: usize,
         s: Sound,
     },
-    LaneToggle {
-        t: usize,
-        lane: Lane,
-    },
     Tuning(usize),
     // La barre
     Listen(Listen),
     Split,
-    ZoomOut,
-    ZoomIn,
     Follow,
     AddTrack,
+    /// L'aide (une infobulle : les touches et les gestes).
+    Help,
     // L'inspecteur
     Take(usize),
     Slider(u8),
@@ -454,6 +462,7 @@ pub enum Hit {
     SynthSlider(u8),
     SynthMono,
     VScroll,
+    HScroll,
 }
 
 /// Ce que le module doit faire. `t` : la piste, `i` : l'item (rangs dans
@@ -578,6 +587,23 @@ enum Drag {
         y0: f32,
         v0: f32,
     },
+    /// La barre de defilement horizontal : la souris et le defilement au
+    /// debut du geste.
+    HScroll {
+        x0: f32,
+        s0: f64,
+    },
+    /// Le bouton du milieu (comme dans REAPER) : la vue suit la main. Sur la
+    /// regle, un geste vertical zoome autour de la noire saisie.
+    Hand {
+        y0: f32,
+        v0: f32,
+        z0: f32,
+        /// La noire saisie : elle reste sous la souris.
+        q: f64,
+        ruler: bool,
+        zooming: bool,
+    },
 }
 
 /// La selection par cles : la piste, l'item, la note.
@@ -592,7 +618,8 @@ pub struct Lay {
     pub w: f32,
     pub h: f32,
     pub bar_h: f32,
-    pub status_h: f32,
+    /// La barre de defilement horizontal, sous les pistes.
+    pub hs_h: f32,
     pub panel_w: f32,
     pub panel_x: f32,
     /// Le haut et le bas de la zone des pistes.
@@ -624,6 +651,8 @@ pub struct Arr {
     pub scroll: f64,
     /// Le defilement vertical des pistes (px).
     pub vscroll: f32,
+    /// La hauteur des couches audio et MIDI (Ctrl + molette).
+    pub vzoom: f32,
     pub follow: bool,
     pub playhead: Option<f64>,
     pub playing: bool,
@@ -663,6 +692,7 @@ impl Arr {
             zoom: 56.0,
             scroll: 0.0,
             vscroll: 0.0,
+            vzoom: 1.0,
             follow: true,
             playhead: None,
             playing: false,
@@ -706,6 +736,29 @@ impl Arr {
     /// Les noires visibles.
     pub fn view_qn(&self) -> f64 {
         (self.lay.sw / self.lay.ppq.max(1e-3)) as f64
+    }
+
+    /// La fin du contenu (noires) : le dernier item, la tete de lecture,
+    /// plus une demi-vue pour respirer.
+    pub fn end_qn(&self) -> f64 {
+        let mut e: f64 = 0.0;
+        for t in &self.tracks {
+            for it in &t.items {
+                e = e.max(it.qn1);
+            }
+        }
+        if let Some(p) = self.playhead {
+            e = e.max(p);
+        }
+        let v = self.view_qn();
+        (e + v * 0.5).max(v).max(self.scroll + v)
+    }
+
+    /// Zoome a `z`, la noire `q` restant a l'abscisse `x`.
+    fn zoom_at(&mut self, z: f32, q: f64, x: f32) {
+        self.zoom = z.clamp(8.0, 600.0);
+        self.lay.ppq = self.zoom * self.scale;
+        self.scroll = (q - ((x - self.lay.sx) / self.lay.ppq) as f64).max(0.0);
     }
 
     pub fn item(&self, t: usize, i: usize) -> Option<&Item> {
@@ -908,8 +961,8 @@ impl Arr {
 
     fn slider_value(&self, k: u8, x: f32, synth: bool) -> f32 {
         let l = self.lay;
-        let x0 = l.panel_x + 120.0 * self.scale;
-        let w = (l.w - x0 - 64.0 * self.scale).max(10.0);
+        let x0 = l.panel_x + draw::SLIDER_X * self.scale;
+        let w = (l.w - x0 - draw::SLIDER_R * self.scale).max(10.0);
         let _ = (k, synth);
         ((x - x0) / w).clamp(0.0, 1.0)
     }
@@ -981,9 +1034,17 @@ impl Arr {
         Some(Act::Volume { t, tab, db })
     }
 
+    /// Un geste de l'utilisateur sur la vue : elle ne suit plus la lecture.
+    fn unfollow(&mut self) {
+        if self.playing {
+            self.follow = false;
+        }
+        self.dirty = true;
+    }
+
     fn max_vscroll(&self) -> f32 {
         let l = self.lay;
-        (l.content_h - (l.bottom - l.top - l.ruler_h)).max(0.0)
+        (l.content_h - (l.bottom - l.hs_h - l.top - l.ruler_h)).max(0.0)
     }
 
     /// Un evenement de la fenetre ; rend ce que le module doit faire.
@@ -1030,10 +1091,50 @@ impl Arr {
                     Some(Drag::Fader { t, tab }) => return self.set_fader(t, tab, x),
                     Some(Drag::VScroll { y0, v0 }) => {
                         let l = self.lay;
-                        let view = (l.bottom - l.top - l.ruler_h).max(1.0);
+                        let view = (l.bottom - l.hs_h - l.top - l.ruler_h).max(1.0);
                         let k = l.content_h / view;
                         self.vscroll = (v0 + (y - y0) * k).clamp(0.0, self.max_vscroll());
                         self.dirty = true;
+                        return None;
+                    }
+                    Some(Drag::HScroll { x0, s0 }) => {
+                        let end = self.end_qn();
+                        let k = end / self.lay.sw.max(1.0) as f64;
+                        self.scroll = (s0 + (x - x0) as f64 * k).clamp(0.0, end);
+                        self.unfollow();
+                        return None;
+                    }
+                    Some(Drag::Hand {
+                        y0,
+                        v0,
+                        z0,
+                        q,
+                        ruler,
+                        zooming,
+                    }) => {
+                        let dy = y - y0;
+                        if ruler {
+                            // Une zone morte : un geste horizontal ne zoome pas.
+                            let zooming = zooming || dy.abs() > 6.0 * self.scale;
+                            let z = if zooming {
+                                z0 * (-dy / (120.0 * self.scale)).exp2()
+                            } else {
+                                z0
+                            };
+                            self.zoom_at(z, q, x);
+                            self.drag = Some(Drag::Hand {
+                                y0,
+                                v0,
+                                z0,
+                                q,
+                                ruler,
+                                zooming,
+                            });
+                        } else {
+                            self.zoom_at(self.zoom, q, x);
+                            self.vscroll = (v0 - dy).clamp(0.0, self.max_vscroll());
+                        }
+                        self.unfollow();
                         return None;
                     }
                     None => {}
@@ -1049,6 +1150,25 @@ impl Arr {
                 if self.hover != Hit::None {
                     self.hover = Hit::None;
                     self.dirty = true;
+                }
+                None
+            }
+            Ev::Down {
+                x,
+                y,
+                b: Button::Middle,
+                ..
+            } => {
+                let l = self.lay;
+                if x >= l.sx && x < l.sx + l.sw && y >= l.top && y < l.bottom {
+                    self.drag = Some(Drag::Hand {
+                        y0: y,
+                        v0: self.vscroll,
+                        z0: self.zoom,
+                        q: self.qn_of(x),
+                        ruler: y < l.top + l.ruler_h,
+                        zooming: false,
+                    });
                 }
                 None
             }
@@ -1086,27 +1206,40 @@ impl Arr {
             Ev::Wheel {
                 dy, dx, mods, x, y, ..
             } => {
-                let in_tracks = y > self.lay.top + self.lay.ruler_h && x < self.lay.panel_x;
-                if mods.ctrl {
+                // Les gestes de REAPER chez Cedric : molette = defilement
+                // vertical, Alt = dans le temps, Maj = zoom horizontal, Ctrl =
+                // hauteur des couches ; molette horizontale = dans le temps,
+                // Alt (ou Ctrl, a l'envers) = zoom.
+                let l = self.lay;
+                let _ = y;
+                if l.panel_w > 0.0 && x >= l.panel_x {
+                    return None;
+                }
+                let x = x.clamp(l.sx, l.sx + l.sw);
+                if dx != 0.0 {
+                    if mods.alt || mods.ctrl {
+                        let k = if mods.ctrl { -dx } else { dx };
+                        let q = self.qn_of(x);
+                        self.zoom_at(self.zoom * 1.25f32.powf(k), q, x);
+                    } else {
+                        self.scroll = (self.scroll + dx as f64 * self.view_qn() * 0.15).max(0.0);
+                    }
+                } else if mods.shift {
                     let q = self.qn_of(x);
-                    let k = if dy > 0.0 { 1.25 } else { 0.8 };
-                    self.zoom = (self.zoom * k).clamp(12.0, 400.0);
-                    self.lay.ppq = self.zoom * self.scale;
-                    // La noire sous la souris reste sous la souris.
-                    self.scroll = q - ((x - self.lay.sx) / self.lay.ppq) as f64;
-                } else if dx != 0.0 || mods.shift || mods.alt {
-                    let d = if dx != 0.0 { dx } else { -dy };
-                    self.scroll += d as f64 * self.view_qn() * 0.15;
-                } else if in_tracks && self.max_vscroll() > 0.0 {
+                    self.zoom_at(self.zoom * 1.25f32.powf(dy), q, x);
+                } else if mods.alt {
+                    self.scroll = (self.scroll - dy as f64 * self.view_qn() * 0.15).max(0.0);
+                } else if mods.ctrl {
+                    self.vzoom = (self.vzoom * 1.15f32.powf(dy)).clamp(0.6, 3.0);
+                    self.dirty = true;
+                    return None;
+                } else {
                     self.vscroll =
                         (self.vscroll - dy * 60.0 * self.scale).clamp(0.0, self.max_vscroll());
-                } else {
-                    self.scroll -= dy as f64 * self.view_qn() * 0.15;
+                    self.dirty = true;
+                    return None;
                 }
-                if self.playing {
-                    self.follow = false;
-                }
-                self.dirty = true;
+                self.unfollow();
                 None
             }
             Ev::Key { vk: k, mods, .. } => self.key(k, mods),
@@ -1233,15 +1366,6 @@ impl Arr {
                 }
                 Some(Act::Sound { t, s })
             }
-            Hit::LaneToggle { t, lane } => {
-                let l = &mut self.tracks.get_mut(t)?.head.lanes;
-                l.0[lane as usize] = !l.0[lane as usize];
-                if !l.0.iter().any(|&b| b) {
-                    l.0[lane as usize] = true;
-                    return None;
-                }
-                Some(Act::Lanes { t })
-            }
             Hit::Tuning(t) => {
                 let hd = &mut self.tracks.get_mut(t)?.head;
                 hd.tuning = (hd.tuning + 1) % TUNINGS.len();
@@ -1258,14 +1382,6 @@ impl Arr {
             Hit::Split => {
                 self.split = !self.split;
                 Some(Act::Listen)
-            }
-            Hit::ZoomOut => {
-                self.zoom = (self.zoom * 0.8).clamp(12.0, 400.0);
-                None
-            }
-            Hit::ZoomIn => {
-                self.zoom = (self.zoom * 1.25).clamp(12.0, 400.0);
-                None
             }
             Hit::Follow => {
                 self.follow = !self.follow;
@@ -1334,11 +1450,151 @@ impl Arr {
                 });
                 None
             }
+            Hit::HScroll => {
+                // Hors du curseur : le curseur vient sous la souris.
+                let (tx, tw) = self.hthumb();
+                if x < tx || x > tx + tw {
+                    let end = self.end_qn();
+                    let k = end / self.lay.sw.max(1.0) as f64;
+                    self.scroll = ((x - self.lay.sx - tw * 0.5) as f64 * k).clamp(0.0, end);
+                    self.unfollow();
+                }
+                self.drag = Some(Drag::HScroll {
+                    x0: x,
+                    s0: self.scroll,
+                });
+                None
+            }
+            Hit::Help => None,
             Hit::None => {
                 self.select(None);
                 None
             }
         }
+    }
+
+    /// Le curseur de la barre horizontale : (x, largeur).
+    pub fn hthumb(&self) -> (f32, f32) {
+        let l = self.lay;
+        let end = self.end_qn().max(1e-6);
+        let tw = ((self.view_qn() / end) as f32 * l.sw).clamp((24.0 * self.scale).min(l.sw), l.sw);
+        let room = (l.sw - tw).max(0.0);
+        let maxs = (end - self.view_qn()).max(1e-6);
+        let t = (self.scroll / maxs).clamp(0.0, 1.0) as f32;
+        (l.sx + room * t, tw)
+    }
+
+    /// Montre ou cache une couche d'une piste (le menu de la piste). Une
+    /// piste garde au moins une couche.
+    pub fn toggle_lane(&mut self, t: usize, lane: Lane) -> Option<Act> {
+        let l = &mut self.tracks.get_mut(t)?.head.lanes;
+        l.0[lane as usize] = !l.0[lane as usize];
+        if !l.0.iter().any(|&b| b) {
+            l.0[lane as usize] = true;
+            return None;
+        }
+        self.dirty = true;
+        Some(Act::Lanes { t })
+    }
+
+    /// La cible sous la souris (pour l'infobulle).
+    pub fn hovered(&self) -> Hit {
+        self.hover
+    }
+
+    pub fn dragging(&self) -> bool {
+        self.drag.is_some()
+    }
+
+    /// Le texte de l'infobulle d'une cible : l'ecran reste sans phrases,
+    /// l'explication vient au survol.
+    pub fn label(&self, h: Hit) -> Option<String> {
+        let db = |v: f32| {
+            if v <= -60.0 {
+                "-inf dB".to_string()
+            } else {
+                format!("{v:+.1} dB")
+            }
+        };
+        Some(match h {
+            Hit::Note { t, i, n } => {
+                let it = self.item(t, i)?;
+                let nt = it.doc.get(n)?;
+                let bar_qn = self.bar_qn();
+                let bar = (nt.qn0 / bar_qn).floor();
+                let beat = nt.qn0 - bar * bar_qn;
+                let names = [
+                    "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B",
+                ];
+                let nstr = it.detect.tuning().strings.len();
+                format!(
+                    "{}{} \u{00b7} string {}, fret {}{}\nBar {} \u{00b7} beat {:.2}",
+                    names[nt.pitch.rem_euclid(12) as usize],
+                    nt.pitch.div_euclid(12) - 1,
+                    nstr - nt.string,
+                    nt.fret,
+                    match nt.tech {
+                        Tech::Hammer => " \u{00b7} hammer-on",
+                        Tech::Pull => " \u{00b7} pull-off",
+                        Tech::Plain => "",
+                    },
+                    bar as i64 + 1,
+                    beat + 1.0,
+                )
+            }
+            Hit::Ghost { .. } => "Ghost note, just under the threshold\nClick: keep it".into(),
+            Hit::TabLine { .. } => "Double-click: add a note".into(),
+            Hit::Item { t, i, lane } => {
+                let it = self.item(t, i)?;
+                if lane == Lane::Midi {
+                    format!("{}\nDouble-click: MIDI editor", it.name)
+                } else {
+                    it.name.clone()
+                }
+            }
+            Hit::Arm(_) => "Arm for recording (R)".into(),
+            Hit::Input(_) => "Input".into(),
+            Hit::Monitor(_) => "Monitor the input".into(),
+            Hit::Mute(_) => "Mute".into(),
+            Hit::Solo(_) => "Solo".into(),
+            Hit::Fader { t, tab } => {
+                let hd = &self.tracks.get(t)?.head;
+                if tab {
+                    format!("Tab {}\nDouble-click: 0 dB", db(hd.tab_vol_db))
+                } else {
+                    format!("Guitar {}\nDouble-click: 0 dB", db(hd.vol_db))
+                }
+            }
+            Hit::SoundPick { s, .. } => format!("Tab sound: {}", s.name()),
+            Hit::Tuning(_) => "Tuning (click: next)".into(),
+            Hit::Header(_) => "Right-click: lanes, rename, delete".into(),
+            Hit::Listen(Listen::Original) => "Hear the recording".into(),
+            Hit::Listen(Listen::Tab) => "Hear the tab".into(),
+            Hit::Listen(Listen::Both) => "Hear both".into(),
+            Hit::Split => "Original left, tab right".into(),
+            Hit::Follow => "Follow playback".into(),
+            Hit::AddTrack => "New guitar track".into(),
+            Hit::Help => HELP.into(),
+            Hit::Take(k) => format!("Take {}", k + 1),
+            Hit::Slider(0) => "Onset sensitivity\nLower: more notes caught, and more noise".into(),
+            Hit::Slider(1) => "Note sensitivity\nLower: softer notes kept".into(),
+            Hit::Slider(_) => "Shortest note kept".into(),
+            Hit::Check(0) => "Legato: notes without a new attack".into(),
+            Hit::Check(_) => "Ghosts: notes just under the threshold".into(),
+            Hit::Grid(_) => "Rhythm grid".into(),
+            Hit::KeepGhosts => "Keep the ghost notes".into(),
+            Hit::Retranscribe => "Transcribe again".into(),
+            Hit::DeleteItem => "Delete the take and its tab (Del)".into(),
+            Hit::Export => "Export MusicXML".into(),
+            Hit::SynthSlider(1) => "Tone".into(),
+            Hit::SynthSlider(_) => "Sustain".into(),
+            Hit::SynthMono => "One note per string".into(),
+            Hit::Ruler => {
+                "Click: play from here \u{00b7} drag: passage\nMiddle drag: move, up/down: zoom"
+                    .into()
+            }
+            _ => return None,
+        })
     }
 
     fn key(&mut self, k: u32, m: Mods) -> Option<Act> {

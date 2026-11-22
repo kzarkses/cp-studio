@@ -140,17 +140,29 @@ pub fn lane_h(l: Lane) -> f32 {
     }
 }
 
+/// La hauteur d'une couche, le zoom vertical compris (audio et MIDI
+/// seulement : la partition et la tab ont leur hauteur propre).
+pub fn lane_hz(l: Lane, vz: f32) -> f32 {
+    match l {
+        Lane::Audio | Lane::Midi => (lane_h(l) * vz).round(),
+        _ => lane_h(l),
+    }
+}
+
 /// La hauteur que demande l'en-tete d'une piste (a 96 DPI).
-const HEAD_MIN_H: f32 = 168.0;
+const HEAD_MIN_H: f32 = 116.0;
 const TRACK_SEP: f32 = 3.0;
-const ADD_ROW_H: f32 = 40.0;
+/// Les curseurs de l'inspecteur : ou commence la glissiere, et la place
+/// laissee a droite pour la valeur (a 96 DPI).
+pub(crate) const SLIDER_X: f32 = 80.0;
+pub(crate) const SLIDER_R: f32 = 62.0;
 
 /// La hauteur d'une piste (a l'echelle).
-pub fn track_h(tr: &crate::Track, s: f32) -> f32 {
+pub fn track_h(tr: &crate::Track, s: f32, vz: f32) -> f32 {
     let lanes: f32 = Lane::ALL
         .iter()
         .filter(|&&l| tr.head.lanes.on(l))
-        .map(|&l| lane_h(l) + 1.0)
+        .map(|&l| lane_hz(l, vz) + 1.0)
         .sum();
     (lanes.max(HEAD_MIN_H) * s).round()
 }
@@ -158,8 +170,8 @@ pub fn track_h(tr: &crate::Track, s: f32) -> f32 {
 /// Le debut et la largeur des faders d'un en-tete.
 pub fn fader_span(a: &Arr, _t: usize) -> (f32, f32) {
     let s = a.scale;
-    let fx = (12.0 + 42.0 + 7.0) * s;
-    (fx, (a.lay.head_w - fx - 52.0 * s).max(10.0))
+    let fx = (12.0 + 22.0) * s;
+    (fx, (a.lay.head_w - fx - 14.0 * s).max(10.0))
 }
 
 /// La couleur d'une corde (MIDI).
@@ -193,26 +205,26 @@ impl Arr {
     fn layout(&mut self, w: f32, h: f32, scale: f32) {
         let s = |v: f32| (v * scale).round();
         let bar_h = s(36.0);
-        let status_h = s(24.0);
-        let panel_w = if w > s(980.0) { s(262.0) } else { 0.0 };
+        let hs_h = s(12.0);
+        let panel_w = if w > s(980.0) { s(240.0) } else { 0.0 };
         let panel_x = w - panel_w;
         let top = bar_h + 2.0;
-        let bottom = h - status_h - 2.0;
-        let head_w = s(236.0);
+        let bottom = h;
+        let head_w = s(210.0);
         let label_x = head_w + 2.0;
-        let sx = label_x + s(58.0);
+        let sx = label_x + s(40.0);
         let right = if panel_w > 0.0 { panel_x - 2.0 } else { w };
+        let vz = self.vzoom;
         let content_h = self
             .tracks
             .iter()
-            .map(|t| track_h(t, scale) + s(TRACK_SEP))
-            .sum::<f32>()
-            + s(ADD_ROW_H);
+            .map(|t| track_h(t, scale, vz) + s(TRACK_SEP))
+            .sum::<f32>();
         self.lay = Lay {
             w,
             h,
             bar_h,
-            status_h,
+            hs_h,
             panel_w,
             panel_x,
             top,
@@ -245,12 +257,11 @@ impl Arr {
         cv.fill_rect(0.0, 0.0, w, h, th.bg);
         self.draw_bar(cv, text, icons, th, &mut bx);
         cv.fill_rect(0.0, l.bar_h, w, 2.0, th.seam);
-        self.draw_tracks(cv, text, th, &mut bx);
+        self.draw_tracks(cv, text, icons, th, &mut bx);
         if l.panel_w > 0.0 {
             cv.fill_rect(l.panel_x - 2.0, l.top, 2.0, l.bottom - l.top, th.seam);
-            self.draw_panel(cv, text, th, &mut bx);
+            self.draw_panel(cv, text, icons, th, &mut bx);
         }
-        self.draw_status(cv, text, th);
         self.boxes = bx;
     }
 
@@ -290,6 +301,43 @@ impl Arr {
         bw
     }
 
+    /// Un bouton icone, carre. `fill` : plein de la couleur d'accent.
+    fn icon_button(
+        &self,
+        cv: &mut Canvas<'_>,
+        icons: &mut IconCache,
+        th: &Theme,
+        bx: &mut Vec<HBox>,
+        x: f32,
+        y: f32,
+        h: f32,
+        icon: Icon,
+        on: bool,
+        hit: Hit,
+        fill: bool,
+    ) -> f32 {
+        let hov = self.hover == hit;
+        let bg = match (fill, hov) {
+            (true, true) => th.accent.mix(th.text, 0.2),
+            (true, false) => th.accent,
+            (false, true) => th.hover.mix(th.text, 0.06),
+            (false, false) => th.field,
+        };
+        cv.fill_round_rect(x, y, h, h, th.s(3.0), bg);
+        let isz = th.s(15.0) as u16;
+        let c = if fill {
+            th.bg
+        } else if on {
+            th.accent
+        } else {
+            th.text_dim
+        };
+        let o = ((h - isz as f32) * 0.5).round();
+        icons.draw(cv, icon, x + o, y + o, isz, c, false);
+        bx.push((x, y, h, h, hit));
+        h
+    }
+
     fn draw_bar(
         &self,
         cv: &mut Canvas<'_>,
@@ -312,27 +360,21 @@ impl Arr {
             th.accent,
             false,
         );
-        x += isz as f32 + s(6.0);
-        let fb = Font::new(0, s(13.0) as u16, 700);
-        let f = Font::new(0, s(12.0) as u16, 400);
-        x += text.draw(
-            cv,
-            fb,
-            x,
-            (l.bar_h * 0.5 + s(4.5)).round(),
-            "Guitar Tab",
-            th.text,
-        ) + s(16.0);
+        x += isz as f32 + s(16.0);
         let by = ((l.bar_h - s(24.0)) * 0.5).floor();
         let bh = s(24.0);
-        x += text.draw(
+        // L'ecoute : un casque, puis les trois choix.
+        let hsz = s(14.0) as u16;
+        icons.draw(
             cv,
-            f,
+            Icon::Headphones,
             x,
-            (l.bar_h * 0.5 + s(4.0)).round(),
-            "Listen",
-            th.text_dim,
-        ) + s(6.0);
+            ((l.bar_h - hsz as f32) * 0.5).round(),
+            hsz,
+            th.text_faint,
+            false,
+        );
+        x += hsz as f32 + s(7.0);
         for m in [Listen::Original, Listen::Tab, Listen::Both] {
             let label = match m {
                 Listen::Original => "Original",
@@ -364,52 +406,82 @@ impl Arr {
             "L | R",
             self.split && self.listen == Listen::Both,
             Hit::Split,
-        ) + s(14.0);
-        x += self.button(cv, text, th, bx, x, by, bh, "\u{2212}", false, Hit::ZoomOut) + s(1.0);
-        x += self.button(cv, text, th, bx, x, by, bh, "+", false, Hit::ZoomIn) + s(8.0);
-        let _ = self.button(
+        ) + s(10.0);
+        x += self.icon_button(
             cv,
-            text,
+            icons,
             th,
             bx,
             x,
             by,
             bh,
-            "Follow playback",
+            Icon::Locate,
             self.follow,
             Hit::Follow,
+            false,
         );
-        // A droite : la piste neuve, et l'enregistrement en cours.
-        let add = "+ Guitar track";
-        let fa = Font::new(0, s(12.0) as u16, 700);
-        let aw = text.measure(fa, add).ceil() + s(20.0);
-        let ax = l.w - s(10.0) - aw;
-        let hov = self.hover == Hit::AddTrack;
-        cv.fill_round_rect(
-            ax,
+        // A droite : l'aide, la piste neuve, l'enregistrement en cours.
+        let mut rx = l.w - s(10.0) - bh;
+        self.icon_button(
+            cv,
+            icons,
+            th,
+            bx,
+            rx,
             by,
-            aw,
             bh,
-            s(3.0),
-            if hov {
-                th.accent.mix(th.text, 0.2)
-            } else {
-                th.accent
-            },
+            Icon::Help,
+            false,
+            Hit::Help,
+            false,
         );
-        text.draw_in(cv, fa, ax, by, aw, bh, add, th.bg, Align::Center);
-        bx.push((ax, by, aw, bh, Hit::AddTrack));
+        rx -= s(6.0) + bh;
+        self.icon_button(
+            cv,
+            icons,
+            th,
+            bx,
+            rx,
+            by,
+            bh,
+            Icon::Plus,
+            false,
+            Hit::AddTrack,
+            true,
+        );
+        let fa = Font::new(0, s(12.0) as u16, 700);
         if let Some(r) = self.rec.first() {
             let name = self
                 .tracks
                 .get(r.track)
                 .map(|t| t.head.name.clone())
                 .unwrap_or_default();
-            let lab = format!("\u{25cf} REC  {name}");
+            let lab = format!("\u{25cf}  {name}");
             let rw = text.measure(fa, &lab).ceil() + s(20.0);
-            let rx = ax - s(10.0) - rw;
+            rx -= s(10.0) + rw;
             cv.fill_round_rect(rx, by, rw, bh, s(3.0), th.field);
             text.draw_in(cv, fa, rx, by, rw, bh, &lab, th.error, Align::Center);
+        }
+        // Ce qui se passe : une transcription, un message du module.
+        let msg = self.busy.clone().unwrap_or_else(|| self.status.clone());
+        let mx = x + s(16.0);
+        let mw = rx - s(12.0) - mx;
+        if !msg.is_empty() && mw > s(40.0) {
+            text.draw_in(
+                cv,
+                Font::new(0, s(11.0) as u16, 400),
+                mx,
+                0.0,
+                mw,
+                l.bar_h,
+                &msg,
+                if self.busy.is_some() {
+                    th.accent
+                } else {
+                    th.text_dim
+                },
+                Align::Right,
+            );
         }
     }
 
@@ -421,6 +493,7 @@ impl Arr {
         &mut self,
         cv: &mut Canvas<'_>,
         text: &mut TextCache,
+        icons: &mut IconCache,
         th: &Theme,
         bx: &mut Vec<HBox>,
     ) {
@@ -428,28 +501,10 @@ impl Arr {
         let s = |v: f32| th.s(v);
         let ry = l.top;
         let content_r = l.sx + l.sw;
-        // --- la regle (et le coin des en-tetes)
+        // La fin de la zone des pistes : la barre horizontale est dessous.
+        let tb = l.bottom - l.hs_h;
+        // --- la regle (et le coin des en-tetes, vide)
         cv.fill_rect(0.0, ry, l.head_w, l.ruler_h, th.panel);
-        let fh = Font::new(0, s(10.0) as u16, 700);
-        let fs = Font::new(0, s(10.5) as u16, 400);
-        text.draw(cv, fh, s(12.0), ry + s(16.0), "TRACKS", th.text_faint);
-        let n = self.tracks.len();
-        let cnt = match n {
-            0 => "no guitar yet".to_string(),
-            1 => "1 guitar".to_string(),
-            _ => format!("{n} guitars"),
-        };
-        text.draw_in(
-            cv,
-            fs,
-            0.0,
-            ry,
-            l.head_w - s(10.0),
-            l.ruler_h,
-            &cnt,
-            th.text_faint,
-            Align::Right,
-        );
         cv.fill_rect(l.head_w, ry, 2.0, l.bottom - ry, th.seam);
         cv.fill_rect(l.label_x, ry, l.w, l.ruler_h, th.panel);
         let geo = Geo {
@@ -457,7 +512,7 @@ impl Arr {
             scroll: self.scroll,
             ppq: l.ppq,
             s: th.scale,
-            clip: (l.sx, ry, l.sw, l.bottom - ry),
+            clip: (l.sx, ry, l.sw, tb - ry),
         };
         let bq = self.bar_qn();
         let q0 = self.scroll;
@@ -466,6 +521,12 @@ impl Arr {
         let last = (q1 / bq).ceil() as i64;
         let fb = Font::new(0, s(11.0) as u16, 700);
         let ft = Font::new(1, s(9.5) as u16, 400);
+        // Les mesures numerotees : une sur deux, quatre... quand elles serrent.
+        let bar_px = bq as f32 * l.ppq;
+        let step = [1i64, 2, 4, 8, 16, 32]
+            .into_iter()
+            .find(|&k| bar_px * k as f32 >= s(34.0))
+            .unwrap_or(64);
         if cv.push_clip(l.sx, ry, l.sw, l.ruler_h) {
             if let Some((a, b)) = self.range {
                 let (xa, xb) = (geo.x(a), geo.x(b));
@@ -475,8 +536,18 @@ impl Arr {
             for m in first..=last {
                 let q = m as f64 * bq;
                 let x = geo.x(q).round();
-                cv.fill_rect(x, ry + s(3.0), 1.0, l.ruler_h - s(3.0), th.text_faint);
-                text.draw(
+                let major = m % step == 0;
+                cv.fill_rect(
+                    x,
+                    ry + if major { s(3.0) } else { l.ruler_h - s(9.0) },
+                    1.0,
+                    if major { l.ruler_h - s(3.0) } else { s(9.0) },
+                    th.text_faint,
+                );
+                if !major {
+                    continue;
+                }
+                let nw = text.draw(
                     cv,
                     fb,
                     x + s(4.0),
@@ -484,24 +555,29 @@ impl Arr {
                     &(m + 1).to_string(),
                     th.text,
                 );
-                let t = q * 60.0 / self.bpm.max(1.0);
-                text.draw(
-                    cv,
-                    ft,
-                    x + s(24.0),
-                    ry + s(14.0),
-                    &format!("{}:{:04.1}", (t / 60.0) as i64, t % 60.0),
-                    th.text_faint,
-                );
-                for b in 1..self.sig.0.max(1) {
-                    let bxx = geo.x(q + b as f64 * 4.0 / self.sig.1.max(1) as f64).round();
-                    cv.fill_rect(
-                        bxx,
-                        ry + l.ruler_h - s(7.0),
-                        1.0,
-                        s(7.0),
-                        th.text_faint.fade(0.6),
+                // Le temps, quand il y a la place.
+                if bar_px * step as f32 > s(96.0) {
+                    let t = q * 60.0 / self.bpm.max(1.0);
+                    text.draw(
+                        cv,
+                        ft,
+                        x + s(10.0) + nw,
+                        ry + s(14.0),
+                        &format!("{}:{:04.1}", (t / 60.0) as i64, t % 60.0),
+                        th.text_faint,
                     );
+                }
+                if step == 1 {
+                    for b in 1..self.sig.0.max(1) {
+                        let bxx = geo.x(q + b as f64 * 4.0 / self.sig.1.max(1) as f64).round();
+                        cv.fill_rect(
+                            bxx,
+                            ry + l.ruler_h - s(7.0),
+                            1.0,
+                            s(7.0),
+                            th.text_faint.fade(0.6),
+                        );
+                    }
                 }
             }
         }
@@ -511,8 +587,9 @@ impl Arr {
 
         // --- les pistes
         let top = ry + l.ruler_h + 1.0;
-        let vis = (0.0, top, l.panel_x, (l.bottom - top).max(0.0));
+        let vis = (0.0, top, l.panel_x, (tb - top).max(0.0));
         let mut y = top - self.vscroll;
+        let vz = self.vzoom;
         if cv.push_clip(
             0.0,
             top,
@@ -524,10 +601,10 @@ impl Arr {
             vis.3,
         ) {
             for t in 0..self.tracks.len() {
-                let h = track_h(&self.tracks[t], th.scale);
-                if y + h >= top && y <= l.bottom {
-                    self.draw_header(cv, text, th, bx, t, y, h, vis);
-                    self.draw_lanes(cv, text, th, bx, t, y, h, geo, vis);
+                let h = track_h(&self.tracks[t], th.scale, vz);
+                if y + h >= top && y <= tb {
+                    self.draw_header(cv, text, icons, th, bx, t, y, h, vis);
+                    self.draw_lanes(cv, text, icons, th, bx, t, y, h, geo, vis);
                 }
                 y += h;
                 cv.fill_rect(
@@ -539,31 +616,6 @@ impl Arr {
                 );
                 y += s(TRACK_SEP);
             }
-            // La ligne d'ajout.
-            let ah = s(ADD_ROW_H);
-            let hov = self.hover == Hit::AddTrack;
-            cv.fill_rect(0.0, y, l.panel_x, ah, if hov { th.hover } else { th.bg });
-            dashed(cv, 0.0, y, content_r, y, s(4.0), s(3.0), 1.0, th.text_faint);
-            let f = Font::new(0, s(12.0) as u16, 400);
-            let fa = Font::new(0, s(13.0) as u16, 700);
-            let w1 = text.draw(cv, fa, s(14.0), y + ah * 0.5 + s(4.5), "+", th.accent);
-            let w2 = text.draw(
-                cv,
-                f,
-                s(22.0) + w1,
-                y + ah * 0.5 + s(4.0),
-                "New guitar track",
-                th.text,
-            );
-            text.draw(
-                cv,
-                f,
-                s(30.0) + w1 + w2,
-                y + ah * 0.5 + s(4.0),
-                "· or right-click a track in REAPER \u{2192} \u{201c}Guitar Tab: make guitar track\u{201d}",
-                th.text_faint,
-            );
-            push(bx, vis, 0.0, y, content_r, ah, Hit::AddTrack);
             // La tete de lecture, a travers toutes les pistes.
             if let Some(p) = self.playhead {
                 let x = geo.x(p).round();
@@ -600,7 +652,7 @@ impl Arr {
             }
         }
         // La barre de defilement vertical.
-        let view = (l.bottom - top).max(1.0);
+        let view = (tb - top).max(1.0);
         if l.content_h > view {
             let sbx = content_r + s(2.0);
             let sbw = s(6.0);
@@ -622,20 +674,62 @@ impl Arr {
             );
             bx.push((sbx - s(2.0), top, sbw + s(4.0), view, Hit::VScroll));
         }
-        if self.tracks.is_empty() {
-            let f = Font::new(0, s(13.0) as u16, 400);
-            let msg = "Add a guitar track to record and transcribe. Each recording gets its MIDI and its tab, on the same track.";
-            text.draw_in(
-                cv,
-                f,
-                l.sx,
-                top + s(70.0),
-                l.sw,
-                s(40.0),
-                msg,
-                th.text_dim,
-                Align::Center,
+        // La barre de defilement horizontal, sous les pistes.
+        let hy = tb;
+        cv.fill_rect(0.0, hy, l.panel_x.min(l.w), l.hs_h, th.bg);
+        if !self.tracks.is_empty() {
+            let (tx, tw) = self.hthumb();
+            let th_h = s(6.0);
+            let ty = hy + ((l.hs_h - th_h) * 0.5).round();
+            cv.fill_round_rect(l.sx, ty, l.sw, th_h, s(3.0), th.field);
+            let hot = self.hover == Hit::HScroll
+                || matches!(self.drag, Some(crate::Drag::HScroll { .. }));
+            cv.fill_round_rect(
+                tx,
+                ty,
+                tw,
+                th_h,
+                s(3.0),
+                if hot { th.text_dim } else { th.text_faint },
             );
+            bx.push((l.sx, hy, l.sw, l.hs_h, Hit::HScroll));
+        }
+        // Rien encore : un seul geste possible, au milieu.
+        if self.tracks.is_empty() {
+            let bs = s(56.0);
+            let cx = l.sx + (l.sw - bs) * 0.5;
+            let cy = top + ((tb - top) - bs) * 0.4;
+            let hov = self.hover == Hit::AddTrack;
+            cv.fill_round_rect(
+                cx,
+                cy,
+                bs,
+                bs,
+                s(8.0),
+                if hov { th.hover } else { th.field },
+            );
+            let gs = s(26.0) as u16;
+            icons.draw(
+                cv,
+                Icon::Guitar,
+                cx + (bs - gs as f32) * 0.5,
+                cy + (bs - gs as f32) * 0.5 - s(2.0),
+                gs,
+                th.text_dim,
+                false,
+            );
+            let ps = s(14.0) as u16;
+            cv.fill_circle(cx + bs - s(12.0), cy + bs - s(12.0), s(9.0), th.accent);
+            icons.draw(
+                cv,
+                Icon::Plus,
+                cx + bs - s(12.0) - ps as f32 * 0.5,
+                cy + bs - s(12.0) - ps as f32 * 0.5,
+                ps,
+                th.bg,
+                false,
+            );
+            bx.push((cx, cy, bs, bs, Hit::AddTrack));
         }
     }
 
@@ -643,6 +737,7 @@ impl Arr {
         &self,
         cv: &mut Canvas<'_>,
         text: &mut TextCache,
+        icons: &mut IconCache,
         th: &Theme,
         bx: &mut Vec<HBox>,
         t: usize,
@@ -667,18 +762,10 @@ impl Arr {
         let x0 = s(12.0);
         let xr = l.head_w - s(10.0);
         // Le nom, l'accordage.
-        let fnum = Font::new(1, s(10.5) as u16, 400);
         let fname = Font::new(0, s(13.0) as u16, 700);
         let fsm = Font::new(0, s(10.5) as u16, 400);
-        let nw = text.draw(
-            cv,
-            fnum,
-            x0,
-            y + s(22.0),
-            &hd.num.to_string(),
-            th.text_faint,
-        );
-        let tun = format!("{} \u{25be}", TUNINGS[hd.tuning.min(TUNINGS.len() - 1)].0);
+        let nw = -s(7.0);
+        let tun = TUNINGS[hd.tuning.min(TUNINGS.len() - 1)].0.to_string();
         let tw = text.measure(fsm, &tun).ceil() + s(10.0);
         let tx = xr - tw;
         let hov_t = self.hover == Hit::Tuning(t);
@@ -816,18 +903,29 @@ impl Arr {
             );
             push(bx, vis, monx, ry, mw, rh, Hit::Monitor(t));
         }
-        // Les deux volumes, et le vumetre de la guitare.
+        // Les deux volumes (une icone pour chacun), et le vumetre de la
+        // guitare. La valeur vient au survol.
         let (fx, fw) = fader_span(self, t);
-        let rows: [(&str, f32, bool, f32); 2] = [
-            ("Guitar", hd.vol_db, false, y + s(62.0)),
-            ("Tab", hd.tab_vol_db, true, y + s(92.0)),
+        let rows: [(Icon, f32, bool, f32); 2] = [
+            (Icon::AudioLines, hd.vol_db, false, y + s(64.0)),
+            (Icon::Music, hd.tab_vol_db, true, y + s(88.0)),
         ];
-        for (lab, db, tab, fy) in rows {
+        for (icon, db, tab, fy) in rows {
             if tab && hd.tab_guid.is_none() {
                 continue;
             }
             let fh = s(18.0);
-            text.draw_in(cv, fsm, x0, fy, s(42.0), fh, lab, th.text_dim, Align::Left);
+            let hot = self.hover == Hit::Fader { t, tab };
+            let isz = s(13.0) as u16;
+            icons.draw(
+                cv,
+                icon,
+                x0,
+                (fy + (fh - isz as f32) * 0.5).round(),
+                isz,
+                if hot { th.text_dim } else { th.text_faint },
+                false,
+            );
             let cy = fy + fh * 0.5;
             cv.fill_round_rect(fx, cy - s(2.0), fw, s(4.0), s(2.0), th.seam);
             let p = Arr::fader_pos(db);
@@ -840,7 +938,9 @@ impl Arr {
                 s(2.0),
                 th.accent.mix(th.text_dim, 0.45),
             );
-            let hot = self.hover == Hit::Fader { t, tab };
+            // Le zero : un trait.
+            let zx = (fx + Arr::fader_pos(0.0) * fw).round();
+            cv.fill_rect(zx, cy - s(5.0), 1.0, s(10.0), th.text_faint.fade(0.7));
             cv.fill_round_rect(
                 kx - s(4.5),
                 cy - s(7.0),
@@ -853,22 +953,6 @@ impl Arr {
                     th.text_dim.mix(th.text, 0.6)
                 },
             );
-            let v = if db <= -60.0 {
-                "-inf".to_string()
-            } else {
-                format!("{db:+.1}")
-            };
-            text.draw_in(
-                cv,
-                Font::new(1, s(10.0) as u16, 400),
-                fx + fw + s(4.0),
-                fy,
-                xr - fx - fw - s(4.0),
-                fh,
-                &v,
-                th.text,
-                Align::Right,
-            );
             push(
                 bx,
                 vis,
@@ -880,7 +964,7 @@ impl Arr {
             );
             if !tab {
                 // Le vumetre, sous le fader de la guitare.
-                let my = fy + fh + s(2.0);
+                let my = fy + fh + s(1.0);
                 cv.fill_rect(fx, my, fw, s(3.0), th.seam);
                 let m = hd.meter.clamp(0.0, 1.0);
                 if m > 0.0 {
@@ -895,104 +979,13 @@ impl Arr {
                 }
             }
         }
-        // Le son de la tab.
-        let sy = y + s(118.0);
-        let sh = s(20.0);
-        text.draw_in(
-            cv,
-            fsm,
-            x0,
-            sy,
-            s(42.0),
-            sh,
-            "Sound",
-            th.text_dim,
-            Align::Left,
-        );
-        match &hd.synth {
-            Some(sy0) => {
-                let mut xx = fx;
-                let segw = (xr - fx) / 4.0;
-                for snd in Sound::ALL {
-                    let on = sy0.sound == snd;
-                    let hit = Hit::SoundPick { t, s: snd };
-                    let bgc = if on {
-                        th.bg
-                    } else if self.hover == hit {
-                        th.hover
-                    } else {
-                        th.field
-                    };
-                    cv.fill_rect(xx, sy, segw - 1.0, sh, bgc);
-                    text.draw_in(
-                        cv,
-                        Font::new(0, s(10.5) as u16, if on { 700 } else { 400 }),
-                        xx,
-                        sy,
-                        segw - 1.0,
-                        sh,
-                        snd.name(),
-                        if on { th.accent } else { th.text_dim },
-                        Align::Center,
-                    );
-                    push(bx, vis, xx, sy, segw, sh, hit);
-                    xx += segw;
-                }
-            }
-            None => {
-                let msg = if hd.tab_guid.is_some() {
-                    "your instrument"
-                } else {
-                    "no tab track yet"
-                };
-                text.draw_in(
-                    cv,
-                    fsm,
-                    fx,
-                    sy,
-                    xr - fx,
-                    sh,
-                    msg,
-                    th.text_faint,
-                    Align::Left,
-                );
-            }
-        }
-        // Les couches.
-        let ly = y + s(146.0);
-        let mut lx = x0;
-        let fl = Font::new(0, s(10.0) as u16, 400);
-        for lane in Lane::ALL {
-            let on = hd.lanes.on(lane);
-            let lab = lane.name();
-            let lw = text.measure(fl, lab).ceil() + s(10.0);
-            let hit = Hit::LaneToggle { t, lane };
-            let c = if on { th.accent } else { th.text_faint };
-            if self.hover == hit {
-                cv.fill_round_rect(lx, ly - s(1.0), lw, s(16.0), s(3.0), th.hover);
-            }
-            cv.stroke_rect(
-                lx,
-                ly - s(1.0),
-                lw,
-                s(16.0),
-                1.0,
-                if on {
-                    th.accent.with_alpha(90)
-                } else {
-                    th.seam
-                },
-            );
-            text.draw_in(cv, fl, lx, ly - s(1.0), lw, s(16.0), lab, c, Align::Center);
-            push(bx, vis, lx, ly - s(1.0), lw, s(16.0), hit);
-            lx += lw + s(4.0);
-        }
     }
 
     fn draw_lanes(
         &mut self,
         cv: &mut Canvas<'_>,
         text: &mut TextCache,
+        icons: &mut IconCache,
         th: &Theme,
         bx: &mut Vec<HBox>,
         t: usize,
@@ -1008,8 +1001,7 @@ impl Arr {
         let nstr = crate::tuning_of(self.tracks[t].head.tuning).strings.len();
         let paper = th.bg;
         let staff_c = th.text_dim.fade(0.75);
-        let fs = Font::new(0, s(9.5) as u16, 700);
-        let fm = Font::new(0, s(9.5) as u16, 400);
+        let vz = self.vzoom;
         let sel = self.sel;
         let hover = self.hover;
         let bq = self.bar_qn();
@@ -1024,7 +1016,7 @@ impl Arr {
             if !lanes.on(lane) {
                 continue;
             }
-            let lh = s(lane_h(lane));
+            let lh = s(lane_hz(lane, vz));
             lane_ys.push((lane, y, lh));
             y += lh + 1.0;
         }
@@ -1046,27 +1038,22 @@ impl Arr {
                     th.panel.mix(th.bg, 0.5),
                 );
             }
-            text.draw(
-                cv,
-                fs,
-                l.label_x + s(8.0),
-                ly + s(13.0),
-                &lane.name().to_uppercase(),
-                th.text_dim,
-            );
-            let sub = match lane {
-                Lane::Audio => self.tracks[t].head.input.clone(),
-                Lane::Midi => format!("{nstr} ch"),
-                _ => String::new(),
+            // L'audio et le MIDI : une icone, pas de mot.
+            let icon = match lane {
+                Lane::Audio => Some(Icon::AudioLines),
+                Lane::Midi => Some(Icon::Music),
+                _ => None,
             };
-            if !sub.is_empty() {
-                text.draw(
+            if let Some(ic) = icon {
+                let isz = s(13.0) as u16;
+                icons.draw(
                     cv,
-                    fm,
-                    l.label_x + s(8.0),
-                    ly + s(26.0),
-                    &sub,
+                    ic,
+                    (l.label_x + (l.sx - l.label_x - isz as f32) * 0.5).round(),
+                    (ly + (lh - isz as f32) * 0.5).round(),
+                    isz,
                     th.text_faint,
+                    false,
                 );
             }
             push(bx, content_clip, l.sx, ly, l.sw, lh, Hit::Lane { t, lane });
@@ -1077,9 +1064,9 @@ impl Arr {
                     let sy = ly + s(38.0);
                     for k in 0..5 {
                         cv.fill_rect(
-                            l.label_x + s(22.0),
+                            l.label_x + s(4.0),
                             sy + k as f32 * gap,
-                            right - l.label_x - s(22.0),
+                            right - l.label_x - s(4.0),
                             1.0,
                             staff_c,
                         );
@@ -1088,7 +1075,7 @@ impl Arr {
                     text.draw(
                         cv,
                         fc,
-                        l.label_x + s(24.0),
+                        l.label_x + s(6.0),
                         sy + 4.0 * gap + s(8.0),
                         &CLEF.to_string(),
                         th.text,
@@ -1096,7 +1083,7 @@ impl Arr {
                     text.draw(
                         cv,
                         Font::new(0, s(8.0) as u16, 700),
-                        l.label_x + s(33.0),
+                        l.label_x + s(15.0),
                         sy + 4.0 * gap + s(19.0),
                         "8",
                         th.text,
@@ -1128,10 +1115,10 @@ impl Arr {
                         };
                         text.draw_in(
                             cv,
-                            fm,
-                            l.sx - s(32.0),
+                            Font::new(0, s(9.5) as u16, 400),
+                            l.label_x + s(4.0),
                             yy - s(6.0),
-                            s(22.0),
+                            l.sx - l.label_x - s(14.0),
                             s(12.0),
                             &nm,
                             th.text_faint,
@@ -1277,7 +1264,7 @@ impl Arr {
                         Font::new(0, s(10.5) as u16, 600),
                         xa + s(6.0),
                         ly + s(14.0),
-                        "\u{25cf} Recording",
+                        "\u{25cf}",
                         th.text,
                     );
                     let mid = ly + s(17.0) + (lh - s(23.0)) * 0.5;
@@ -1304,14 +1291,6 @@ impl Arr {
                                     xb - xa,
                                     lh2 - s(8.0),
                                     th.text_faint,
-                                );
-                                text.draw(
-                                    cv,
-                                    Font::new(0, s(11.0) as u16, 400),
-                                    xa + s(10.0),
-                                    ly2 + lh2 * 0.5 + s(4.0),
-                                    "The tab appears when you stop",
-                                    th.text_dim,
                                 );
                             }
                             break;
@@ -1346,15 +1325,15 @@ impl Arr {
         let pad = s(12.0);
         let f = Font::new(0, s(12.0) as u16, 400);
         let fv = Font::new(1, s(11.0) as u16, 400);
-        let tx0 = x0 + s(120.0);
-        let tw = (l.w - tx0 - s(64.0)).max(10.0);
+        let tx0 = x0 + s(SLIDER_X);
+        let tw = (l.w - tx0 - s(SLIDER_R)).max(10.0);
         let rh = s(22.0);
         text.draw_in(
             cv,
             f,
             x0 + pad,
             y,
-            s(110.0),
+            s(SLIDER_X - 16.0),
             rh,
             label,
             th.text,
@@ -1400,29 +1379,40 @@ impl Arr {
         rh + s(2.0)
     }
 
-    fn check(
+    /// Une case a cocher et son mot, dans `x .. x + w`.
+    fn check_at(
         &self,
         cv: &mut Canvas<'_>,
         text: &mut TextCache,
         th: &Theme,
         bx: &mut Vec<HBox>,
+        x: f32,
         y: f32,
+        w: f32,
         label: &str,
         on: bool,
         hit: Hit,
-    ) -> f32 {
-        let l = self.lay;
+    ) {
         let s = |v: f32| th.s(v);
-        let pad = s(12.0);
-        let bxx = l.panel_x + pad;
         let bs = s(13.0);
         let by = y + s(4.0);
-        cv.fill_round_rect(bxx, by, bs, bs, s(2.0), th.field);
+        cv.fill_round_rect(
+            x,
+            by,
+            bs,
+            bs,
+            s(2.0),
+            if self.hover == hit {
+                th.hover
+            } else {
+                th.field
+            },
+        );
         if on {
             text.draw_in(
                 cv,
                 Font::new(0, s(11.0) as u16, 700),
-                bxx,
+                x,
                 by,
                 bs,
                 bs,
@@ -1434,16 +1424,15 @@ impl Arr {
         text.draw_in(
             cv,
             Font::new(0, s(12.0) as u16, 400),
-            bxx + bs + s(7.0),
+            x + bs + s(7.0),
             y,
-            l.panel_w - pad * 2.0 - bs,
+            (w - bs - s(7.0)).max(0.0),
             s(21.0),
             label,
             th.text,
             Align::Left,
         );
-        bx.push((bxx, y, l.panel_w - pad * 2.0, s(21.0), hit));
-        s(22.0)
+        bx.push((x, y, w, s(21.0), hit));
     }
 
     fn pbutton(
@@ -1488,21 +1477,42 @@ impl Arr {
         w
     }
 
-    fn section(&self, cv: &mut Canvas<'_>, text: &mut TextCache, th: &Theme, y: f32, t: &str) {
-        text.draw(
-            cv,
-            Font::new(0, th.s(9.5) as u16, 700),
-            self.lay.panel_x + th.s(12.0),
-            y + th.s(8.0),
-            t,
-            th.text_faint,
-        );
+    /// Un trait de separation dans l'inspecteur ; `tag` : un mot a droite.
+    fn rule(
+        &self,
+        cv: &mut Canvas<'_>,
+        text: &mut TextCache,
+        th: &Theme,
+        y: f32,
+        tag: Option<&str>,
+    ) {
+        let l = self.lay;
+        let pad = th.s(12.0);
+        cv.fill_rect(l.panel_x + pad, y, l.panel_w - 2.0 * pad, 1.0, th.seam);
+        if let Some(t) = tag {
+            let f = Font::new(0, th.s(10.0) as u16, 700);
+            let tw = text.measure(f, t).ceil() + th.s(10.0);
+            let tx = l.w - pad - tw;
+            cv.fill_round_rect(tx, y - th.s(7.0), tw, th.s(14.0), th.s(3.0), th.panel);
+            text.draw_in(
+                cv,
+                f,
+                tx,
+                y - th.s(7.0),
+                tw,
+                th.s(14.0),
+                t,
+                th.accent,
+                Align::Center,
+            );
+        }
     }
 
     fn draw_panel(
         &mut self,
         cv: &mut Canvas<'_>,
         text: &mut TextCache,
+        icons: &mut IconCache,
         th: &Theme,
         bx: &mut Vec<HBox>,
     ) {
@@ -1516,149 +1526,111 @@ impl Arr {
             cv.pop_clip();
             return;
         }
-        let fh = Font::new(0, s(10.5) as u16, 700);
-        let fs = Font::new(0, s(10.5) as u16, 400);
+        let fh = Font::new(0, s(12.5) as u16, 700);
         let f = Font::new(0, s(12.0) as u16, 400);
-        let mut y = l.top + s(12.0);
-        let sel_item = self.sel_item();
-        if let Some((t, i)) = sel_item {
-            let (name, qa, qb, takes, active, has_synth) = {
+        let mut y = l.top + s(10.0);
+        if let Some((t, i)) = self.sel_item() {
+            let (name, takes, active) = {
                 let it = &self.tracks[t].items[i];
-                (
-                    it.name.clone(),
-                    it.qn0,
-                    it.qn1,
-                    it.takes.clone(),
-                    it.active,
-                    self.tracks[t].head.synth.is_some(),
-                )
+                (it.name.clone(), it.takes.clone(), it.active)
             };
-            let _ = has_synth;
-            text.draw(cv, fh, x0 + pad, y + s(9.0), "ITEM", th.text_dim);
+            // Le nom, et les gestes de l'item en icones.
+            let bs = s(24.0);
+            let mut ix = x0 + w - pad - bs;
+            for (icon, hit) in [
+                (Icon::Trash, Hit::DeleteItem),
+                (Icon::Download, Hit::Export),
+                (Icon::Refresh, Hit::Retranscribe),
+            ] {
+                self.icon_button(cv, icons, th, bx, ix, y, bs, icon, false, hit, false);
+                ix -= bs + s(4.0);
+            }
             text.draw_in(
                 cv,
-                fs,
-                x0 + pad + s(40.0),
+                fh,
+                x0 + pad,
                 y,
-                w - pad * 2.0 - s(40.0),
-                s(12.0),
+                (ix - x0 - pad).max(0.0),
+                bs,
                 &name,
-                th.text_faint,
+                th.text,
                 Align::Left,
             );
-            y += s(16.0);
-            let bq = self.bar_qn();
-            let (ba, bb) = (
-                (qa / bq).floor() as i64 + 1,
-                ((qb - 1e-6) / bq).floor() as i64 + 1,
-            );
-            text.draw(
-                cv,
-                fs,
-                x0 + pad,
-                y + s(9.0),
-                &format!("Bars {ba}\u{2013}{bb}"),
-                th.text_faint,
-            );
-            y += s(20.0);
-            // Les prises.
-            self.section(cv, text, th, y, "TAKES");
-            y += s(16.0);
-            for (k, tk) in takes.iter().enumerate() {
-                let rh = s(21.0);
-                let on = k == active;
-                let hit = Hit::Take(k);
-                cv.fill_round_rect(
-                    x0 + pad,
-                    y,
-                    w - pad * 2.0,
-                    rh - s(2.0),
-                    s(3.0),
-                    if self.hover == hit {
-                        th.hover
+            y += bs + s(10.0);
+            // Les prises, quand il y en a plusieurs.
+            if takes.len() > 1 {
+                for (k, tk) in takes.iter().enumerate() {
+                    let rh = s(21.0);
+                    let on = k == active;
+                    let hit = Hit::Take(k);
+                    cv.fill_round_rect(
+                        x0 + pad,
+                        y,
+                        w - pad * 2.0,
+                        rh - s(2.0),
+                        s(3.0),
+                        if self.hover == hit {
+                            th.hover
+                        } else {
+                            th.field
+                        },
+                    );
+                    if on {
+                        cv.fill_rect(x0 + pad, y, s(2.0), rh - s(2.0), th.accent);
+                    }
+                    let lab = if tk.name.is_empty() {
+                        format!("{}", k + 1)
                     } else {
-                        th.field
-                    },
-                );
-                if on {
-                    cv.fill_rect(x0 + pad, y, s(2.0), rh - s(2.0), th.accent);
+                        format!("{}  {}", k + 1, tk.name)
+                    };
+                    text.draw_in(
+                        cv,
+                        f,
+                        x0 + pad + s(8.0),
+                        y,
+                        w - pad * 2.0 - s(28.0),
+                        rh - s(2.0),
+                        &lab,
+                        if on { th.text } else { th.text_dim },
+                        Align::Left,
+                    );
+                    // Transcrite : un point plein.
+                    let cx = x0 + w - pad - s(10.0);
+                    let cy = y + (rh - s(2.0)) * 0.5;
+                    if tk.done {
+                        cv.fill_circle(cx, cy, s(3.0), th.accent.fade(0.8));
+                    } else {
+                        cv.fill_circle(cx, cy, s(3.0), th.text_faint.fade(0.5));
+                    }
+                    bx.push((x0 + pad, y, w - pad * 2.0, rh - s(2.0), hit));
+                    y += rh;
                 }
-                let lab = if tk.name.is_empty() {
-                    format!("Take {}", k + 1)
-                } else {
-                    format!("{} · {}", k + 1, tk.name)
-                };
-                text.draw_in(
-                    cv,
-                    f,
-                    x0 + pad + s(8.0),
-                    y,
-                    w - pad * 2.0 - s(80.0),
-                    rh - s(2.0),
-                    &lab,
-                    if on { th.text } else { th.text_dim },
-                    Align::Left,
-                );
-                text.draw_in(
-                    cv,
-                    fs,
-                    x0 + pad,
-                    y,
-                    w - pad * 2.0 - s(8.0),
-                    rh - s(2.0),
-                    if tk.done { "transcribed" } else { "\u{2014}" },
-                    th.text_faint,
-                    Align::Right,
-                );
-                bx.push((x0 + pad, y, w - pad * 2.0, rh - s(2.0), hit));
-                y += rh;
+                y += s(6.0);
             }
-            y += s(8.0);
-            // La detection de cet item.
+            // La detection de cet item (ou du passage choisi).
             let det = self.tracks[t].items[i].detect.clone();
-            self.section(cv, text, th, y, "DETECTION \u{00b7} THIS ITEM");
-            if self.range.is_some() {
-                text.draw_in(
-                    cv,
-                    fs,
-                    x0,
-                    y,
-                    w - pad,
-                    s(14.0),
-                    "applies to the passage",
-                    th.accent,
-                    Align::Right,
-                );
-            }
-            y += s(18.0);
+            y += s(6.0);
+            self.rule(cv, text, th, y, self.range.is_some().then_some("Passage"));
+            y += s(10.0);
             y += self.slider(
                 cv,
                 text,
                 th,
                 bx,
                 y,
-                "Onset sensitivity",
+                "Onsets",
                 (det.onset - 0.05) / 0.9,
                 &format!("{:.2}", det.onset),
                 Hit::Slider(0),
                 Some((0.5 - 0.05) / 0.9),
             );
-            text.draw(
-                cv,
-                fs,
-                x0 + pad,
-                y + s(9.0),
-                "Lower = more notes caught, and more noise.",
-                th.text_faint,
-            );
-            y += s(16.0);
             y += self.slider(
                 cv,
                 text,
                 th,
                 bx,
                 y,
-                "Note sensitivity",
+                "Notes",
                 (det.frame - 0.05) / 0.9,
                 &format!("{:.2}", det.frame),
                 Hit::Slider(1),
@@ -1670,33 +1642,40 @@ impl Arr {
                 th,
                 bx,
                 y,
-                "Shortest note",
+                "Shortest",
                 ((det.min_ms - 20.0) / 380.0) as f32,
                 &format!("{:.0} ms", det.min_ms),
                 Hit::Slider(2),
                 None,
             );
-            y += self.check(
+            y += s(2.0);
+            // Legato et fantomes cote a cote.
+            let half = (w - 2.0 * pad) * 0.5;
+            self.check_at(
                 cv,
                 text,
                 th,
                 bx,
+                x0 + pad,
                 y,
-                "Legato notes (no attack)",
+                half,
+                "Legato",
                 det.legato,
                 Hit::Check(0),
             );
-            y += self.check(
+            self.check_at(
                 cv,
                 text,
                 th,
                 bx,
+                x0 + pad + half,
                 y,
-                "Show ghosts (just under the threshold)",
+                half,
+                "Ghosts",
                 det.ghosts,
                 Hit::Check(1),
             );
-            y += s(4.0);
+            y += s(26.0);
             text.draw_in(
                 cv,
                 f,
@@ -1734,153 +1713,66 @@ impl Arr {
                 bx.push((gx, y, gw, s(24.0), Hit::Grid(g)));
             }
             y += s(32.0);
-            // Les comptes.
-            let (nn, chords, gh, dropped) = {
-                let it = &mut self.tracks[t].items[i];
-                let c = it.engraved().chords;
-                (it.doc.len(), c, it.ghosts.len(), it.dropped)
+            // Ce qui reste a trancher : les fantomes, les notes injouables.
+            let (gh, dropped) = {
+                let it = &self.tracks[t].items[i];
+                (it.ghosts.len(), it.dropped)
             };
-            let stats = [
-                ("Notes", nn.to_string()),
-                ("Chords", chords.to_string()),
-                (
-                    "Ghosts",
-                    if det.ghosts {
-                        gh.to_string()
-                    } else {
-                        "off".into()
-                    },
-                ),
-                ("Unplayable", dropped.to_string()),
-            ];
-            let bh = s(46.0);
-            cv.fill_round_rect(x0 + pad, y, w - 2.0 * pad, bh, s(4.0), th.field);
-            let cw = (w - 2.0 * pad) * 0.5;
-            let fv = Font::new(1, s(11.0) as u16, 400);
-            for (k, (key, v)) in stats.iter().enumerate() {
-                let cx = x0 + pad + (k % 2) as f32 * cw + s(8.0);
-                let cy = y + s(4.0) + (k / 2) as f32 * s(19.0);
-                text.draw_in(
-                    cv,
-                    fs,
-                    cx,
-                    cy,
-                    cw - s(16.0),
-                    s(18.0),
-                    key,
-                    th.text_dim,
-                    Align::Left,
-                );
-                text.draw_in(
-                    cv,
-                    fv,
-                    cx,
-                    cy,
-                    cw - s(16.0),
-                    s(18.0),
-                    v,
-                    th.text,
-                    Align::Right,
-                );
+            if det.ghosts && gh > 0 {
+                let lab = format!("Keep {gh} ghost{}", if gh == 1 { "" } else { "s" });
+                self.pbutton(cv, text, th, bx, x0 + pad, y, &lab, Hit::KeepGhosts, false);
+                y += s(30.0);
             }
-            y += bh + s(10.0);
-            let keep = if self.range.is_some() {
-                "Keep ghosts in passage"
-            } else {
-                "Keep all ghosts"
-            };
-            let kw = self.pbutton(cv, text, th, bx, x0 + pad, y, keep, Hit::KeepGhosts, false);
-            if x0 + pad + kw + s(6.0) + s(110.0) < l.w {
-                self.pbutton(
+            if dropped > 0 {
+                text.draw(
                     cv,
-                    text,
-                    th,
-                    bx,
-                    x0 + pad + kw + s(6.0),
-                    y,
-                    "Transcribe again",
-                    Hit::Retranscribe,
-                    false,
+                    Font::new(0, s(11.0) as u16, 400),
+                    x0 + pad,
+                    y + s(10.0),
+                    &format!("\u{26a0} {dropped} unplayable"),
+                    th.error,
                 );
+                y += s(20.0);
             }
-            y += s(30.0);
-            let dw = self.pbutton(
-                cv,
-                text,
-                th,
-                bx,
-                x0 + pad,
-                y,
-                "Delete item",
-                Hit::DeleteItem,
-                true,
-            );
-            self.pbutton(
-                cv,
-                text,
-                th,
-                bx,
-                x0 + pad + dw + s(6.0),
-                y,
-                "Export MusicXML",
-                Hit::Export,
-                false,
-            );
-            y += s(30.0);
-            text.draw(
-                cv,
-                fs,
-                x0 + pad,
-                y + s(9.0),
-                "Delete removes the take and its tab together.",
-                th.text_faint,
-            );
-            y += s(14.0);
-            text.draw(
-                cv,
-                fs,
-                x0 + pad,
-                y + s(9.0),
-                "Double-click the MIDI to open the MIDI editor.",
-                th.text_faint,
-            );
-            y += s(24.0);
-        } else {
-            text.draw(cv, fh, x0 + pad, y + s(9.0), "GUITAR TAB", th.text_dim);
-            y += s(24.0);
-            for line in [
-                "Click an item to see its takes",
-                "and its detection settings.",
-                "",
-                "Arm a track and record: the take",
-                "is transcribed when you stop.",
-                "",
-                "Double-click the MIDI to open",
-                "the MIDI editor.",
-            ] {
-                text.draw(cv, f, x0 + pad, y + s(10.0), line, th.text_dim);
-                y += s(17.0);
-            }
-            y += s(10.0);
+            y += s(6.0);
         }
-        // Le son de la piste.
+        // Le son de la tab de la piste choisie.
         if let Some(t) = self.sel_track() {
             if let Some(sy) = self.tracks[t].head.synth {
-                cv.fill_rect(x0 + pad, y, w - 2.0 * pad, 1.0, th.seam);
-                y += s(10.0);
-                self.section(cv, text, th, y, "TRACK SOUND");
-                text.draw_in(
-                    cv,
-                    fs,
-                    x0,
-                    y,
-                    w - pad,
-                    s(14.0),
-                    &self.tracks[t].head.name,
-                    th.text_faint,
-                    Align::Right,
-                );
-                y += s(18.0);
+                if y > l.top + s(12.0) {
+                    self.rule(cv, text, th, y, None);
+                    y += s(10.0);
+                }
+                // Les quatre sons.
+                let sh = s(22.0);
+                let segw = (w - 2.0 * pad) / 4.0;
+                let mut xx = x0 + pad;
+                for snd in Sound::ALL {
+                    let on = sy.sound == snd;
+                    let hit = Hit::SoundPick { t, s: snd };
+                    let bgc = if on {
+                        th.bg
+                    } else if self.hover == hit {
+                        th.hover
+                    } else {
+                        th.field
+                    };
+                    cv.fill_rect(xx, y, segw - 1.0, sh, bgc);
+                    text.draw_in(
+                        cv,
+                        Font::new(0, s(11.0) as u16, if on { 700 } else { 400 }),
+                        xx,
+                        y,
+                        segw - 1.0,
+                        sh,
+                        snd.name(),
+                        if on { th.accent } else { th.text_dim },
+                        Align::Center,
+                    );
+                    bx.push((xx, y, segw, sh, hit));
+                    xx += segw;
+                }
+                y += sh + s(8.0);
                 y += self.slider(
                     cv,
                     text,
@@ -1905,93 +1797,22 @@ impl Arr {
                     Hit::SynthSlider(2),
                     None,
                 );
-                self.check(
+                y += s(2.0);
+                self.check_at(
                     cv,
                     text,
                     th,
                     bx,
+                    x0 + pad,
                     y,
-                    "One note per string",
+                    w - 2.0 * pad,
+                    "Per string",
                     sy.mono,
                     Hit::SynthMono,
                 );
             }
         }
         cv.pop_clip();
-    }
-
-    fn draw_status(&self, cv: &mut Canvas<'_>, text: &mut TextCache, th: &Theme) {
-        let l = self.lay;
-        let y = l.h - l.status_h;
-        cv.fill_rect(0.0, y - 2.0, l.w, 2.0, th.seam);
-        cv.fill_rect(0.0, y, l.w, l.status_h, th.bar);
-        let f = Font::new(0, th.s(11.0) as u16, 400);
-        let fm = Font::new(1, th.s(10.5) as u16, 400);
-        let left = if !self.rec.is_empty() {
-            "\u{25cf} Recording \u{00b7} the tab appears when you stop".to_string()
-        } else {
-            self.sel_text().unwrap_or_else(|| self.status.clone())
-        };
-        let lw = text.measure(f, &left).min(l.w * 0.45);
-        text.draw_in(
-            cv,
-            f,
-            th.s(10.0),
-            y,
-            lw,
-            l.status_h,
-            &left,
-            if self.rec.is_empty() {
-                th.text
-            } else {
-                th.error
-            },
-            Align::Left,
-        );
-        let keys = "R arm \u{00b7} Ctrl+R record \u{00b7} Del item \u{00b7} 0\u{2013}9 fret \u{00b7} \u{2191}\u{2193} string \u{00b7} H P";
-        let kx = th.s(24.0) + lw;
-        let right = match &self.busy {
-            Some(b) => b.clone(),
-            None => {
-                let items: usize = self.tracks.iter().map(|t| t.items.len()).sum();
-                format!(
-                    "{} track{} \u{00b7} {} item{}",
-                    self.tracks.len(),
-                    if self.tracks.len() == 1 { "" } else { "s" },
-                    items,
-                    if items == 1 { "" } else { "s" }
-                )
-            }
-        };
-        let rw = text.measure(f, &right).ceil();
-        if l.w - rw - th.s(30.0) - kx > th.s(80.0) {
-            text.draw_in(
-                cv,
-                fm,
-                kx,
-                y,
-                l.w - rw - th.s(30.0) - kx,
-                l.status_h,
-                keys,
-                th.text_faint,
-                Align::Left,
-            );
-        }
-        text.draw_in(
-            cv,
-            f,
-            l.w - th.s(10.0) - rw,
-            y,
-            rw,
-            l.status_h,
-            &right,
-            if self.busy.is_some() {
-                th.accent
-            } else {
-                th.text_dim
-            },
-            Align::Left,
-        );
     }
 }
 
@@ -2037,11 +1858,7 @@ fn draw_audio_item(
     let f = Font::new(0, s(10.5) as u16, 500);
     let mut name = it.name.clone();
     if it.takes.len() > 1 {
-        name = format!(
-            "{name} \u{00b7} take {} of {}",
-            it.active + 1,
-            it.takes.len()
-        );
+        name = format!("{name}  {}/{}", it.active + 1, it.takes.len());
     }
     if cv.push_clip(xa + 1.0, ly, (xb - xa - 2.0).max(0.0), lh) {
         text.draw(
@@ -2078,9 +1895,9 @@ fn draw_audio_item(
         if let Some(st) = &it.state {
             let msg = match st {
                 State::Ready => String::new(),
-                State::Waiting => "Waiting to be transcribed\u{2026}".into(),
-                State::Busy(p) => format!("Transcribing\u{2026} {p} %"),
-                State::Failed(e) => format!("Not transcribed: {e}"),
+                State::Waiting => "\u{2026}".into(),
+                State::Busy(p) => format!("{p} %"),
+                State::Failed(e) => format!("\u{26a0} {e}"),
             };
             if !msg.is_empty() {
                 let fm = Font::new(0, s(11.0) as u16, 400);
@@ -2160,9 +1977,9 @@ fn draw_pending(
 ) {
     let s = th.scale;
     let msg = match &it.state {
-        Some(State::Busy(p)) => format!("Transcribing\u{2026} {p} %"),
-        Some(State::Failed(e)) => format!("Not transcribed: {e}"),
-        _ => "Waiting to be transcribed\u{2026}".into(),
+        Some(State::Busy(p)) => format!("{p} %"),
+        Some(State::Failed(e)) => format!("\u{26a0} {e}"),
+        _ => "\u{2026}".into(),
     };
     dashed_rect(
         cv,

@@ -49,8 +49,8 @@ use cp_tab::model::{HOP, SR};
 use cp_tab::score::{ScoreSpec, TabNote, write_musicxml};
 use cp_tab::{Analysis, NoteParams, Posteriors, Progress, analyze, make_notes};
 use cp_tabview::{
-    Act as GAct, Arr, Detect, Head, Item, Lanes, Listen, Rec, Sel, Sound, State, Synth, TakeInfo,
-    Track,
+    Act as GAct, Arr, Detect, Head, Item, Lane, Lanes, Listen, Rec, Sel, Sound, State, Synth,
+    TakeInfo, Track,
 };
 use cp_ui::{Button, Ev, Theme};
 
@@ -97,6 +97,10 @@ pub(crate) struct GWin {
     tracking: bool,
     frames_on: bool,
     closing: bool,
+    /// L'infobulle, la cible survolee et depuis quand, le texte montre.
+    tip: Option<ui::Tooltip>,
+    hover: (cp_tabview::Hit, Instant),
+    tip_text: String,
 }
 
 /// Ce qu'il reste a faire a un item reconstruit.
@@ -1716,7 +1720,21 @@ impl App {
         let Some(h) = self.gt.arr.tracks.get(t).map(|x| x.head.clone()) else {
             return;
         };
+        // Les couches de la piste, cochees quand elles sont montrees.
+        let lane = |id: u32, l: Lane| {
+            Some(MenuItem {
+                id,
+                text: l.name(),
+                checked: h.lanes.on(l),
+                enabled: true,
+            })
+        };
         let items = [
+            lane(10, Lane::Audio),
+            lane(11, Lane::Midi),
+            lane(12, Lane::Score),
+            lane(13, Lane::Tab),
+            None,
             Some(MenuItem {
                 id: 1,
                 text: "Rename\u{2026}",
@@ -1739,6 +1757,11 @@ impl App {
         ];
         let bus = r.track_ext(&h.guid, "CPGT_bus");
         match self.gtab_menu(x, y, &items) {
+            k @ 10..=13 => {
+                if let Some(a) = self.gt.arr.toggle_lane(t, Lane::ALL[(k - 10) as usize]) {
+                    self.gtab_act(a);
+                }
+            }
             1 => {
                 if let Some(n) = r.user_inputs("Rename guitar track", 1, "Name", &h.name) {
                     let n = n.trim().to_string();
@@ -1936,12 +1959,66 @@ impl App {
         if !shown {
             return;
         }
+        self.gtab_tip();
         if playing || self.gt.job.is_some() {
             self.gtab_want_frames(true);
         } else if self.gt.arr.take_dirty() {
             self.gt.arr.mark();
             self.gtab_render(false);
         }
+    }
+
+    /// L'infobulle : apres 0,6 s immobile sur une cible, sous elle. Pendant
+    /// qu'on tire un fader : sa valeur, tout de suite.
+    fn gtab_tip(&mut self) {
+        let h = self.gt.arr.hovered();
+        let dragging = self.gt.arr.dragging();
+        let live = dragging && matches!(h, cp_tabview::Hit::Fader { .. });
+        let Some(w) = self.gt.win.as_mut() else {
+            return;
+        };
+        if h != w.hover.0 {
+            w.hover = (h, Instant::now());
+            if let Some(t) = &mut w.tip {
+                t.hide();
+            }
+            if !live {
+                return;
+            }
+        }
+        let shown = w.tip.as_ref().is_some_and(|t| t.is_shown());
+        if !live {
+            if dragging && shown {
+                if let Some(t) = &mut w.tip {
+                    t.hide();
+                }
+            }
+            if shown || dragging || w.hover.1.elapsed().as_secs_f64() < 0.6 {
+                return;
+            }
+        }
+        let (Some(text), Some((x, y, bw, bh))) = (self.gt.arr.label(h), self.gt.arr.rect_of(h))
+        else {
+            return;
+        };
+        // Pendant le geste : seulement si le texte change.
+        if live && shown && w.tip_text == text {
+            return;
+        }
+        if w.tip.is_none() {
+            w.tip = ui::Tooltip::new(w.hwnd);
+        }
+        // L'aide est au bord droit : sa bulle s'ouvre vers la gauche.
+        let tx = if h == cp_tabview::Hit::Help {
+            (x + bw - 420.0 * w.theme.scale).max(0.0)
+        } else {
+            x
+        };
+        let (sx, sy) = ui::client_to_screen(w.hwnd, tx as i32, (y + bh) as i32 + 6);
+        if let Some(t) = &mut w.tip {
+            t.show(&text.replace('\n', "\r\n"), sx, sy);
+        }
+        w.tip_text = text;
     }
 
     /// Choisir dans REAPER un item d'une guitare (son audio ou son MIDI) le
@@ -2038,6 +2115,9 @@ impl App {
             tracking: false,
             frames_on: false,
             closing: false,
+            tip: None,
+            hover: (cp_tabview::Hit::None, Instant::now()),
+            tip_text: String::new(),
         });
         self.gtab_sync();
         self.gt.arr.mark();
@@ -2288,6 +2368,30 @@ impl App {
                     y,
                     b: if left { Button::Left } else { Button::Right },
                     dbl: matches!(m.msg, msg::LBUTTONDBLCLK | msg::RBUTTONDBLCLK),
+                    mods: md,
+                });
+                Some(0)
+            }
+            msg::MBUTTONDOWN | msg::MBUTTONDBLCLK => {
+                ui::set_focus(hwnd);
+                ui::capture(hwnd);
+                self.gtab_feed(Ev::Down {
+                    x,
+                    y,
+                    b: Button::Middle,
+                    dbl: false,
+                    mods: md,
+                });
+                Some(0)
+            }
+            msg::MBUTTONUP => {
+                if ui::has_capture(hwnd) {
+                    ui::release_capture();
+                }
+                self.gtab_feed(Ev::Up {
+                    x,
+                    y,
+                    b: Button::Middle,
                     mods: md,
                 });
                 Some(0)

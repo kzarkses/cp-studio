@@ -304,13 +304,8 @@ fn l_arrangeur_se_dessine() {
     b.shot(&mut v, "1_pistes");
     // Les deux pistes ont leurs cibles : en-tetes, couches, notes.
     assert!(v.rect_of(Hit::Arm(1)).is_some());
-    assert!(
-        v.rect_of(Hit::LaneToggle {
-            t: 0,
-            lane: Lane::Midi
-        })
-        .is_some()
-    );
+    assert!(v.rect_of(Hit::HScroll).is_some());
+    assert!(v.rect_of(Hit::Help).is_some());
     assert!(find(&v, |h| matches!(h, Hit::Note { t: 0, i: 0, .. })).is_some());
     assert!(find(&v, |h| matches!(h, Hit::Note { t: 1, i: 0, .. })).is_some());
     // Les mesures d'un item sont pleines.
@@ -385,19 +380,106 @@ fn fantomes_midi_et_couches() {
     })
     .expect("le MIDI");
     assert_eq!(dbl(&mut v, mx, my), Some(Act::OpenMidi { t: 0, i: 0 }));
-    // Cacher la couche MIDI : la piste raccourcit.
-    let h0 = draw::track_h(&v.tracks[0], 1.0);
-    let (lx, ly) = center(
-        v.rect_of(Hit::LaneToggle {
-            t: 0,
-            lane: Lane::Midi,
-        })
-        .unwrap(),
-    );
-    assert_eq!(click(&mut v, lx, ly), Some(Act::Lanes { t: 0 }));
-    assert!(draw::track_h(&v.tracks[0], 1.0) < h0);
+    // Cacher la couche MIDI (le menu de la piste) : la piste raccourcit.
+    let h0 = draw::track_h(&v.tracks[0], 1.0, v.vzoom);
+    assert_eq!(v.toggle_lane(0, Lane::Midi), Some(Act::Lanes { t: 0 }));
+    assert!(draw::track_h(&v.tracks[0], 1.0, v.vzoom) < h0);
     assert_eq!(v.tracks[0].head.lanes.to_text(), "1011");
     b.shot(&mut v, "4_sans_midi");
+}
+
+/// Les gestes de REAPER chez Cedric, et la barre horizontale.
+#[test]
+fn naviguer_comme_dans_reaper() {
+    let mut b = Bench::new(1600, 760);
+    let mut v = arranger();
+    v.scroll = 8.0;
+    b.draw(&mut v);
+    let l = v.lay;
+    let (mx, my) = (l.sx + l.sw * 0.5, l.top + l.ruler_h + 60.0);
+    let wheel = |v: &mut Arr, dx: f32, dy: f32, m: Mods| {
+        v.event(&Ev::Wheel {
+            x: mx,
+            y: my,
+            dx,
+            dy,
+            mods: m,
+        })
+    };
+    let shift = Mods {
+        shift: true,
+        ..Mods::default()
+    };
+    let alt = Mods {
+        alt: true,
+        ..Mods::default()
+    };
+    let ctrl = Mods {
+        ctrl: true,
+        ..Mods::default()
+    };
+    // Maj + molette : zoom, la noire sous la souris ne bouge pas.
+    let q = v.qn_of(mx);
+    let z0 = v.zoom;
+    wheel(&mut v, 0.0, 1.0, shift);
+    assert!(v.zoom > z0);
+    assert!((v.qn_of(mx) - q).abs() < 1e-3);
+    // Alt + molette : dans le temps ; la molette seule : verticalement.
+    let s0 = v.scroll;
+    wheel(&mut v, 0.0, -1.0, alt);
+    assert!(v.scroll > s0);
+    let s1 = v.scroll;
+    wheel(&mut v, 0.0, -1.0, Mods::default());
+    assert_eq!(v.scroll, s1);
+    // Ctrl + molette : la hauteur des couches audio et MIDI.
+    let h0 = draw::track_h(&v.tracks[0], 1.0, v.vzoom);
+    wheel(&mut v, 0.0, 2.0, ctrl);
+    assert!(draw::track_h(&v.tracks[0], 1.0, v.vzoom) > h0);
+    b.draw(&mut v);
+    // Le bouton du milieu sur la regle : la vue suit la main.
+    let ry = v.lay.top + v.lay.ruler_h * 0.5;
+    let q = v.qn_of(mx);
+    v.event(&Ev::Down {
+        x: mx,
+        y: ry,
+        b: Button::Middle,
+        dbl: false,
+        mods: Mods::default(),
+    });
+    v.event(&Ev::Move {
+        x: mx - 120.0,
+        y: ry + 2.0,
+        mods: Mods::default(),
+    });
+    assert!(
+        (v.qn_of(mx - 120.0) - q).abs() < 1e-3,
+        "la noire saisie suit"
+    );
+    // ... et vers le haut, elle zoome autour d'elle.
+    let z1 = v.zoom;
+    v.event(&Ev::Move {
+        x: mx - 120.0,
+        y: ry - 60.0,
+        mods: Mods::default(),
+    });
+    assert!(v.zoom > z1);
+    assert!((v.qn_of(mx - 120.0) - q).abs() < 1e-3);
+    v.event(&Ev::Up {
+        x: mx - 120.0,
+        y: ry - 60.0,
+        b: Button::Middle,
+        mods: Mods::default(),
+    });
+    // La barre horizontale : un clic au bout ramene la fin.
+    b.draw(&mut v);
+    let r = v.rect_of(Hit::HScroll).unwrap();
+    let s2 = v.scroll;
+    click(&mut v, r.0 + r.2 - 2.0, r.1 + r.3 * 0.5);
+    assert!(v.scroll > s2);
+    // Les infobulles : les mots sont la, pas a l'ecran.
+    assert!(v.label(Hit::Help).unwrap().contains("Middle drag"));
+    assert!(v.label(Hit::Slider(0)).unwrap().contains("Lower"));
+    b.shot(&mut v, "5_navigation");
 }
 
 #[test]
