@@ -141,6 +141,17 @@ fn arc(cv: &mut Canvas<'_>, x0: f32, y0: f32, x1: f32, y1: f32, bulge: f32, w: f
     cv.stroke_path(&p, w, c);
 }
 
+/// Une pointe de fleche pleine, sa pointe en (x, y), vers le haut ou le bas.
+fn arrow_head(cv: &mut Canvas<'_>, x: f32, y: f32, h: f32, up: bool, c: Color) {
+    let d = if up { h } else { -h };
+    let mut p = Path::new();
+    p.move_to(x, y)
+        .line_to(x - h * 0.6, y + d)
+        .line_to(x + h * 0.6, y + d)
+        .close();
+    cv.fill_path(&p, c);
+}
+
 /// Une cible, rognee a la zone visible (rien si elle en sort).
 fn push(bx: &mut Vec<HBox>, clip: (f32, f32, f32, f32), x: f32, y: f32, w: f32, h: f32, hit: Hit) {
     let x0 = x.max(clip.0);
@@ -2518,6 +2529,19 @@ fn draw_score(
             if hollow {
                 head_at(cv, x + dx, y, rx * 0.62, ry * 0.42, paper);
             }
+            // La glisse d'approche : un trait qui monte (ou descend) vers la
+            // tete, avant son diese.
+            let k = it.doc[n].slide_in();
+            if k != 0 && sg.first && !sg.tie_in {
+                let sw = if sharp {
+                    text.measure(fsharp, &SHARP.to_string()) + s(2.0)
+                } else {
+                    0.0
+                };
+                let x1 = x + dx - rx - s(3.0) - sw;
+                let d = if k < 0 { gap } else { -gap };
+                cv.line(x1 - s(10.0), y + d, x1, y, s(1.1), th.text_dim);
+            }
             if sharp && !sg.tie_in {
                 let sw = text.measure(fsharp, &SHARP.to_string());
                 text.draw(
@@ -2597,8 +2621,26 @@ fn draw_score(
         if sg.first && ev.lig_in != Tech::Plain {
             if let Some(prev_sign) = eng.signs[..si].iter().rev().find(|t| t.ev + 1 == sg.ev) {
                 let px = hx(prev_sign.start);
-                let y = y_of(hi) - gap * 1.2;
-                arc(cv, px, y, x, y, -gap * 0.7, 1.1, th.text_dim);
+                let prev_n = eng.events[prev_sign.ev].notes.first().copied();
+                match (ev.lig_in, prev_n, ev.notes.first()) {
+                    // Une glisse : un trait d'une tete a l'autre.
+                    (Tech::Slide, Some(pn), Some(&cn)) => {
+                        let ya = y_of(staff_pos(it.doc[pn].pitch).0);
+                        let yb = y_of(staff_pos(it.doc[cn].pitch).0);
+                        cv.line(
+                            px + rx + s(2.0),
+                            ya,
+                            x - rx - s(2.0),
+                            yb,
+                            s(1.1),
+                            th.text_dim,
+                        );
+                    }
+                    _ => {
+                        let y = y_of(hi) - gap * 1.2;
+                        arc(cv, px, y, x, y, -gap * 0.7, 1.1, th.text_dim);
+                    }
+                }
             }
         }
     }
@@ -2751,24 +2793,88 @@ fn draw_tab(
                 s(14.0),
                 Hit::Note { t, i, n },
             );
+            let mark = th.text_dim;
+            // La glisse d'approche : « /7 » (d'en dessous) ou « \7 ».
+            let k = note.slide_in();
+            if k != 0 {
+                let x1 = x - tw * 0.5 - s(1.5);
+                let d = if k < 0 { s(4.0) } else { -s(4.0) };
+                cv.line(x1 - s(8.0), y + d, x1, y - d * 0.4, 1.0, mark);
+            }
+            // Le bend : une fleche qui monte au-dessus de la tablature, sa
+            // valeur (« ½ », « full »), et le relachement qui redescend.
+            if let Some(bm) = note.bend_mark() {
+                let x0 = x + tw * 0.5 + s(1.0);
+                let top = tab_y - s(9.0);
+                let xp = (geo.x(note.qn0 + bm.peak) + pad).max(x0 + s(9.0));
+                let mut p = Path::new();
+                p.move_to(x0, y).quad_to(xp, y, xp, top + s(3.5));
+                cv.stroke_path(&p, 1.0, mark);
+                arrow_head(cv, xp, top, s(3.5), true, mark);
+                text.draw_in(
+                    cv,
+                    fl,
+                    xp - s(14.0),
+                    top - s(11.0),
+                    s(28.0),
+                    s(10.0),
+                    &crate::bend_label(bm.amount),
+                    mark,
+                    Align::Center,
+                );
+                if let Some(rq) = bm.release {
+                    let xr = (geo.x(note.qn0 + rq) + pad).max(xp + s(9.0));
+                    let mut p = Path::new();
+                    p.move_to(xp + s(1.0), top + s(1.0))
+                        .quad_to(xr, top + s(1.0), xr, y - s(9.0));
+                    cv.stroke_path(&p, 1.0, mark);
+                    arrow_head(cv, xr, y - s(5.5), s(3.5), false, mark);
+                }
+            }
         }
         if ev.lig_in != Tech::Plain && ev.notes.len() == 1 {
             if let Some(prev_sign) = eng.signs[..si].iter().rev().find(|t| t.ev + 1 == sg.ev) {
                 let px = hx(prev_sign.start);
-                let y = line_y(it.doc[ev.notes[0]].string) - s(8.0);
-                arc(cv, px, y, x, y, -s(4.0), 1.1, th.text_dim);
-                let lab = if ev.lig_in == Tech::Hammer { "H" } else { "P" };
-                text.draw_in(
-                    cv,
-                    fl,
-                    (px + x) * 0.5 - s(6.0),
-                    y - s(15.0),
-                    s(12.0),
-                    s(10.0),
-                    lab,
-                    th.text_dim,
-                    Align::Center,
-                );
+                let cur = &it.doc[ev.notes[0]];
+                let prev_n = eng.events[prev_sign.ev].notes.first().copied();
+                match (ev.lig_in, prev_n) {
+                    // Une glisse : un trait d'une case a l'autre, sur la corde.
+                    (Tech::Slide, Some(pn)) => {
+                        let pv = &it.doc[pn];
+                        let pw = text.measure(fd, &pv.fret.to_string()).ceil() + s(4.0);
+                        let cw = text.measure(fd, &cur.fret.to_string()).ceil() + s(4.0);
+                        let y = line_y(cur.string);
+                        let d = if cur.pitch > pv.pitch {
+                            s(3.0)
+                        } else {
+                            -s(3.0)
+                        };
+                        cv.line(
+                            px + pw * 0.5 + s(1.5),
+                            y + d,
+                            x - cw * 0.5 - s(1.5),
+                            y - d,
+                            1.0,
+                            th.text_dim,
+                        );
+                    }
+                    _ => {
+                        let y = line_y(cur.string) - s(8.0);
+                        arc(cv, px, y, x, y, -s(4.0), 1.1, th.text_dim);
+                        let lab = if ev.lig_in == Tech::Hammer { "H" } else { "P" };
+                        text.draw_in(
+                            cv,
+                            fl,
+                            (px + x) * 0.5 - s(6.0),
+                            y - s(15.0),
+                            s(12.0),
+                            s(10.0),
+                            lab,
+                            th.text_dim,
+                            Align::Center,
+                        );
+                    }
+                }
             }
         }
     }

@@ -1520,3 +1520,52 @@ fn solo_et_ses_modificateurs() {
         assert_eq!(a, Some(Act::Solo { t: 0, how }));
     }
 }
+
+/// Les bends et les glisses se dessinent : la fleche du bend et sa valeur,
+/// le relachement, le trait d'une glisse, celui d'une approche.
+#[test]
+fn bends_et_glisses_se_dessinent() {
+    use cp_tab::doc::{TNote, Tech};
+    let mut b = Bench::new(1600, 900);
+    let mut v = arranger();
+    v.rec.clear();
+    let q0 = v.tracks[0].items[0].qn0;
+    let note = |q: f64, len: f64, fret: i32| TNote {
+        qn0: q0 + q,
+        qn1: q0 + q + len,
+        pitch: 55 + fret,
+        string: 3,
+        fret,
+        vel: 96,
+        ..Default::default()
+    };
+    let mut d = vec![
+        // Une approche d'en dessous.
+        TNote {
+            bend: vec![(0.0, -2.0), (0.1, 0.0)],
+            ..note(0.0, 1.0, 7)
+        },
+        // Un bend d'un ton, relache.
+        TNote {
+            bend: vec![(0.0, 0.0), (0.3, 2.0), (1.2, 2.0), (1.6, 0.0)],
+            ..note(1.0, 2.0, 7)
+        },
+        note(3.0, 1.0, 5),
+        // Une glisse de 5 a 7.
+        TNote {
+            tech: Tech::Slide,
+            ..note(4.0, 1.0, 7)
+        },
+    ];
+    cp_tab::doc::sort(&mut d);
+    v.tracks[0].items[0].set_doc(d);
+    v.tracks[0].items[0].ghosts.clear();
+    b.shot(&mut v, "11_bends");
+    assert_eq!(
+        crate::play_text(&v.tracks[0].items[0].doc[1]),
+        " \u{00b7} bend full and release"
+    );
+    assert_eq!(crate::bend_label(1.0), "\u{00bd}");
+    assert_eq!(crate::bend_label(3.0), "1\u{00bd}");
+    assert_eq!(crate::bend_label(0.5), "\u{00bc}");
+}
