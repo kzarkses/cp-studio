@@ -463,7 +463,7 @@ fn capture_watch(ch0: i32, ch1: i32) {
     log(
         if ok == 0 { LOG_WARN } else { LOG_INFO },
         &format!(
-            "accordeur : entree {}{} ; la carte a {card} entrees, le crochet en annonce {inn}              (sorties {outn}, GetBuffer {}) ; {ok} blocs lus, {none} sans entree ; crete {db}",
+            "accordeur : entree {}{} ; la carte a {card} entrees, le crochet en annonce {inn} (sorties {outn}, GetBuffer {}) ; {ok} blocs lus, {none} sans entree ; crete {db}",
             ch0 + 1,
             if ch1 >= 0 {
                 format!("/{}", ch1 + 1)
