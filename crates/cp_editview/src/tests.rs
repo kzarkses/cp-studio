@@ -99,6 +99,7 @@ fn riff() -> Ed {
             item: "{ITEM}".into(),
             qn0: 16.0,
             qn1: 32.0,
+            ..Midi::default()
         },
         true,
     );
@@ -819,4 +820,72 @@ fn chaque_survol_se_redessine_tout_de_suite() {
         bad.len(),
         bad.join("\n")
     );
+}
+
+/// Le Mi (64, corde 1) du riff porte un bend d'un ton (Guitar Tab : canal
+/// de la corde, etendue 12) : il se dessine au-dessus de la note, et la suit
+/// quand on la glisse.
+#[test]
+fn le_bend_se_dessine_et_suit_la_note() {
+    use cp_roll::expr::{Ev as Xe, Expr};
+    let mut b = Bench::new(1280, 760);
+    let mut v = riff();
+    b.draw(&mut v);
+    let (id, x, y) = note_xy(&v, 64, 25.0);
+    let rh = v.lay.rh;
+    let ppq = v.lay.ppq;
+    // Ou la courbe passe : aux quatre cinquiemes de la note, deux rangs
+    // au-dessus de son milieu (quelques pixels autour).
+    let probe = |v: &Ed, b: &Bench| -> Vec<u32> {
+        let n = *v.midi().unwrap().roll.get(id).unwrap();
+        let (nx, ny, nw, nh) = v.note_rect(&n).unwrap();
+        let px = (nx + nw * 0.8) as i32;
+        let py = (ny + nh * 0.5 - 2.0 * rh).round() as i32;
+        (-2..=2).map(|d| b.s.get(px, py + d)).collect()
+    };
+    let flat = probe(&v, &b);
+    let mut evs = vec![
+        Xe::cc(16.0, 0, 101, 0),
+        Xe::cc(16.0, 0, 100, 0),
+        Xe::cc(16.0, 0, 6, 12),
+        Xe::pitch_bend(25.0 - 1.0 / 960.0, 0, 0.0),
+    ];
+    for k in 1..=8 {
+        let t = k as f32 / 8.0;
+        evs.push(Xe::pitch_bend(25.0 + 0.4 * t as f64, 0, 2.0 / 12.0 * t));
+    }
+    evs.push(Xe::pitch_bend(26.5, 0, 0.0));
+    {
+        let m = v.midi_mut().unwrap();
+        m.expr = Expr::new(&m.roll.notes, &evs);
+    }
+    v.mark();
+    b.shot(&mut v, "8_bend");
+    assert_ne!(probe(&v, &b), flat, "le bend se voit au-dessus de la note");
+    // Glisser la note d'une noire : la courbe suit, et l'ecriture aussi.
+    down(&mut v, x, y, Button::Left, m0());
+    mv(&mut v, x + ppq * 1.02, y, m0());
+    let a = up(&mut v, x + ppq * 1.02, y, Button::Left, m0());
+    assert!(a.contains(&Act::Commit("CP Editor: move notes")), "{a:?}");
+    b.draw(&mut v);
+    let moved = probe(&v, &b);
+    // Sans la courbe, au meme endroit : le fond.
+    let bare = {
+        let m = v.midi_mut().unwrap();
+        let keep = std::mem::take(&mut m.expr);
+        v.mark();
+        b.draw(&mut v);
+        let p = probe(&v, &b);
+        v.midi_mut().unwrap().expr = keep;
+        p
+    };
+    assert_ne!(moved, bare, "la courbe a suivi la note");
+    let m = v.midi().unwrap();
+    let out = m.expr.carry(&m.roll.notes);
+    let top = out
+        .iter()
+        .filter(|e| e.bend().is_some_and(|x| x > 0.15))
+        .map(|e| e.qn)
+        .fold(f64::MIN, f64::max);
+    assert!((top - 26.4).abs() < 1e-9, "{top}");
 }

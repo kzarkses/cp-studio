@@ -12,6 +12,12 @@
 //!
 //! Les operations agissent sur la selection, ou sur toutes les notes quand
 //! rien n'est choisi (sauf celles qui disent le contraire).
+//!
+//! L'expression d'une note (ses pitch bends, sa pedale legato) la suit :
+//! chaque note sait de quelle note lue elle vient (`src`) et ou le debut de
+//! celle-ci se trouve maintenant (`anchor`) ; voir [`expr`].
+
+pub mod expr;
 
 /// Les gammes : un nom et ses intervalles depuis la tonique.
 pub const SCALES: [(&str, &[i32]); 13] = [
@@ -108,11 +114,25 @@ pub struct Note {
     pub vel: i32,
     pub sel: bool,
     pub mute: bool,
+    /// La note lue dont celle-ci porte l'expression (elle-meme ; une copie,
+    /// un morceau coupe : la note d'origine).
+    pub src: u64,
+    /// Ou le debut de la note `src` se trouve maintenant : un deplacement
+    /// l'emmene, un rognage du debut le laisse (la courbe reste au temps ou
+    /// elle sonne).
+    pub anchor: f64,
 }
 
 impl Note {
     pub fn end(&self) -> f64 {
         self.qn0 + self.len
+    }
+
+    /// Le debut a `q`, l'expression emmenee avec lui (un deplacement, pas
+    /// un rognage).
+    pub fn place(&mut self, q: f64) {
+        self.anchor += q - self.qn0;
+        self.qn0 = q;
     }
 }
 
@@ -166,6 +186,8 @@ impl Roll {
                 vel: vel.clamp(1, 127),
                 sel,
                 mute,
+                src: id,
+                anchor: qn0,
             });
         }
         r.sort();
@@ -375,15 +397,18 @@ impl Roll {
     /// Une note neuve (non choisie) ; rend son identite.
     pub fn insert(&mut self, qn0: f64, len: f64, pitch: i32, chan: i32, vel: i32) -> u64 {
         let id = self.mint();
+        let qn0 = qn0.max(0.0);
         self.notes.push(Note {
             id,
-            qn0: qn0.max(0.0),
+            qn0,
             len: len.max(MIN_LEN),
             pitch: pitch.clamp(0, 127),
             chan: chan.clamp(0, 15),
             vel: vel.clamp(1, 127),
             sel: false,
             mute: false,
+            src: id,
+            anchor: qn0,
         });
         self.sort();
         id
@@ -410,7 +435,7 @@ impl Roll {
     pub fn move_sel(&mut self, dq: f64, dp: i32) {
         let scale = self.scale;
         for n in self.notes.iter_mut().filter(|n| n.sel) {
-            n.qn0 = (n.qn0 + dq).max(0.0);
+            n.place((n.qn0 + dq).max(0.0));
             let p = (n.pitch + dp).clamp(0, 127);
             n.pitch = match scale {
                 Some(s) if dp != 0 => s.snap(p).clamp(0, 127),
@@ -424,7 +449,7 @@ impl Roll {
     /// scale/key »).
     pub fn move_sel_free(&mut self, dq: f64, dp: i32) {
         for n in self.notes.iter_mut().filter(|n| n.sel) {
-            n.qn0 = (n.qn0 + dq).max(0.0);
+            n.place((n.qn0 + dq).max(0.0));
             n.pitch = (n.pitch + dp).clamp(0, 127);
         }
         self.sort();
@@ -513,7 +538,7 @@ impl Roll {
             } else {
                 (n.pitch - pivot) as f64 / span
             };
-            n.qn0 = (n.qn0 + dq * t).max(0.0);
+            n.place((n.qn0 + dq * t).max(0.0));
         }
         self.sort();
     }
@@ -548,7 +573,7 @@ impl Roll {
     pub fn stretch_sel(&mut self, anchor: f64, k: f64) {
         let k = k.max(0.01);
         for n in self.notes.iter_mut().filter(|n| n.sel) {
-            n.qn0 = (anchor + (n.qn0 - anchor) * k).max(0.0);
+            n.place((anchor + (n.qn0 - anchor) * k).max(0.0));
             n.len = (n.len * k).max(MIN_LEN);
         }
         self.sort();
@@ -588,7 +613,8 @@ impl Roll {
     pub fn nudge(&mut self, dq: f64) -> usize {
         let t = self.targets();
         for &i in &t {
-            self.notes[i].qn0 = (self.notes[i].qn0 + dq).max(0.0);
+            let q = (self.notes[i].qn0 + dq).max(0.0);
+            self.notes[i].place(q);
         }
         self.sort();
         t.len()
@@ -630,7 +656,7 @@ impl Roll {
             }
             let ns = (s + (q - s) * strength.clamp(0.0, 1.0)).max(0.0);
             if (ns - s).abs() > EPS {
-                self.notes[i].qn0 = ns;
+                self.notes[i].place(ns);
                 k += 1;
             }
         }
@@ -666,7 +692,7 @@ impl Roll {
         let t = self.targets();
         for &i in &t {
             let n = &mut self.notes[i];
-            n.qn0 = a + (b - n.end());
+            n.place(a + (b - n.end()));
         }
         self.sort();
         t.len()
@@ -750,7 +776,7 @@ impl Roll {
             let dt = rng.next() * t_amt;
             let dv = (rng.next() * v_amt as f64).round() as i32;
             let n = &mut self.notes[i];
-            n.qn0 = (n.qn0 + dt).max(0.0);
+            n.place((n.qn0 + dt).max(0.0));
             n.vel = (n.vel + dv).clamp(1, 127);
         }
         self.sort();
@@ -792,13 +818,14 @@ impl Roll {
         }
         for s in &src {
             let id = self.mint();
-            self.notes.push(Note {
+            let mut n = Note {
                 id,
-                qn0: (s.qn0 + dq).max(0.0),
                 pitch: (s.pitch + dp).clamp(0, 127),
                 sel: true,
                 ..*s
-            });
+            };
+            n.place((s.qn0 + dq).max(0.0));
+            self.notes.push(n);
         }
         self.sort();
         src.len()
@@ -828,9 +855,9 @@ impl Roll {
         let a = sel.iter().map(|n| n.qn0).fold(f64::INFINITY, f64::min);
         self.clip = sel
             .into_iter()
-            .map(|n| Note {
-                qn0: n.qn0 - a,
-                ..n
+            .map(|mut n| {
+                n.place(n.qn0 - a);
+                n
             })
             .collect();
         self.clip.len()
@@ -856,12 +883,13 @@ impl Roll {
         }
         for c in &clip {
             let id = self.mint();
-            self.notes.push(Note {
+            let mut n = Note {
                 id,
-                qn0: (at + c.qn0).max(0.0),
                 sel: true,
                 ..*c
-            });
+            };
+            n.place((at + c.qn0).max(0.0));
+            self.notes.push(n);
         }
         self.sort();
         clip.len()

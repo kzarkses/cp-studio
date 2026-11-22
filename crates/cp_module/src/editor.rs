@@ -13,11 +13,12 @@ use std::time::Instant;
 use cp_abi::{
     PLACE_ARRANGE, PLACE_HELD, VIEW_DOCK, VIEW_FLOAT, VIEW_PLACED, WM_CP_ACCEL, WM_CP_FRAME,
 };
+use cp_editview::cp_roll::expr::{self, Expr};
 use cp_editview::cp_roll::{NAMES, Roll, SCALES, Scale};
 use cp_editview::keys::{self, Bind, KeyMap};
 use cp_editview::{Act, Audio, Clip, Colors, Ed, GRIDS, Hit, Midi, Rows};
 use cp_sys::audio::Audition;
-use cp_sys::items::{EdNote, ItemInfo};
+use cp_sys::items::{EdEv, EdNote, ItemInfo};
 use cp_sys::module::key_event;
 use cp_sys::transport::play;
 use cp_sys::ui::{self, MenuItem};
@@ -202,6 +203,22 @@ impl App {
                     roll.scale = m.roll.scale;
                 }
             }
+            // Les pitch bends et les pedales legato : ils suivent les notes.
+            let evs: Vec<expr::Ev> = r
+                .ed_events(guid)
+                .unwrap_or_default()
+                .into_iter()
+                .map(|e| expr::Ev {
+                    qn: e.qn,
+                    chan: e.chan,
+                    status: e.status,
+                    d1: e.d1,
+                    d2: e.d2,
+                    sel: e.sel,
+                    mute: e.mute,
+                })
+                .collect();
+            let expr = Expr::new(&roll.notes, &evs);
             self.ed.ed.open_midi(
                 Midi {
                     roll,
@@ -209,6 +226,7 @@ impl App {
                     item: guid.to_string(),
                     qn0,
                     qn1,
+                    expr,
                 },
                 fresh,
             );
@@ -290,7 +308,25 @@ impl App {
                 .collect(),
             None => notes,
         };
-        if r.set_ed_notes(&g, &notes, label) {
+        // Les pitch bends et les pedales legato suivent leurs notes ; sans
+        // eux a la lecture, on ne touche a aucun CC.
+        let evs: Option<Vec<EdEv>> = (!m.expr.is_empty()).then(|| {
+            let d = moved.unwrap_or(0.0);
+            m.expr
+                .carry(&m.roll.notes)
+                .into_iter()
+                .map(|e| EdEv {
+                    qn: e.qn + d,
+                    chan: e.chan,
+                    status: e.status,
+                    d1: e.d1,
+                    d2: e.d2,
+                    sel: e.sel,
+                    mute: e.mute,
+                })
+                .collect()
+        });
+        if r.set_ed_notes(&g, &notes, evs.as_deref(), label) {
             if moved.is_some() {
                 self.ed.pending = Some(g.clone());
             }

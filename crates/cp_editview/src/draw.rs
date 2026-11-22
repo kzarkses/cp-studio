@@ -742,6 +742,27 @@ impl Ed {
                         th.rp.m_note_border
                     },
                 );
+                // Le bend de la note (Guitar Tab : bends et glisses) : sa
+                // hauteur au fil du temps, depuis le milieu de son rang.
+                let curve = m.expr.curve(n);
+                if curve.len() >= 2 {
+                    let yc = y + h * 0.5;
+                    let pt = |(q, st): (f64, f32)| (self.x_of(q), yc - st * l.rh);
+                    let line = if n.sel {
+                        th.rp.m_note_sel
+                    } else {
+                        th.rp.m_note_border
+                    };
+                    // Le bord sous tout le trait, puis le trait : sans
+                    // pointilles aux jointures.
+                    for (wd, col) in [(s(3.0), line), (s(1.5), c)] {
+                        for w2 in curve.windows(2) {
+                            let (xa, ya) = pt(w2[0]);
+                            let (xb, yb) = pt(w2[1]);
+                            cv.line(xa, ya, xb, yb, wd, col);
+                        }
+                    }
+                }
                 // Les poignees au survol : 30 % de chaque cote.
                 if hover_id == Some(n.id) && w >= 5.0 * th.scale {
                     let hw = (w * 0.3).clamp(1.5 * th.scale, 6.0 * th.scale);

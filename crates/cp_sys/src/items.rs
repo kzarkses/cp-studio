@@ -793,10 +793,76 @@ impl Reaper {
         Some(out)
     }
 
-    /// Remplace toutes les notes d'une prise MIDI (les CC restent). Un pas
-    /// d'annulation.
-    pub fn set_ed_notes(&self, guid: &str, notes: &[EdNote], undo: &str) -> bool {
+    /// Tous les evenements de canal d'une prise MIDI (CC, pitch bends...),
+    /// muets et choisis compris.
+    pub fn ed_events(&self, guid: &str) -> Option<Vec<EdEv>> {
         type Count = unsafe extern "C" fn(P, *mut i32, *mut i32, *mut i32) -> i32;
+        type GetCc = unsafe extern "C" fn(
+            P,
+            i32,
+            *mut bool,
+            *mut bool,
+            *mut f64,
+            *mut i32,
+            *mut i32,
+            *mut i32,
+            *mut i32,
+        ) -> bool;
+        type ToQn = unsafe extern "C" fn(P, f64) -> f64;
+        let take = self.midi_take(guid)?;
+        let count: Count = self.f(c"MIDI_CountEvts")?;
+        let get: GetCc = self.f(c"MIDI_GetCC")?;
+        let qn: ToQn = self.f(c"MIDI_GetProjQNFromPPQPos")?;
+        let mut out = Vec::new();
+        // SAFETY: prise MIDI vivante ; sorties a nous.
+        unsafe {
+            let mut n = 0i32;
+            count(take, null_mut(), &mut n, null_mut());
+            for i in 0..n {
+                let (mut s, mut m, mut pos) = (false, false, 0f64);
+                let (mut st, mut ch, mut d1, mut d2) = (0i32, 0i32, 0i32, 0i32);
+                if get(
+                    take, i, &mut s, &mut m, &mut pos, &mut st, &mut ch, &mut d1, &mut d2,
+                ) {
+                    out.push(EdEv {
+                        qn: qn(take, pos),
+                        chan: ch,
+                        status: st,
+                        d1,
+                        d2,
+                        sel: s,
+                        mute: m,
+                    });
+                }
+            }
+        }
+        Some(out)
+    }
+
+    /// Remplace toutes les notes d'une prise MIDI. Avec `evs`, les pitch
+    /// bends et les pedales legato (CC 68) aussi : ils suivent leurs notes ;
+    /// les autres CC restent. Un pas d'annulation.
+    pub fn set_ed_notes(
+        &self,
+        guid: &str,
+        notes: &[EdNote],
+        evs: Option<&[EdEv]>,
+        undo: &str,
+    ) -> bool {
+        type Count = unsafe extern "C" fn(P, *mut i32, *mut i32, *mut i32) -> i32;
+        type GetCc = unsafe extern "C" fn(
+            P,
+            i32,
+            *mut bool,
+            *mut bool,
+            *mut f64,
+            *mut i32,
+            *mut i32,
+            *mut i32,
+            *mut i32,
+        ) -> bool;
+        type DelCc = unsafe extern "C" fn(P, i32) -> bool;
+        type InsCc = unsafe extern "C" fn(P, bool, bool, f64, i32, i32, i32, i32) -> bool;
         type Del = unsafe extern "C" fn(P, i32) -> bool;
         type FromQn = unsafe extern "C" fn(P, f64) -> f64;
         type InsNote =
@@ -846,6 +912,37 @@ impl Reaper {
                     nt.vel.clamp(1, 127),
                     &nosort,
                 );
+            }
+            let cc = (
+                self.f::<GetCc>(c"MIDI_GetCC"),
+                self.f::<DelCc>(c"MIDI_DeleteCC"),
+                self.f::<InsCc>(c"MIDI_InsertCC"),
+            );
+            if let (Some(evs), (Some(get_cc), Some(del_cc), Some(ins_cc))) = (evs, cc) {
+                let mut nc = 0i32;
+                count(take, null_mut(), &mut nc, null_mut());
+                for i in (0..nc).rev() {
+                    let (mut s, mut m, mut pos) = (false, false, 0f64);
+                    let (mut st, mut ch, mut d1, mut d2) = (0i32, 0i32, 0i32, 0i32);
+                    if get_cc(
+                        take, i, &mut s, &mut m, &mut pos, &mut st, &mut ch, &mut d1, &mut d2,
+                    ) && (st == 0xE0 || (st == 0xB0 && d1 == 68))
+                    {
+                        del_cc(take, i);
+                    }
+                }
+                for e in evs {
+                    ins_cc(
+                        take,
+                        e.sel,
+                        e.mute,
+                        ppq(take, e.qn).round().max(0.0),
+                        e.status,
+                        e.chan.clamp(0, 15),
+                        e.d1.clamp(0, 127),
+                        e.d2.clamp(0, 127),
+                    );
+                }
             }
             sort(take);
             if let Some(f) = ue {
@@ -918,6 +1015,19 @@ pub struct EdNote {
     pub pitch: i32,
     pub chan: i32,
     pub vel: i32,
+    pub sel: bool,
+    pub mute: bool,
+}
+
+/// Un evenement de canal d'une prise MIDI (noires du projet) : `status`
+/// 0xB0 (CC `d1`, valeur `d2`), 0xE0 (pitch bend, `d1` poids faible)...
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct EdEv {
+    pub qn: f64,
+    pub chan: i32,
+    pub status: i32,
+    pub d1: i32,
+    pub d2: i32,
     pub sel: bool,
     pub mute: bool,
 }

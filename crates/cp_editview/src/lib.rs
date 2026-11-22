@@ -143,6 +143,9 @@ pub struct Midi {
     /// L'item dans le projet (noires).
     pub qn0: f64,
     pub qn1: f64,
+    /// Les pitch bends et les pedales legato, rattaches aux notes lues : ils
+    /// les suivent (et se dessinent sur elles).
+    pub expr: cp_roll::expr::Expr,
 }
 
 /// Un clip audio ouvert. Les durees sont en noires du projet.
