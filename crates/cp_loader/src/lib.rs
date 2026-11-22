@@ -422,6 +422,10 @@ impl Host for LoaderHost {
             views::set_keyless(Hwnd(hwnd), on);
         }
     }
+
+    fn audio_input(&self, ch0: i32, ch1: i32, out: &mut [f32]) -> usize {
+        cp_audio::capture::read(ch0, ch1, out)
+    }
 }
 
 /// Une touche du crochet clavier, demandee au module. Rend le code du crochet.

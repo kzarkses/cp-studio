@@ -12,6 +12,7 @@
 //! [`AudioHost`] vit sur le fil principal. Il vit dans la petite DLL fixe : une
 //! retouche de l'interface (le module recharge a chaud) ne coupe jamais le son.
 
+pub mod capture;
 pub mod decode;
 pub mod feed;
 pub mod peaks;
@@ -133,6 +134,9 @@ impl Stats {
 static HOOK_CORE: OnceLock<Arc<Core>> = OnceLock::new();
 
 fn on_audio(is_post: bool, frames: i32, srate: f64) {
+    if !is_post {
+        capture::on_block(frames);
+    }
     let Some(core) = HOOK_CORE.get() else { return };
     if is_post {
         core.tick(frames);

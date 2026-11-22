@@ -120,6 +120,27 @@ impl AudioHook {
         unsafe { reg_fn(true, reg) > 0 }
     }
 
+    /// PENDANT LE CROCHET SEULEMENT : l'entree `ch` de la carte son, `frames`
+    /// echantillons (`None` hors des entrees). La tranche ne vaut que pour cet
+    /// appel du crochet.
+    pub fn input(ch: i32, frames: i32) -> Option<&'static [f64]> {
+        let &addr = HOOK_REG.get()?;
+        // SAFETY: la structure enregistree vit toute la vie du processus.
+        let reg = unsafe { &*(addr as *const AudioHookRegister) };
+        if ch < 0 || ch >= reg.input_nch || frames <= 0 {
+            return None;
+        }
+        let gb = reg.get_buffer?;
+        // SAFETY: double* GetBuffer(bool isOutput, int idx), valable pendant
+        // le crochet ; REAPER l'a rempli avant de nous appeler.
+        let p = unsafe { gb(false, ch) };
+        if p.is_null() {
+            return None;
+        }
+        // SAFETY: `frames` doubles du tampon d'entree de ce bloc.
+        Some(unsafe { std::slice::from_raw_parts(p, frames as usize) })
+    }
+
     /// Retire le crochet (a la fermeture de REAPER).
     pub fn unregister(r: &Reaper) {
         let Some(&addr) = HOOK_REG.get() else { return };

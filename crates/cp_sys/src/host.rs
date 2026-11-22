@@ -103,6 +103,11 @@ pub trait Host: Send + Sync {
         (cp_abi::PLACE_MISSING, 0)
     }
     fn set_keyless(&self, _hwnd: isize, _on: bool) {}
+
+    // --- l'entree de la carte son (ABI 7)
+    fn audio_input(&self, _ch0: i32, _ch1: i32, _out: &mut [f32]) -> usize {
+        0
+    }
 }
 
 /// Ou en est un chargement de fichier.
@@ -143,6 +148,7 @@ static API: HostApi = HostApi {
     place_take: p_take,
     place_state: p_state,
     set_keyless: p_keyless,
+    audio_input: i_input,
 };
 
 /// Installe l'implementation (une seule par processus ; un second appel est
@@ -415,4 +421,18 @@ extern "C" fn p_state(place: u32, hwnd: *mut isize) -> i32 {
 
 extern "C" fn p_keyless(hwnd: isize, on: i32) {
     with((), |h| h.set_keyless(hwnd, on != 0));
+}
+
+// ---------------------------------------------------------------------------
+// L'entree de la carte son
+// ---------------------------------------------------------------------------
+
+extern "C" fn i_input(ch0: i32, ch1: i32, out: *mut f32, n: usize) -> usize {
+    let buf: &mut [f32] = if out.is_null() || n == 0 {
+        &mut []
+    } else {
+        // SAFETY: `n` floats du module, a nous pendant l'appel.
+        unsafe { std::slice::from_raw_parts_mut(out, n) }
+    };
+    with(0, |h| h.audio_input(ch0, ch1, buf))
 }

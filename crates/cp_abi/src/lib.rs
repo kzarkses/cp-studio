@@ -13,7 +13,7 @@ use core::ffi::{c_char, c_void};
 
 /// Version du contrat. Un entier : jamais de mineure (le piege du double de
 /// l'ancien moteur, ou `1.10` valait `1.1`).
-pub const ABI: u32 = 6;
+pub const ABI: u32 = 7;
 
 /// Le symbole exporte par le module.
 pub const ENTRY_SYMBOL: &[u8] = b"cp_module_entry\0";
@@ -157,6 +157,11 @@ pub struct HostApi {
     /// Une fenetre qui ne prend pas le clavier : un clic n'y pose ni focus ni
     /// revendication, et REAPER garde ses raccourcis (un transport). ABI 6.
     pub set_keyless: extern "C" fn(hwnd: isize, on: i32),
+    /// L'entree de la carte son (l'accordeur) : capture l'entree `ch0` (et
+    /// `ch1` >= 0 : la moyenne des deux), et rend ses `n` derniers
+    /// echantillons dans `out` (au taux de `audio.srate`). `ch0` < 0 arrete la
+    /// capture. Rend combien d'echantillons sont ecrits. ABI 7.
+    pub audio_input: extern "C" fn(ch0: i32, ch1: i32, out: *mut f32, n: usize) -> usize,
 }
 
 /// Etats d'un chargement de fichier.

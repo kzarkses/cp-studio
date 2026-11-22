@@ -223,6 +223,14 @@ impl HostRef {
     pub fn set_keyless(&self, h: Hwnd, on: bool) {
         (self.0.set_keyless)(h.0, on as i32)
     }
+
+    // --- l'entree de la carte son (ABI 7)
+
+    /// Capture l'entree `ch0` (et `ch1` : la moyenne des deux), et rend ses
+    /// derniers echantillons dans `out`. `ch0` < 0 arrete la capture.
+    pub fn audio_input(&self, ch0: i32, ch1: i32, out: &mut [f32]) -> usize {
+        (self.0.audio_input)(ch0, ch1, out.as_mut_ptr(), out.len())
+    }
 }
 
 type Ctor = fn(HostRef, &[u8]) -> Box<dyn Module>;
