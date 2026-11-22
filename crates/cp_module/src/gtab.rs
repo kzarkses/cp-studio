@@ -2086,6 +2086,26 @@ impl App {
                 r.refresh_arrange();
                 self.gtab_sync();
             }
+            GAct::ClickItem { t, i, lane, q } => {
+                r.set_edit_cursor(r.qn_to_time(q));
+                let Some(it) = self.gt.arr.item(t, i).cloned() else {
+                    return;
+                };
+                let midi = r
+                    .item_ext(&it.guid, "CPGT_midi")
+                    .filter(|g| r.item_ext(g, "CPGT_src").as_deref() == Some(it.guid.as_str()));
+                let g = match (lane, midi) {
+                    (cp_tabview::Lane::Midi, Some(m)) => m,
+                    _ => it.guid.clone(),
+                };
+                // Comme un clic dans l'arrangement : l'item choisi dans
+                // REAPER ; l'editeur, ouvert, le montre tout de suite.
+                r.select_only_item(&g);
+                r.refresh_arrange();
+                if self.ed.win.is_some() {
+                    self.ed.pending = Some(g);
+                }
+            }
             GAct::SplitItem { t, i, qn } => {
                 // La prise et son MIDI coupes au meme endroit ; la partie
                 // droite garde ses notes (son MIDI est la moitie droite).

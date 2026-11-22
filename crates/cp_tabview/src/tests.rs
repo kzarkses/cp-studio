@@ -596,8 +596,34 @@ fn glisser_une_prise() {
         }
     };
     let (x, y) = find(&v, audio).expect("la prise audio");
-    // Un clic : le curseur.
-    assert!(matches!(click(&mut v, x, y), Some(Act::Seek(_))));
+    // Un clic : le curseur, et l'item de la couche cliquee (ici l'audio) dans
+    // REAPER et l'editeur ; sur la couche MIDI, son MIDI.
+    assert!(matches!(
+        click(&mut v, x, y),
+        Some(Act::ClickItem {
+            t: 0,
+            i: 0,
+            lane: Lane::Audio,
+            ..
+        })
+    ));
+    let midi = |h: &Hit| {
+        *h == Hit::Item {
+            t: 0,
+            i: 0,
+            lane: Lane::Midi,
+        }
+    };
+    let (mx, my) = find(&v, midi).expect("la prise MIDI");
+    assert!(matches!(
+        click(&mut v, mx, my),
+        Some(Act::ClickItem {
+            t: 0,
+            i: 0,
+            lane: Lane::Midi,
+            ..
+        })
+    ));
     let q0 = v.tracks[0].items[0].qn0;
     let px = v.lay.ppq;
     let m = Mods::default();

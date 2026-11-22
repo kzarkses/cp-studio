@@ -618,6 +618,15 @@ pub enum Act {
         fade_in: bool,
         len: f64,
     },
+    /// Un simple clic sur une prise : le curseur a `q`, et l'item de cette
+    /// couche (le MIDI, ou l'audio) choisi dans REAPER et montre dans
+    /// l'editeur.
+    ClickItem {
+        t: usize,
+        i: usize,
+        lane: Lane,
+        q: f64,
+    },
     /// Une prise coupee en deux (avec son MIDI).
     SplitItem {
         t: usize,
@@ -662,6 +671,9 @@ enum Drag {
     Item {
         t: usize,
         i: usize,
+        /// La couche saisie : un simple clic montre son item (audio ou MIDI)
+        /// dans l'editeur.
+        lane: Lane,
         x0: f32,
         /// La noire sous la souris a l'appui.
         qp: f64,
@@ -1489,6 +1501,7 @@ impl Arr {
                     Some(Drag::Item {
                         t,
                         i,
+                        lane,
                         x0,
                         qp,
                         moved,
@@ -1511,6 +1524,7 @@ impl Arr {
                         self.drag = Some(Drag::Item {
                             t,
                             i,
+                            lane,
                             x0,
                             qp,
                             moved: true,
@@ -1685,6 +1699,7 @@ impl Arr {
                     Some(Drag::Item {
                         t,
                         i,
+                        lane,
                         x0,
                         moved,
                         qn0,
@@ -1693,7 +1708,15 @@ impl Arr {
                         ..
                     }) => {
                         if !moved {
-                            return Some(Act::Seek(self.qn_of(x0)));
+                            // Un simple clic, comme dans l'arrangement : le
+                            // curseur, et l'item choisi (son MIDI ou son audio,
+                            // selon la couche) dans REAPER et l'editeur.
+                            return Some(Act::ClickItem {
+                                t,
+                                i,
+                                lane,
+                                q: self.qn_of(x0),
+                            });
                         }
                         if copy {
                             return Some(Act::CopyItem { t, i, qn0, to });
@@ -1914,6 +1937,7 @@ impl Arr {
                     self.drag = Some(Drag::Item {
                         t,
                         i,
+                        lane,
                         x0: x,
                         qp: self.qn_of(x),
                         moved: false,
