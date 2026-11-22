@@ -1405,7 +1405,9 @@ impl Ed {
             let q = self.qn_of(x);
             self.zoom_at(self.zoom * 1.25f32.powf(dy), q, x);
         } else if mods.alt {
-            self.scroll = (self.scroll - dy as f64 * self.view_qn() * 0.15).max(0.0);
+            // Comme REAPER chez Cedric (Alt+molette = « View: Scroll
+            // horizontally », 988) : vers le haut, la vue avance.
+            self.scroll = (self.scroll + dy as f64 * self.view_qn() * 0.15).max(0.0);
         } else if mods.ctrl {
             // La hauteur des rangs, autour du rang pointe.
             if self.midi().is_some() {

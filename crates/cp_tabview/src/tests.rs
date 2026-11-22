@@ -424,9 +424,10 @@ fn naviguer_comme_dans_reaper() {
     wheel(&mut v, 0.0, 1.0, shift);
     assert!(v.zoom > z0);
     assert!((v.qn_of(mx) - q).abs() < 1e-3);
-    // Alt + molette : dans le temps ; la molette seule : verticalement.
+    // Alt + molette : dans le temps, vers le haut la vue avance (comme
+    // REAPER chez Cedric) ; la molette seule : verticalement.
     let s0 = v.scroll;
-    wheel(&mut v, 0.0, -1.0, alt);
+    wheel(&mut v, 0.0, 1.0, alt);
     assert!(v.scroll > s0);
     let s1 = v.scroll;
     wheel(&mut v, 0.0, -1.0, Mods::default());
@@ -978,14 +979,35 @@ fn rogner_fondre_et_editer_au_survol() {
             fade_in: true
         }
     );
-    // Au corps de la prise : deplacer ; Ctrl : copier.
+    // Au corps de la prise : la fleche au repos (Ctrl : la copie), deplacer
+    // des que la prise bouge, pas a l'appui.
     let xm = v.x_of((q0 + q1) * 0.5);
     let ctrl = Mods {
         ctrl: true,
         ..Mods::default()
     };
-    assert_eq!(v.pointer(xm, ym, Mods::default()), P::ItemMove);
+    assert_eq!(v.pointer(xm, ym, Mods::default()), P::Arrow);
     assert_eq!(v.pointer(xm, ym, ctrl), P::ItemCopy);
+    v.event(&Ev::Down {
+        x: xm,
+        y: ym,
+        b: Button::Left,
+        dbl: false,
+        mods: Mods::default(),
+    });
+    assert_eq!(v.pointer(xm, ym, Mods::default()), P::Arrow);
+    v.event(&Ev::Move {
+        x: xm + 30.0,
+        y: ym,
+        mods: Mods::default(),
+    });
+    assert_eq!(v.pointer(xm + 30.0, ym, Mods::default()), P::ItemMove);
+    v.event(&Ev::Up {
+        x: xm,
+        y: ym,
+        b: Button::Left,
+        mods: Mods::default(),
+    });
     // Les touches au survol, la souris au milieu de la prise.
     v.event(&Ev::Move {
         x: xm,

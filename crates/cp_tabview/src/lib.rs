@@ -1182,12 +1182,14 @@ impl Arr {
         }
     }
 
-    /// Le curseur de REAPER a montrer : celui du geste en cours, sinon celui
-    /// que ferait un geste ici avec ces touches (Ctrl sur une prise : la
-    /// copie...).
+    /// Le curseur de REAPER a montrer. Au repos, la fleche (Cedric,
+    /// 2026-11-22 : « normal, et deplacer lorsque je deplace ») ; les bords
+    /// et les poignees de fondu montrent leur geste ; Ctrl sur une prise, la
+    /// copie. Pendant un geste, le sien : deplacer des que la prise bouge.
     pub fn pointer(&self, x: f32, y: f32, m: Mods) -> cp_ui::Pointer {
         use cp_ui::Pointer as P;
         match self.drag {
+            Some(Drag::Item { moved: false, .. }) => return P::Arrow,
             Some(Drag::Item { copy, .. }) => {
                 return if copy { P::ItemCopy } else { P::ItemMove };
             }
@@ -1210,7 +1212,7 @@ impl Arr {
                 if m.ctrl {
                     P::ItemCopy
                 } else {
-                    P::ItemMove
+                    P::Arrow
                 }
             }
             Hit::ItemEdge { left, .. } => {
@@ -1227,7 +1229,6 @@ impl Arr {
                     P::FadeOut
                 }
             }
-            Hit::Lane { .. } => P::IBeam,
             _ => P::Arrow,
         }
     }
@@ -1755,7 +1756,9 @@ impl Arr {
                     let q = self.qn_of(x);
                     self.zoom_at(self.zoom * 1.25f32.powf(dy), q, x);
                 } else if mods.alt {
-                    self.scroll = (self.scroll - dy as f64 * self.view_qn() * 0.15).max(0.0);
+                    // Comme REAPER chez Cedric (Alt+molette = « View: Scroll
+                    // horizontally », 988) : vers le haut, la vue avance.
+                    self.scroll = (self.scroll + dy as f64 * self.view_qn() * 0.15).max(0.0);
                 } else if mods.ctrl {
                     self.vzoom = (self.vzoom * 1.15f32.powf(dy)).clamp(0.6, 3.0);
                     self.dirty = true;
