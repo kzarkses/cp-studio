@@ -17,6 +17,7 @@ pub mod decode;
 pub mod feed;
 pub mod peaks;
 pub mod record;
+pub mod stream;
 pub mod stretch;
 pub mod testloop;
 
@@ -79,8 +80,13 @@ pub const THUMB_POINTS: usize = 200;
 const THUMB_MAX_SECONDS: f64 = 600.0;
 const THUMBS_KEPT: usize = 4000;
 
-/// Un fichier ne depasse pas 1,5 Go en memoire (23 min en stereo a 48 kHz).
+/// Une matiere decodee en entier ne depasse pas 1,5 Go (23 min en stereo a
+/// 48 kHz) : seule une source sans acces au hasard (une cuisson) y est tenue.
 const MAX_FILE_BYTES: usize = 1_500_000_000;
+
+/// Au-dela, un fichier se lit EN FLUX (A2), sans limite de longueur : 256 Mo
+/// decodes, 11 min en stereo a 48 kHz.
+const STREAM_ABOVE_BYTES: usize = 256 << 20;
 
 /// Un ticket : en attente, pret, ou en echec.
 #[derive(Clone, Debug)]
@@ -111,6 +117,9 @@ pub struct Stats {
     pub under_pulls: u32,
     pub busy_renders: u32,
     pub dropped_commands: u32,
+    /// Les clips lus en flux, et les blocs qui ont lu une page absente.
+    pub streams: usize,
+    pub stream_misses: u64,
     pub busy_ns: u64,
     /// Le plus long temps de tirage d'un port, en frames.
     pub frames_pulled: u64,
@@ -244,6 +253,11 @@ pub struct AudioHost {
     clip_gens: Vec<u16>,
     ports: Vec<PortOut>,
     decoder: Decoder,
+    /// Le fil de flux (au premier long fichier), et les voix qui jouent un
+    /// clip en flux (un saut le previent).
+    streamer: Option<stream::Streamer>,
+    streamed: Vec<(VoiceH, Arc<cp_sys::paged::Paged>)>,
+    stream_above: usize,
     tickets: Vec<(u32, Ticket)>,
     /// Les decodages en cours : ticket -> clip (pour y poser les pics).
     in_flight: Vec<(u32, ClipH)>,
@@ -320,6 +334,9 @@ impl AudioHost {
                 })
                 .collect(),
             decoder: Decoder::new(),
+            streamer: None,
+            streamed: Vec::new(),
+            stream_above: STREAM_ABOVE_BYTES,
             tickets: Vec::new(),
             in_flight: Vec::new(),
             thumbs: std::collections::HashMap::new(),
@@ -674,10 +691,26 @@ impl AudioHost {
         self.clip(h).map(|(c, _)| (c.frames(), c.nch(), c.srate()))
     }
 
-    /// Frames deja decodes d'un clip vivant.
+    /// Frames deja decodes d'un clip vivant (un clip en flux se joue
+    /// partout : toutes).
     pub fn clip_decoded(&self, h: ClipH) -> Option<i64> {
-        self.clip(h)
-            .map(|(c, _)| (c.samples().len() / c.nch().max(1)) as i64)
+        self.clip(h).map(|(c, _)| {
+            if c.paged().is_some() {
+                c.frames()
+            } else {
+                (c.samples().len() / c.nch().max(1)) as i64
+            }
+        })
+    }
+
+    /// Le clip est-il lu en flux ?
+    pub fn clip_streamed(&self, h: ClipH) -> bool {
+        self.clip(h).is_some_and(|(c, _)| c.paged().is_some())
+    }
+
+    /// La taille au-dela de laquelle un fichier se lit en flux (les tests).
+    pub fn set_stream_above(&mut self, bytes: usize) {
+        self.stream_above = bytes;
     }
 
     /// Plus aucun lancement ; la matiere part quand plus rien ne la joue.
@@ -724,7 +757,7 @@ impl AudioHost {
             .as_ref()
             .and_then(|r| cp_sys::audio::open_file(r, path));
         match src {
-            Some(s) => self.submit(t, Box::new(s)),
+            Some(s) => self.submit(t, Box::new(s), true),
             None => self
                 .tickets
                 .push((t, Ticket::Failed("REAPER cannot open this file".into()))),
@@ -737,6 +770,14 @@ impl AudioHost {
     /// et cuite sur le fil de travail : un ticket, comme un fichier. Le clip
     /// cuit se joue a vitesse 1, a la duree exacte.
     pub fn stretch(&mut self, h: ClipH, start: i64, end: i64, tempo: f64, shift: f64) -> u32 {
+        if self.clip_streamed(h) {
+            let t = self.new_ticket();
+            self.tickets.push((
+                t,
+                Ticket::Failed("a streamed file cannot be stretched".into()),
+            ));
+            return t;
+        }
         let sh = self
             .reaper
             .as_ref()
@@ -769,26 +810,35 @@ impl AudioHost {
                 .push((t, Ticket::Failed("the clip is gone".into())));
             return t;
         };
+        if clip.paged().is_some() {
+            self.tickets.push((
+                t,
+                Ticket::Failed("a streamed file cannot be stretched".into()),
+            ));
+            return t;
+        }
         if !self.clip_complete(h) {
             self.tickets
                 .push((t, Ticket::Failed("the clip is still loading".into())));
             return t;
         }
         let r = stretch::StretchReader::new(clip, start, end, tempo, shift, sh);
-        self.submit(t, Box::new(r));
+        self.submit(t, Box::new(r), false);
         t
     }
 
     /// Une source quelconque (tests).
     pub fn load_reader(&mut self, r: Box<dyn Reader>) -> u32 {
         let t = self.new_ticket();
-        self.submit(t, r);
+        self.submit(t, r, true);
         t
     }
 
     /// Lit la forme (fil principal), prepare un clip qui se remplira, et
     /// confie le decodage au fil de travail.
-    fn submit(&mut self, t: u32, mut src: Box<dyn Reader>) {
+    /// Un long fichier (`streamable` : une source qu'on peut lire n'importe
+    /// ou) se lit en flux.
+    fn submit(&mut self, t: u32, mut src: Box<dyn Reader>, streamable: bool) {
         // On ne garde que les derniers tickets : un ticket jamais relu ne
         // s'accumule pas.
         if self.tickets.len() > 64 {
@@ -802,6 +852,10 @@ impl AudioHost {
                 return;
             }
         };
+        if streamable && sh.frames.saturating_mul(sh.nch * 4) > self.stream_above {
+            self.submit_stream(t, src, sh);
+            return;
+        }
         let max_frames = (MAX_FILE_BYTES / 4 / sh.nch).min(self.max_frames);
         let added = self
             .pool
@@ -846,6 +900,85 @@ impl AudioHost {
                 self.release(h);
                 self.tickets
                     .push((t, Ticket::Failed("decoder thread is gone".into())));
+            }
+        }
+    }
+
+    /// Un long fichier : un clip en pages, que le fil de flux remplit autour
+    /// de la tete. Pret des que son debut est la.
+    fn submit_stream(&mut self, t: u32, src: Box<dyn Reader>, sh: decode::Shape) {
+        let page = decode::chunk_frames(sh.srate);
+        let (id, pages) = match self
+            .pool
+            .add_paged(sh.frames as i64, sh.nch, sh.srate, page)
+        {
+            Ok(x) => x,
+            Err(e) => {
+                self.tickets.push((t, Ticket::Failed(format!("{e:?}"))));
+                return;
+            }
+        };
+        let generation = self.new_generation(id);
+        self.clips[id as usize] = Some(ClipEntry {
+            generation,
+            peaks: None,
+        });
+        let h = ClipH::new(id, generation);
+        let job = stream::StreamJob {
+            key: h.0,
+            src,
+            shape: sh,
+            pages,
+        };
+        let st = self.streamer.get_or_insert_with(stream::Streamer::new);
+        match st.add(job) {
+            Ok(()) => self.tickets.push((t, Ticket::Pending(h))),
+            Err(_) => {
+                self.release(h);
+                self.tickets
+                    .push((t, Ticket::Failed("stream thread is gone".into())));
+            }
+        }
+    }
+
+    /// Les nouvelles du fil de flux.
+    fn stream_poll(&mut self) {
+        let Some(st) = &self.streamer else { return };
+        let mut msgs = Vec::new();
+        while let Some(m) = st.try_msg() {
+            msgs.push(m);
+        }
+        for m in msgs {
+            match m {
+                stream::SMsg::Ready { key } => {
+                    for e in &mut self.tickets {
+                        if matches!(e.1, Ticket::Pending(h) if h.0 == key) {
+                            e.1 = Ticket::Ready(ClipH(key));
+                        }
+                    }
+                }
+                stream::SMsg::Peaks { key, peaks, .. } => {
+                    let h = ClipH(key);
+                    if let Some(Some(e)) = self.clips.get_mut(h.id() as usize) {
+                        if e.generation == h.generation() {
+                            e.peaks = Some(peaks);
+                        }
+                    }
+                }
+                // La source est detruite ICI, sur le fil principal.
+                stream::SMsg::Gone { src, .. } => drop(src),
+                stream::SMsg::Error { key, error } => {
+                    let mut pending = false;
+                    for e in &mut self.tickets {
+                        if matches!(e.1, Ticket::Pending(h) if h.0 == key) {
+                            e.1 = Ticket::Failed(error.clone());
+                            pending = true;
+                        }
+                    }
+                    if pending {
+                        self.release(ClipH(key));
+                    }
+                }
             }
         }
     }
@@ -918,6 +1051,7 @@ impl AudioHost {
     pub fn poll(&mut self) {
         self.check_routes();
         self.rec_poll();
+        self.stream_poll();
         while let Some(m) = self.decoder.try_msg() {
             match m {
                 decode::Msg::Thumb { path, src, data } => {
@@ -985,6 +1119,8 @@ impl AudioHost {
         for v in finished {
             self.ctl.voice_release(v);
         }
+        let live = &self.voices;
+        self.streamed.retain(|(v, _)| live.contains(v));
         // Les etireurs des voix rendues reviennent au vivier.
         self.reclaim_shifters();
         self.pool.collect();
@@ -1019,6 +1155,22 @@ impl AudioHost {
         if !self.ensure_port(port) {
             return None;
         }
+        // Un clip en flux : sa page de depart est demandee tout de suite ;
+        // si elle n'est pas la, le depart attend 50 ms (une page se lit en
+        // quelques millisecondes) plutot que de commencer dans le silence.
+        let mut at = At::Now;
+        let clip_pages = clip.paged().cloned();
+        if let Some(p) = clip.paged() {
+            let s = start.max(0);
+            p.hint(s);
+            if !p.has(p.page_of(s)) {
+                if let Some(st) = &self.streamer {
+                    st.wake();
+                }
+                let core = self.ctl.core();
+                at = At::Frame(core.clock_now() + (0.05 * core.srate().max(1.0)) as i64);
+            }
+        }
         let v = self.ctl.voice_alloc(port)?;
         let sets = [
             (Param::LoopStart, start.max(0) as f64),
@@ -1029,7 +1181,7 @@ impl AudioHost {
         }
         let ok = self.ctl.send(
             v,
-            At::Now,
+            at,
             VoiceOp::Play {
                 clip,
                 rate: 1.0,
@@ -1046,6 +1198,9 @@ impl AudioHost {
             return None;
         }
         self.voices.push(v);
+        if let Some(p) = clip_pages {
+            self.streamed.push((v, p));
+        }
         Some(v)
     }
 
@@ -1056,6 +1211,15 @@ impl AudioHost {
     }
 
     pub fn set(&mut self, v: VoiceH, param: Param, value: f64) -> bool {
+        // Un saut dans un clip en flux : sa page est demandee tout de suite.
+        if param == Param::Pos {
+            if let Some((_, p)) = self.streamed.iter().find(|(w, _)| *w == v) {
+                p.hint(value as i64);
+                if let Some(st) = &self.streamer {
+                    st.wake();
+                }
+            }
+        }
         // Le tempo ou la hauteur a part : la voix emprunte un etireur.
         if matches!(param, Param::Tempo | Param::Shift)
             && (value - 1.0).abs() > 1e-9
@@ -1127,8 +1291,10 @@ impl AudioHost {
             dropped_commands: core.dropped_commands(),
             active_voices: core.active_voices(),
             clips: self.pool.loaded_count(),
-            bytes: self.pool.bytes_resident(),
+            bytes: self.pool.bytes_resident() + self.pool.bytes_streamed(),
             decoding: self.decoding,
+            streams: self.pool.streams().0,
+            stream_misses: self.pool.streams().1,
             routes_lost: self.routes_lost,
             ..Stats::default()
         };

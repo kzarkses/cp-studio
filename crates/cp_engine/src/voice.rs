@@ -401,6 +401,21 @@ impl Voice {
         let span = src_end - src_start;
         let cnch = c.nch();
         let data = c.samples();
+        // Un long fichier lu en flux : la matiere est dans ses pages (une page
+        // absente se lit en silence) ; la lecture les tient le temps du bloc.
+        let pg = c.paged().map(|p| p.read());
+        let fetch = |s: usize| -> (f32, f32) {
+            match &pg {
+                Some(r) => {
+                    let l = r.sample(s);
+                    (l, if cnch > 1 { r.sample(s + 1) } else { l })
+                }
+                None => {
+                    let l = data[s];
+                    (l, if cnch > 1 { data[s + 1] } else { l })
+                }
+            }
+        };
 
         // Balance, pas panoramique a puissance constante : au centre, la matiere
         // passe a l'identique.
@@ -435,7 +450,11 @@ impl Voice {
         } else {
             None
         };
-        let avail = (data.len() / cnch.max(1)) as Frame;
+        let avail = if pg.is_some() {
+            cf
+        } else {
+            (data.len() / cnch.max(1)) as Frame
+        };
         let tap = |m: Frame| -> (f32, f32) {
             let m = if looping {
                 src_start + (m - src_start).rem_euclid(span)
@@ -447,9 +466,7 @@ impl Voice {
             if m < 0 || m >= avail {
                 return (0.0, 0.0);
             }
-            let s = m as usize * cnch;
-            let l = data[s];
-            (l, if cnch > 1 { data[s + 1] } else { l })
+            fetch(m as usize * cnch)
         };
         // Le fondu enchaine au point de boucle : sa longueur en frames
         // source (bornee par la matiere avant la boucle et par sa moitie).
@@ -467,14 +484,35 @@ impl Voice {
             if m < 0 || m >= avail.min(cf) {
                 return (0.0, 0.0);
             }
-            let s = m as usize * cnch;
-            let l = data[s];
-            (l, if cnch > 1 { data[s + 1] } else { l })
+            fetch(m as usize * cnch)
         };
         let read_plain = |q: f64| -> (f32, f32) {
             match hq {
                 Some(k) => k.read(q, step, tap),
-                None => read_at(data, cnch, cf, q, unity, looping, src_start, src_end),
+                None => match &pg {
+                    Some(r) => read_at(
+                        |s| r.sample(s),
+                        cf,
+                        cnch,
+                        cf,
+                        q,
+                        unity,
+                        looping,
+                        src_start,
+                        src_end,
+                    ),
+                    None => read_at(
+                        |s| data[s],
+                        (data.len() / cnch.max(1)) as Frame,
+                        cnch,
+                        cf,
+                        q,
+                        unity,
+                        looping,
+                        src_start,
+                        src_end,
+                    ),
+                },
             }
         };
         // Avec un fondu au point de boucle, la matiere se lit sans
@@ -804,6 +842,15 @@ impl Voice {
 
         // --- l'etat remonte, une seule fois
         self.pos = p;
+        // Le flux suit la tete d'une voix qui joue ; une voix qui s'eteint
+        // (un saut relance une voix neuve ailleurs) ne la ramene pas en
+        // arriere.
+        if let Some(r) = pg.as_ref().filter(|_| st == state::PLAYING) {
+            // Les voix sont rangees dans un tableau : leur adresse dit leur
+            // rang.
+            let slot = self as *const Voice as usize / size_of::<Voice>().max(1);
+            r.played(slot, p as Frame);
+        }
         self.fade_in_pos = fip;
         self.fade_out_pos = fop;
         self.env_st = est;
@@ -870,7 +917,8 @@ fn hermite(xm1: f32, x0: f32, x1: f32, x2: f32, t: f32) -> f32 {
 #[allow(clippy::too_many_arguments)]
 #[inline]
 fn read_at(
-    data: &[f32],
+    data: impl Fn(usize) -> f32,
+    avail: Frame,
     cnch: usize,
     frames: Frame,
     p: f64,
@@ -884,15 +932,14 @@ fn read_at(
     let at = |i: Frame| i.clamp(0, last) as usize * cnch;
     // Un clip qui se remplit encore : au-dela du publie, le silence. (Un clip
     // complet ne passe jamais ici : le calcul reste celui de l'ancien C++.)
-    let avail = (data.len() / cnch.max(1)) as Frame;
     let partial = avail < frames;
     if partial && i0.clamp(0, last) + if unity { 0 } else { 2 } >= avail {
         return (0.0, 0.0);
     }
     if unity {
         let s = at(i0);
-        let l = data[s];
-        return (l, if cnch > 1 { data[s + 1] } else { l });
+        let l = data(s);
+        return (l, if cnch > 1 { data(s + 1) } else { l });
     }
     let t = (p - i0 as f64) as f32;
     let mut im1 = i0 - 1;
@@ -908,9 +955,9 @@ fn read_at(
         i2 = if looping { src_start } else { src_end - 1 };
     }
     let (pm1, p0, p1, p2) = (at(im1), at(i0), at(i1), at(i2));
-    let l = hermite(data[pm1], data[p0], data[p1], data[p2], t);
+    let l = hermite(data(pm1), data(p0), data(p1), data(p2), t);
     let r = if cnch > 1 {
-        hermite(data[pm1 + 1], data[p0 + 1], data[p1 + 1], data[p2 + 1], t)
+        hermite(data(pm1 + 1), data(p0 + 1), data(p1 + 1), data(p2 + 1), t)
     } else {
         l
     };

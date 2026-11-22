@@ -14,6 +14,8 @@ use std::sync::Arc;
 
 use cp_sys::grow::{GrowBuf, GrowWriter};
 
+use cp_sys::paged::Paged;
+
 use crate::types::{Frame, MAX_CHANS, MAX_CLIP_FRAMES, MAX_CLIPS};
 
 /// La matiere d'un clip : entrelacee, `nch` canaux, au taux `srate`.
@@ -23,6 +25,9 @@ use crate::types::{Frame, MAX_CHANS, MAX_CLIP_FRAMES, MAX_CLIPS};
 /// la longueur annoncee. Une voix qui lit au-dela du publie entend du silence.
 pub struct ClipData {
     buf: Arc<GrowBuf>,
+    /// Un long fichier lu en flux : la matiere est dans ses pages, `buf` est
+    /// vide.
+    paged: Option<Arc<Paged>>,
     frames: Frame,
     nch: usize,
     srate: f64,
@@ -48,15 +53,23 @@ impl ClipData {
     }
     /// La longueur : annoncee pendant le remplissage, reelle une fois fini.
     pub fn frames(&self) -> Frame {
+        if self.paged.is_some() {
+            return self.frames;
+        }
         if self.buf.is_done() {
             (self.buf.filled().len() / self.nch) as Frame
         } else {
             self.frames
         }
     }
-    /// Toute la matiere est la.
+    /// Toute la matiere est la (un clip en flux ne l'est jamais : seules
+    /// ses pages proches de la tete le sont).
     pub fn complete(&self) -> bool {
-        self.buf.is_done()
+        self.paged.is_none() && self.buf.is_done()
+    }
+    /// Les pages d'un clip lu en flux.
+    pub fn paged(&self) -> Option<&Arc<Paged>> {
+        self.paged.as_ref()
     }
     pub fn nch(&self) -> usize {
         self.nch
@@ -127,6 +140,7 @@ impl Pool {
         self.slots[id] = Some(Slot {
             clip: Arc::new(ClipData {
                 buf: Arc::new(GrowBuf::full(samples)),
+                paged: None,
                 frames,
                 nch,
                 srate,
@@ -165,6 +179,7 @@ impl Pool {
         self.slots[id] = Some(Slot {
             clip: Arc::new(ClipData {
                 buf,
+                paged: None,
                 frames,
                 nch,
                 srate,
@@ -173,6 +188,42 @@ impl Pool {
             retire_wanted: false,
         });
         Ok((id as i32, w))
+    }
+
+    /// Un clip lu en flux : `frames` frames en pages de `page` frames, sans
+    /// limite de longueur. Rend l'emplacement et les pages (que le fil de
+    /// flux remplit).
+    pub fn add_paged(
+        &mut self,
+        frames: Frame,
+        nch: usize,
+        srate: f64,
+        page: usize,
+    ) -> Result<(i32, Arc<Paged>), PoolError> {
+        if !(1..=MAX_CHANS).contains(&nch) {
+            return Err(PoolError::BadChannels);
+        }
+        if frames <= 0 {
+            return Err(PoolError::Empty);
+        }
+        let id = self
+            .slots
+            .iter()
+            .position(Option::is_none)
+            .ok_or(PoolError::Full)?;
+        let pages = Arc::new(Paged::new(frames, nch, page));
+        self.slots[id] = Some(Slot {
+            clip: Arc::new(ClipData {
+                buf: Arc::new(GrowBuf::full(Vec::new())),
+                paged: Some(pages.clone()),
+                frames,
+                nch,
+                srate,
+                id: id as i32,
+            }),
+            retire_wanted: false,
+        });
+        Ok((id as i32, pages))
     }
 
     /// Un clip LANCABLE (pas retire).
@@ -187,6 +238,9 @@ impl Pool {
             s.retire_wanted = true;
             // Un remplissage en cours peut s'arreter : plus personne n'en veut.
             s.clip.buf.abandon();
+            if let Some(p) = &s.clip.paged {
+                p.abandon();
+            }
         }
     }
 
@@ -222,6 +276,25 @@ impl Pool {
 
     pub fn bytes_resident(&self) -> usize {
         self.bytes
+    }
+
+    /// La memoire des pages des clips lus en flux.
+    pub fn bytes_streamed(&self) -> usize {
+        self.slots
+            .iter()
+            .flatten()
+            .filter_map(|s| s.clip.paged())
+            .map(|p| p.bytes())
+            .sum()
+    }
+
+    /// (clips lus en flux, blocs qui ont lu une page absente).
+    pub fn streams(&self) -> (usize, u64) {
+        self.slots
+            .iter()
+            .flatten()
+            .filter_map(|s| s.clip.paged())
+            .fold((0, 0), |(n, m), p| (n + 1, m + p.misses()))
     }
 }
 

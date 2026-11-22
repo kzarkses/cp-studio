@@ -24,10 +24,61 @@ pub struct Peaks {
     levels: Vec<Level>,
 }
 
+/// Les pics qui se construisent au fil d'une lecture (un long fichier lu en
+/// flux : un passage sur tout le fichier, en tache de fond). Le bloc du
+/// niveau 0 grandit avec la longueur : au plus 2^21 blocs (21 Mo pour deux
+/// heures en stereo).
+pub struct PeakBuilder {
+    block: usize,
+    nch: usize,
+    frames: usize,
+    mm: Vec<[f32; 2]>,
+}
+
+impl PeakBuilder {
+    pub fn new(total_frames: usize, nch: usize) -> PeakBuilder {
+        let mut block = BASE;
+        while total_frames / block > 1 << 21 {
+            block *= FACTOR;
+        }
+        PeakBuilder {
+            block,
+            nch: nch.max(1),
+            frames: 0,
+            mm: Vec::new(),
+        }
+    }
+
+    /// La suite de la matiere (entrelacee).
+    pub fn push(&mut self, samples: &[f32]) {
+        let nch = self.nch;
+        for fr in samples.chunks_exact(nch) {
+            let b = self.frames / self.block;
+            if self.mm.len() < (b + 1) * nch {
+                self.mm.resize((b + 1) * nch, [f32::MAX, f32::MIN]);
+            }
+            for (c, &v) in fr.iter().enumerate() {
+                let e = &mut self.mm[b * nch + c];
+                e[0] = e[0].min(v);
+                e[1] = e[1].max(v);
+            }
+            self.frames += 1;
+        }
+    }
+
+    pub fn frames(&self) -> usize {
+        self.frames
+    }
+
+    /// Les pics de ce qui est lu jusqu'ici.
+    pub fn snapshot(&self) -> Peaks {
+        Peaks::from_level0(self.mm.clone(), self.block, self.nch, self.frames)
+    }
+}
+
 impl Peaks {
     pub fn build(samples: &[f32], nch: usize) -> Peaks {
         let frames = samples.len().checked_div(nch).unwrap_or(0);
-        let mut levels = Vec::new();
         let nb = frames.div_ceil(BASE);
         let mut mm = vec![[f32::MAX, f32::MIN]; nb * nch];
         for (f, fr) in samples.chunks_exact(nch.max(1)).enumerate() {
@@ -38,7 +89,12 @@ impl Peaks {
                 e[1] = e[1].max(v);
             }
         }
-        levels.push(Level { block: BASE, mm });
+        Peaks::from_level0(mm, BASE, nch, frames)
+    }
+
+    /// La pyramide au-dessus d'un niveau 0 (blocs de `block` frames).
+    fn from_level0(mm: Vec<[f32; 2]>, block: usize, nch: usize, frames: usize) -> Peaks {
+        let mut levels = vec![Level { block, mm }];
         loop {
             let prev = levels.last().expect("un niveau au moins");
             let pb = prev.mm.len() / nch.max(1);
@@ -69,6 +125,12 @@ impl Peaks {
         self.levels.iter().map(|l| l.mm.len() * 8).sum()
     }
 
+    /// Les frames couvertes (moins que le clip tant qu'un passage en flux
+    /// n'est pas fini).
+    pub fn frames(&self) -> usize {
+        self.frames
+    }
+
     /// Le min et le max de chaque pixel : le pixel `i` couvre les frames
     /// `[start + i * fpp, start + (i + 1) * fpp)`. `ch = None` fond les canaux.
     /// Sous une frame par pixel, min = max = la matiere interpolee a ce point.
@@ -85,6 +147,17 @@ impl Peaks {
         let n = out_min.len().min(out_max.len());
         let nch = self.nch;
         let data = clip.samples();
+        // Un clip en flux : la matiere des pages en memoire ; ailleurs, le
+        // niveau 0.
+        let pg = clip.paged().map(|p| p.read());
+        let resident = |f: usize| match &pg {
+            Some(r) => r.has_frame(f as i64),
+            None => f < data.len() / nch.max(1),
+        };
+        let at = |s: usize| match &pg {
+            Some(r) => r.sample(s),
+            None => data[s],
+        };
         let (c0, c1) = match ch {
             Some(c) if c < nch => (c, c + 1),
             _ => (0, nch),
@@ -100,7 +173,20 @@ impl Peaks {
                 continue;
             }
             valid += 1;
-            if fpp <= 1.0 {
+            let fa = a.max(0.0).floor() as usize;
+            let fb = (b.ceil() as usize).min(self.frames).max(fa + 1);
+            let len = fb - fa;
+            // Le plus gros niveau dont le bloc tient quatre fois dans le pixel
+            // (un clip en flux hors de ses pages : le niveau 0).
+            let lvl = self
+                .levels
+                .iter()
+                .rev()
+                .find(|l| l.block * FACTOR <= len)
+                .or_else(|| {
+                    (!resident(fa) || !resident(fb.saturating_sub(1))).then(|| &self.levels[0])
+                });
+            if fpp <= 1.0 && lvl.is_none() {
                 // La matiere, interpolee lineairement entre deux echantillons.
                 let x = a.max(0.0);
                 let f0 = (x.floor() as usize).min(self.frames - 1);
@@ -108,8 +194,8 @@ impl Peaks {
                 let t = (x - f0 as f64) as f32;
                 let mut v = 0.0f32;
                 for c in c0..c1 {
-                    let s0 = data[f0 * nch + c];
-                    let s1 = data[f1 * nch + c];
+                    let s0 = at(f0 * nch + c);
+                    let s1 = at(f1 * nch + c);
                     v += s0 + (s1 - s0) * t;
                 }
                 v /= (c1 - c0).max(1) as f32;
@@ -117,17 +203,12 @@ impl Peaks {
                 out_max[i] = v;
                 continue;
             }
-            let fa = a.max(0.0).floor() as usize;
-            let fb = (b.ceil() as usize).min(self.frames).max(fa + 1);
-            let len = fb - fa;
             let (mut lo, mut hi) = (f32::MAX, f32::MIN);
-            // Le plus gros niveau dont le bloc tient quatre fois dans le pixel.
-            let lvl = self.levels.iter().rev().find(|l| l.block * FACTOR <= len);
             match lvl {
                 None => {
                     for f in fa..fb {
                         for c in c0..c1 {
-                            let v = data[f * nch + c];
+                            let v = at(f * nch + c);
                             lo = lo.min(v);
                             hi = hi.max(v);
                         }

@@ -89,7 +89,7 @@ struct Active {
 /// Les morceaux font une seconde quand le taux est entier : chaque lecture
 /// commence alors a un temps ENTIER, que `time_s * srate` retombe exactement
 /// sur l'echantillon, quel que soit l'arrondi de la source.
-fn chunk_frames(srate: f64) -> usize {
+pub(crate) fn chunk_frames(srate: f64) -> usize {
     if srate.fract() == 0.0 {
         srate as usize
     } else {

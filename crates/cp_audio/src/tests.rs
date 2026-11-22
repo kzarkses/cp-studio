@@ -758,3 +758,250 @@ fn une_prise_devient_un_clip() {
     // Plus de prise : l'entree n'est plus copiee.
     assert_eq!(ring.inputs(), (-1, -1));
 }
+
+/// Les pages d'un clip en flux.
+fn pages_of(h: &AudioHost, c: ClipH) -> std::sync::Arc<cp_sys::paged::Paged> {
+    h.clip(c).unwrap().0.paged().unwrap().clone()
+}
+
+/// Ce que la tete lira au prochain bloc est-il la ? (En vrai, le flux a dix
+/// secondes d'avance ; ici on tire les blocs bien plus vite que le temps.)
+fn wait_page(h: &mut AudioHost, c: ClipH, frame: i64) {
+    let p = pages_of(h, c);
+    let t0 = std::time::Instant::now();
+    while !p.has(p.page_of(frame)) {
+        h.poll();
+        assert!(
+            t0.elapsed().as_secs() < 10,
+            "page {} jamais venue",
+            p.page_of(frame)
+        );
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+}
+
+fn fake_at(f: usize, ch: usize) -> f64 {
+    ((f * 4 + ch) as f64 / 1e7) as f32 as f64
+}
+
+#[test]
+fn deux_heures_s_ecoutent_en_flux() {
+    let mut h = AudioHost::new(None, 48000.0);
+    let frames = 48000 * 7200;
+    let t = h.load_reader(Box::new(Fake {
+        frames,
+        nch: 2,
+        srate: 48000.0,
+    }));
+    let t0 = std::time::Instant::now();
+    let c = loop {
+        h.poll();
+        match h.ticket(t) {
+            Load::Pending => {}
+            Load::Ready(c) => break c,
+            Load::Failed(e) => panic!("{e}"),
+        }
+        assert!(t0.elapsed().as_secs() < 10);
+        std::thread::yield_now();
+    };
+    let ready_ms = t0.elapsed().as_secs_f64() * 1000.0;
+    assert!(h.clip_streamed(c));
+    assert_eq!(h.clip_info(c).map(|i| i.0), Some(frames as i64));
+    assert_eq!(h.clip_decoded(c), Some(frames as i64));
+    block(&mut h, 0, 64);
+
+    // Du debut : tout de suite (le debut est toujours la), au bit pres.
+    h.play(0, c, 0, 0, false, 1.0).unwrap();
+    let mut got = Vec::new();
+    for b in 0..400 {
+        wait_page(&mut h, c, (b + 1) * 512);
+        got.extend(block(&mut h, 0, 512));
+    }
+    for (i, x) in got.iter().enumerate() {
+        assert_eq!(*x, fake_at(i / 2, i % 2), "echantillon {i}");
+    }
+
+    // Un saut a une heure : une voix neuve, son depart attend sa page.
+    let v0 = h.voices[0];
+    h.stop(v0, 0.0);
+    let at = 48000 * 3600 + 12345;
+    let v = h.play(0, c, at, 0, false, 1.0).unwrap();
+    wait_page(&mut h, c, at);
+    let mut heard = Vec::new();
+    for _ in 0..200 {
+        let out = block(&mut h, 0, 512);
+        if let Some((pos, _)) = h.voice(v) {
+            if pos > at as f64 {
+                heard.extend(out);
+            }
+        }
+        let head = h.voice(v).map_or(at, |(p, _)| p as i64);
+        wait_page(&mut h, c, head + 512);
+    }
+    // Ce qu'on entend apres le depart est le fichier a partir d'une heure.
+    let first = heard.iter().position(|&x| x != 0.0).expect("du son");
+    assert_eq!(first % 2, 0);
+    for (i, x) in heard[first..].iter().enumerate() {
+        let (f, ch) = (at as usize + i / 2, i % 2);
+        assert_eq!(*x, fake_at(f, ch), "apres le saut, echantillon {i}");
+    }
+    let p = pages_of(&h, c);
+    assert_eq!(p.misses(), 0, "aucun bloc n'a lu une page absente");
+    // Les pages loin de la tete sont parties ; le debut reste.
+    for _ in 0..50 {
+        h.poll();
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
+    assert!(p.has(0) && p.has(2), "le debut reste");
+    // Autour de l ancienne tete (30 s), de la nouvelle, et le debut : pas plus.
+    assert!(p.resident() <= 45, "{} pages en memoire", p.resident());
+    assert!(!p.has(2000));
+    let st = h.stats();
+    assert_eq!(st.streams, 1);
+    assert!(
+        st.bytes < 64 << 20,
+        "deux heures en {} Mo seulement",
+        st.bytes >> 20
+    );
+    eprintln!(
+        "flux : pret en {ready_ms:.1} ms, {} pages en memoire ({} Mo)",
+        p.resident(),
+        st.bytes >> 20
+    );
+
+    // Les pics arrivent pendant le passage, puis couvrent tout.
+    let t1 = std::time::Instant::now();
+    let (mut lo, mut hi) = (vec![0.0; 8], vec![0.0; 8]);
+    loop {
+        h.poll();
+        let n = h.peaks(c, Some(0), 0.0, frames as f64 / 8.0, &mut lo, &mut hi);
+        if n == 8 && hi[7] > 0.0 {
+            break;
+        }
+        assert!(t1.elapsed().as_secs() < 120, "pics : {n} pixels");
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    eprintln!("pics de deux heures en {:.1} s", t1.elapsed().as_secs_f64());
+    for i in 1..8 {
+        assert!(hi[i] > hi[i - 1], "la forme monte comme la matiere");
+    }
+    // Au plus pres, la matiere elle-meme (pages en memoire), ou le niveau
+    // fin ailleurs : jamais rien de faux.
+    let (mut lo, mut hi) = (vec![0.0; 4], vec![0.0; 4]);
+    h.peaks(c, Some(0), at as f64, 0.5, &mut lo, &mut hi);
+    assert!((hi[0] - fake_at(at as usize, 0) as f32).abs() < 1e-4);
+
+    // Rendu : la voix s'arrete, le clip part, les pages aussi.
+    h.stop(v, 0.0);
+    h.release(c);
+    let t2 = std::time::Instant::now();
+    while h.stats().streams > 0 || h.stats().bytes > 0 {
+        block(&mut h, 0, 512);
+        h.poll();
+        assert!(t2.elapsed().as_secs() < 10, "le clip ne part pas");
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+}
+
+#[test]
+fn un_fichier_court_reste_en_memoire_et_le_flux_se_regle() {
+    // Sous le seuil, rien ne change ; un seuil bas met un petit fichier en
+    // flux, et il joue pareil, a l'envers compris.
+    let mut h = AudioHost::new(None, 48000.0);
+    h.set_stream_above(1 << 20);
+    let frames = 48000 * 20;
+    let t = h.load_reader(Box::new(Fake {
+        frames,
+        nch: 2,
+        srate: 48000.0,
+    }));
+    let c = loop {
+        h.poll();
+        match h.ticket(t) {
+            Load::Pending => std::thread::yield_now(),
+            Load::Ready(c) => break c,
+            Load::Failed(e) => panic!("{e}"),
+        }
+    };
+    assert!(h.clip_streamed(c));
+    // Le cuire est refuse, en le disant.
+    let tk = h.stretch(c, 0, 0, 0.8, 1.0);
+    match h.ticket(tk) {
+        Load::Failed(e) => assert!(e.contains("streamed"), "{e}"),
+        _ => panic!("une cuisson d'un clip en flux"),
+    }
+    block(&mut h, 0, 64);
+    let start = 48000 * 15;
+    let v = h.play(0, c, 0, 0, false, 1.0).unwrap();
+    for _ in 0..4 {
+        block(&mut h, 0, 512);
+    }
+    // Une voix qui joue saute a 15 s et repart a l envers.
+    h.set(v, Param::Pos, start as f64);
+    h.set(v, Param::Reverse, 1.0);
+    wait_page(&mut h, c, start);
+    let mut got = Vec::new();
+    let mut pos = start;
+    for _ in 0..300 {
+        wait_page(&mut h, c, (pos - 600).max(0));
+        got.extend(block(&mut h, 0, 512));
+        pos = h.voice(v).map_or(pos, |(p, _)| p as i64);
+    }
+    assert!(pos < start - 100_000, "la tete recule : {pos}");
+    let p = pages_of(&h, c);
+    assert_eq!(
+        p.misses(),
+        0,
+        "a l'envers aussi, les pages sont venues a temps"
+    );
+}
+
+#[test]
+fn le_flux_tient_le_temps_reel() {
+    // Des blocs tires au rythme de REAPER (512 frames toutes les 10,7 ms)
+    // pendant trois secondes, avec un saut au hasard toutes les demi-secondes
+    // (une voix neuve, l'ancienne s'eteint en 10 ms) : aucun bloc ne lit une
+    // page absente.
+    let mut h = AudioHost::new(None, 48000.0);
+    let frames = 48000 * 7200;
+    let t = h.load_reader(Box::new(Fake {
+        frames,
+        nch: 2,
+        srate: 48000.0,
+    }));
+    let c = loop {
+        h.poll();
+        match h.ticket(t) {
+            Load::Pending => std::thread::yield_now(),
+            Load::Ready(c) => break c,
+            Load::Failed(e) => panic!("{e}"),
+        }
+    };
+    block(&mut h, 0, 64);
+    let mut v = h.play(0, c, 0, 0, false, 1.0).unwrap();
+    let mut seed = 0x9e37_79b9_u64;
+    let t0 = std::time::Instant::now();
+    let period = std::time::Duration::from_secs_f64(512.0 / 48000.0);
+    let mut next = t0;
+    let mut jumps = 0;
+    for b in 0..280 {
+        if b % 47 == 46 {
+            seed = seed
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            let at = ((seed >> 33) % (frames as u64 - 48000 * 20)) as i64;
+            h.stop(v, 0.01);
+            v = h.play(0, c, at, 0, false, 1.0).unwrap();
+            jumps += 1;
+        }
+        block(&mut h, 0, 512);
+        h.poll();
+        next += period;
+        if let Some(d) = next.checked_duration_since(std::time::Instant::now()) {
+            std::thread::sleep(d);
+        }
+    }
+    let p = pages_of(&h, c);
+    assert!(jumps >= 5);
+    assert_eq!(p.misses(), 0, "{jumps} sauts en temps reel");
+}

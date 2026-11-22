@@ -44,6 +44,8 @@ pub struct SelfTest {
     rt_pos0: f64,
     /// La prise de l'essai : son numero, son debut, sa fin, son heure.
     rec: Option<(u32, i64, i64, Instant)>,
+    /// Le long fichier de l'essai du flux.
+    stream: Option<StreamT>,
     ui_at: Option<Instant>,
     keys_step: u8,
     wheels: u32,
@@ -57,6 +59,63 @@ pub struct SelfTest {
     place0: String,
     frames0: cp_abi::FrameInfo,
     snapped: bool,
+}
+
+/// L'essai du flux : le fichier, son ticket, son clip, la piste de sortie,
+/// la voix, l'etape et son heure.
+struct StreamT {
+    path: PathBuf,
+    ticket: u32,
+    clip: Option<ClipH>,
+    track: Option<String>,
+    voice: Option<cp_audio::VoiceH>,
+    step: u8,
+    t: Instant,
+    t_load: Instant,
+}
+
+/// Le long fichier : 12 minutes en stereo 16 bits a 48 kHz (138 Mo sur le
+/// disque, 276 Mo decodes : au-dela du seuil du flux). A gauche un La a 0,25 ;
+/// a droite la seconde jouee, 0,9 * (s mod 1000) / 1000 : ce qu'on entend dit
+/// ou l'on est.
+const STREAM_S: usize = 12 * 60;
+
+fn stream_right(sec: usize) -> f32 {
+    let v = 0.9 * (sec % 1000) as f32 / 1000.0;
+    (v * 32768.0) as i16 as f32 / 32768.0
+}
+
+fn write_long_wav(path: &std::path::Path) -> std::io::Result<()> {
+    use std::io::Write;
+    let srate = 48000usize;
+    let frames = STREAM_S * srate;
+    let data_len = frames * 4;
+    let mut w = std::io::BufWriter::with_capacity(1 << 20, fs::File::create(path)?);
+    w.write_all(b"RIFF")?;
+    w.write_all(&((36 + data_len) as u32).to_le_bytes())?;
+    w.write_all(b"WAVEfmt ")?;
+    w.write_all(&16u32.to_le_bytes())?;
+    w.write_all(&1u16.to_le_bytes())?;
+    w.write_all(&2u16.to_le_bytes())?;
+    w.write_all(&(srate as u32).to_le_bytes())?;
+    w.write_all(&(srate as u32 * 4).to_le_bytes())?;
+    w.write_all(&4u16.to_le_bytes())?;
+    w.write_all(&16u16.to_le_bytes())?;
+    w.write_all(b"data")?;
+    w.write_all(&(data_len as u32).to_le_bytes())?;
+    let mut buf = Vec::with_capacity(srate * 4);
+    for sec in 0..STREAM_S {
+        buf.clear();
+        let r = ((stream_right(sec) * 32768.0) as i16).to_le_bytes();
+        for i in 0..srate {
+            let t = (sec * srate + i) as f64 / srate as f64;
+            let l = ((std::f64::consts::TAU * 440.0 * t).sin() * 0.25 * 32768.0) as i16;
+            buf.extend(l.to_le_bytes());
+            buf.extend(r);
+        }
+        w.write_all(&buf)?;
+    }
+    w.flush()
 }
 
 struct TestFile {
@@ -81,6 +140,9 @@ enum Phase {
     Route,
     /// Une prise de l'entree de la carte : sa duree exacte.
     Record,
+    /// Un long fichier lu en flux : la bonne seconde apres un saut, la
+    /// memoire bornee, les pics de tout le fichier.
+    Stream,
     /// La suite se passe hors du moteur audio : insertion, interface.
     Insert,
     OpenUi,
@@ -114,6 +176,7 @@ pub fn requested() -> Option<SelfTest> {
         route: None,
         rt_pos0: 0.0,
         rec: None,
+        stream: None,
         ui_at: None,
         keys_step: 0,
         wheels: 0,
@@ -332,6 +395,207 @@ impl SelfTest {
     }
 
     /// Rend vrai quand c'est fini.
+    fn start_stream(&mut self, a: &mut AudioHost) {
+        self.phase = Phase::Stream;
+        let _ = fs::create_dir_all(dir());
+        let path = dir().join("long_12min_stream.wav");
+        let t = Instant::now();
+        if let Err(e) = write_long_wav(&path) {
+            self.say(false, format!("flux : ecriture du long fichier : {e}"));
+            self.phase = Phase::Insert;
+            return;
+        }
+        let written = t.elapsed().as_secs_f64();
+        crate::log(
+            cp_abi::LOG_INFO,
+            &format!("[selftest] long fichier ecrit en {written:.1} s"),
+        );
+        let ticket = a.load_file(&path.to_string_lossy());
+        self.stream = Some(StreamT {
+            path,
+            ticket,
+            clip: None,
+            track: None,
+            voice: None,
+            step: 0,
+            t: Instant::now(),
+            t_load: Instant::now(),
+        });
+    }
+
+    /// L'essai du flux, une etape a la fois. Rend vrai quand il est fini.
+    fn check_stream(&mut self, a: &mut AudioHost) -> bool {
+        let Some(r) = crate::REAPER.get() else {
+            return true;
+        };
+        let Some(mut st) = self.stream.take() else {
+            return true;
+        };
+        a.poll();
+        let srate = 48000.0;
+        let blocks = a.stats().blocks;
+        let done = match st.step {
+            // Pret ? Puis un depart a 611,5 s, dans une piste dont le master
+            // se tait (rien ne sort des enceintes).
+            0 => match a.ticket(st.ticket) {
+                cp_audio::Load::Pending if st.t.elapsed() < Duration::from_secs(10) => false,
+                cp_audio::Load::Pending => {
+                    self.say(false, "flux : toujours en attente apres 10 s".into());
+                    true
+                }
+                cp_audio::Load::Failed(e) => {
+                    self.say(false, format!("flux : {e}"));
+                    true
+                }
+                cp_audio::Load::Ready(c) => {
+                    st.clip = Some(c);
+                    let ready_ms = st.t_load.elapsed().as_secs_f64() * 1000.0;
+                    let frames = a.clip_info(c).map_or(0, |i| i.0);
+                    self.say(
+                        a.clip_streamed(c) && frames == (STREAM_S * 48000) as i64,
+                        format!(
+                            "flux : 12 min ouvertes en flux ({}), pretes en {ready_ms:.0} ms, {frames} frames",
+                            a.clip_streamed(c)
+                        ),
+                    );
+                    match r.insert_track(0, "CP selftest stream") {
+                        Some(g) => {
+                            r.set_master_mute(true);
+                            if a.route_port(3, Some(&g)) {
+                                st.voice = a.play(3, c, (611.5 * srate) as i64, 0, false, 1.0);
+                                let _ = a.port_levels(3);
+                            }
+                            st.track = Some(g);
+                        }
+                        None => self.say(false, "flux : piste refusee".into()),
+                    }
+                    st.step = 1;
+                    st.t = Instant::now();
+                    st.voice.is_none()
+                }
+            },
+            // Ce qu'on entend dit la seconde : 611 et 612 -> 0,550.
+            1 if st.t.elapsed() < Duration::from_millis(800) => false,
+            1 => {
+                let [l, rr] = a.port_levels(3);
+                let want = stream_right(612);
+                let pos = st.voice.and_then(|v| a.voice(v)).map_or(0.0, |x| x.0) / srate;
+                let s = a.stats();
+                self.say(
+                    ((rr - want).abs() < 0.003 && (l - 0.25).abs() < 0.01 && s.stream_misses == 0)
+                        || blocks == 0,
+                    format!(
+                        "flux : depart a 611,5 s, on entend la seconde {:.3} (attendu {want:.3}), le La a {l:.3}, tete a {pos:.2} s, {} bloc(s) sans page, {} Mo en memoire",
+                        rr,
+                        s.stream_misses,
+                        s.bytes >> 20
+                    ),
+                );
+                // Un saut en arriere, a 100,25 s : une voix neuve.
+                if let (Some(v), Some(c)) = (st.voice, st.clip) {
+                    a.stop(v, 0.01);
+                    st.voice = a.play(3, c, (100.25 * srate) as i64, 0, false, 1.0);
+                }
+                st.step = 9;
+                st.t = Instant::now();
+                false
+            }
+            // L ancienne voix s eteint en 10 ms : la crete se mesure apres.
+            9 if st.t.elapsed() < Duration::from_millis(150) => false,
+            9 => {
+                let _ = a.port_levels(3);
+                st.step = 2;
+                st.t = Instant::now();
+                false
+            }
+            2 if st.t.elapsed() < Duration::from_millis(600) => false,
+            2 => {
+                let [_, rr] = a.port_levels(3);
+                let want = stream_right(101);
+                let s = a.stats();
+                self.say(
+                    ((rr - want).abs() < 0.003 && s.stream_misses == 0) || blocks == 0,
+                    format!(
+                        "flux : saut a 100,25 s, on entend la seconde {rr:.3} (attendu {want:.3}), {} bloc(s) sans page",
+                        s.stream_misses
+                    ),
+                );
+                st.step = 3;
+                st.t = Instant::now();
+                false
+            }
+            // Les pics de tout le fichier : chaque minute monte.
+            3 => {
+                let c = st.clip.expect("clip");
+                let (mut lo, mut hi) = (vec![0.0; 12], vec![0.0; 12]);
+                let n = a.peaks(c, Some(1), 0.0, (60 * 48000) as f64, &mut lo, &mut hi);
+                let full = n == 12 && hi[11] > 0.5;
+                if full || st.t.elapsed() > Duration::from_secs(30) {
+                    let want = stream_right(60 * 10 + 59);
+                    self.say(
+                        full && (hi[10] - want).abs() < 0.003,
+                        format!(
+                            "flux : pics des 12 minutes en {:.1} s, minute 10 : {:.3} (attendu {want:.3})",
+                            st.t.elapsed().as_secs_f64(),
+                            hi[10]
+                        ),
+                    );
+                    st.step = 4;
+                    st.t = Instant::now();
+                }
+                false
+            }
+            // Rendu : la voix, la piste, le clip ; les pages partent.
+            _ => {
+                if st.step == 4 {
+                    if let Some(v) = st.voice.take() {
+                        a.stop(v, 0.0);
+                    }
+                    a.route_port(3, None);
+                    if let Some(g) = st.track.take() {
+                        r.delete_track(&g);
+                    }
+                    r.set_master_mute(false);
+                    if let Some(c) = st.clip.take() {
+                        a.release(c);
+                    }
+                    st.step = 5;
+                }
+                let s = a.stats();
+                if s.streams == 0 || st.t.elapsed() > Duration::from_secs(5) {
+                    self.say(
+                        s.streams == 0,
+                        format!(
+                            "flux : le clip rendu, ses pages parties ({} flux)",
+                            s.streams
+                        ),
+                    );
+                    let _ = fs::remove_file(&st.path);
+                    true
+                } else {
+                    false
+                }
+            }
+        };
+        if !done {
+            self.stream = Some(st);
+        } else if st.track.is_some() || st.voice.is_some() {
+            // Une sortie en cours de route : tout rendre quand meme.
+            if let Some(v) = st.voice.take() {
+                a.stop(v, 0.0);
+            }
+            a.route_port(3, None);
+            if let Some(g) = st.track.take() {
+                r.delete_track(&g);
+            }
+            r.set_master_mute(false);
+            if let Some(c) = st.clip.take() {
+                a.release(c);
+            }
+        }
+        done
+    }
+
     fn check_route(&mut self, a: &mut AudioHost) -> bool {
         let Some(r) = crate::REAPER.get() else {
             return true;
@@ -652,7 +916,7 @@ impl SelfTest {
             }
             Phase::Record => {
                 let Some((id, s0, s1, t)) = self.rec else {
-                    self.phase = Phase::Insert;
+                    self.start_stream(a);
                     return false;
                 };
                 a.poll();
@@ -672,7 +936,7 @@ impl SelfTest {
                             ),
                         );
                         a.release(c);
-                        self.phase = Phase::Insert;
+                        self.start_stream(a);
                     }
                     cp_audio::RecState::Failed(e) => {
                         let rb = a.rec_ring().map(|r| r.last_block());
@@ -686,7 +950,7 @@ impl SelfTest {
                                 a.core().clock_now()
                             ),
                         );
-                        self.phase = Phase::Insert;
+                        self.start_stream(a);
                     }
                     _ if t.elapsed() > Duration::from_secs(5) => {
                         // Sans carte son ouverte, rien n'arrive : on le dit.
@@ -695,9 +959,14 @@ impl SelfTest {
                             blocks == 0,
                             format!("prise : toujours en cours apres 5 s ({blocks} blocs audio)"),
                         );
-                        self.phase = Phase::Insert;
+                        self.start_stream(a);
                     }
                     _ => {}
+                }
+            }
+            Phase::Stream => {
+                if self.check_stream(a) {
+                    self.phase = Phase::Insert;
                 }
             }
             Phase::Insert
@@ -1409,6 +1678,7 @@ impl SelfTest {
                 | Phase::Stretch
                 | Phase::Route
                 | Phase::Record
+                | Phase::Stream
         )
     }
 
