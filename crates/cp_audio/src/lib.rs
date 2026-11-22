@@ -142,6 +142,34 @@ static HOOK_CORE: OnceLock<Arc<Core>> = OnceLock::new();
 static CLOCK: OnceLock<std::sync::Mutex<cp_engine::extclock::ExtClock>> = OnceLock::new();
 static CLOCK_DEV: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(-1);
 static MIDI_IN: OnceLock<cp_sys::midi_in::MidiInputs> = OnceLock::new();
+/// Les notes jouees sur les entrees MIDI (la saisie pas a pas de
+/// l'editeur) : ecoutees si `NOTES_N` > 0 (le nombre d'entrees), posees par
+/// le crochet dans un anneau que le fil principal vide.
+static NOTES_N: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(0);
+const NOTES_CAP: usize = 1024;
+static NOTES: [std::sync::atomic::AtomicU32; NOTES_CAP] =
+    [const { std::sync::atomic::AtomicU32::new(0) }; NOTES_CAP];
+static NOTES_W: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// Fil audio : les notes (et leurs relachements) des entrees MIDI.
+fn notes_block(m: &cp_sys::midi_in::MidiInputs, n: i32) {
+    use std::sync::atomic::Ordering::{Relaxed, Release};
+    let mut w = NOTES_W.load(Relaxed);
+    for dev in 0..n.min(64) {
+        m.for_each(dev, |_, msg| {
+            if msg.len() >= 3 && matches!(msg[0] & 0xF0, 0x80 | 0x90) {
+                let v = (msg[0] as u32)
+                    | (msg[1] as u32) << 8
+                    | (msg[2] as u32) << 16
+                    | (dev as u32) << 24;
+                NOTES[w % NOTES_CAP].store(v, Relaxed);
+                w = w.wrapping_add(1);
+            }
+        });
+    }
+    NOTES_W.store(w, Release);
+}
+
 /// L'anneau de l'enregistrement, rempli par le crochet (pose a la premiere
 /// prise).
 static REC_RING: OnceLock<Arc<record::RecRing>> = OnceLock::new();
@@ -166,6 +194,12 @@ fn on_audio(is_post: bool, frames: i32, srate: f64) {
                 if let Some(l) = AudioHook::input(c0, frames) {
                     ring.push_block(core.clock_now(), l, AudioHook::input(c1, frames));
                 }
+            }
+        }
+        let nin = NOTES_N.load(std::sync::atomic::Ordering::Relaxed);
+        if nin > 0 {
+            if let Some(m) = MIDI_IN.get() {
+                notes_block(m, nin);
             }
         }
         let dev = CLOCK_DEV.load(std::sync::atomic::Ordering::Relaxed);
@@ -236,6 +270,8 @@ pub struct AudioHost {
     /// L'enregistrement (cree a la premiere prise), et les prises finies.
     rec: Option<record::Recorder>,
     rec_done: Vec<(u32, Result<ClipH, String>)>,
+    /// Les notes MIDI deja lues.
+    notes_r: usize,
 }
 
 /// Ou en est une prise.
@@ -299,6 +335,7 @@ impl AudioHost {
             shift_factory: None,
             rec: None,
             rec_done: Vec::new(),
+            notes_r: 0,
         }
     }
 
@@ -479,6 +516,36 @@ impl AudioHost {
         if self.rec_done.len() > 64 {
             self.rec_done.drain(..self.rec_done.len() - 64);
         }
+    }
+
+    /// Ecouter (ou plus) les notes jouees sur toutes les entrees MIDI : la
+    /// saisie pas a pas de l'editeur.
+    pub fn midi_listen(&mut self, on: bool) {
+        let n = if on {
+            self.reaper.map_or(0, |r| {
+                r.midi_inputs().iter().map(|x| x.0 + 1).max().unwrap_or(0)
+            })
+        } else {
+            0
+        };
+        self.notes_r = NOTES_W.load(std::sync::atomic::Ordering::Acquire);
+        NOTES_N.store(n, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Les notes arrivees depuis le dernier appel : (statut, note, velocite)
+    /// dans les octets bas, l'entree dans le haut.
+    pub fn midi_notes(&mut self) -> Vec<u32> {
+        let w = NOTES_W.load(std::sync::atomic::Ordering::Acquire);
+        let from = if w.wrapping_sub(self.notes_r) > NOTES_CAP {
+            w - NOTES_CAP
+        } else {
+            self.notes_r
+        };
+        let out = (from..w)
+            .map(|i| NOTES[i % NOTES_CAP].load(std::sync::atomic::Ordering::Relaxed))
+            .collect();
+        self.notes_r = w;
+        out
     }
 
     /// La clock MIDI externe : ecouter l'entree MIDI `dev` (son rang dans

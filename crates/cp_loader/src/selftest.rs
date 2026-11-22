@@ -296,6 +296,8 @@ impl SelfTest {
         // La clock externe ecoute l'entree MIDI 0 pendant cet essai : le
         // vrai objet MIDI de REAPER se lit dans le crochet audio.
         a.set_clock_device(0);
+        // Et la saisie pas a pas ecoute toutes les entrees en meme temps.
+        a.midi_listen(true);
         // Rien ne doit sortir des enceintes de Cedric : le master du projet
         // de test se tait (la piste l'alimente, pour que REAPER la traite).
         r.set_master_mute(true);
@@ -412,6 +414,15 @@ impl SelfTest {
                     ),
                 );
                 a.set_clock_device(-1);
+                let notes = a.midi_notes();
+                a.midi_listen(false);
+                self.say(
+                    notes.iter().all(|e| matches!(e & 0xF0, 0x80 | 0x90)),
+                    format!(
+                        "saisie pas a pas : toutes les entrees MIDI ecoutees dans le crochet ({} note(s) jouee(s))",
+                        notes.len()
+                    ),
+                );
                 true
             }
         }

@@ -947,3 +947,56 @@ fn accords_arpeges_et_euclides_du_menu() {
         .count();
     assert_eq!(n, 3);
 }
+
+#[test]
+fn la_saisie_pas_a_pas() {
+    let mut v = riff();
+    v.set_grid(0.5);
+    v.edit_cursor = Some(40.0);
+    // Eteinte : rien.
+    assert!(v.step_notes(&[0x90 | 60 << 8 | 100 << 16]).is_empty());
+    let menu = v.transform_menu();
+    assert!(menu.iter().flatten().any(|m| m.0 == 61 && !m.2));
+    assert_eq!(v.transform(61), vec![Act::StepListen(true)]);
+    // Une note : posee au curseur, longue d'un pas, le curseur avance.
+    let a = v.step_notes(&[0x90 | 60 << 8 | 90 << 16, 0x80 | 60 << 8]);
+    assert_eq!(
+        a,
+        vec![Act::Commit("CP Editor: step input"), Act::Seek(40.5)]
+    );
+    let at = |v: &Ed, q: f64| -> Vec<(i32, i32)> {
+        let mut x: Vec<(i32, i32)> = v
+            .midi()
+            .unwrap()
+            .roll
+            .notes
+            .iter()
+            .filter(|n| (n.qn0 - q).abs() < 1e-9 && (n.len - 0.5).abs() < 1e-9)
+            .map(|n| (n.pitch, n.vel))
+            .collect();
+        x.sort();
+        x
+    };
+    assert_eq!(at(&v, 40.0), vec![(60, 90)]);
+    // Trois notes ensemble : un accord au pas suivant, le curseur avance une
+    // fois.
+    let later = std::time::Instant::now() + std::time::Duration::from_millis(400);
+    let a = v.step_notes_at(
+        &[
+            0x90 | 64 << 8 | 80 << 16,
+            0x90 | 67 << 8 | 80 << 16,
+            0x90 | 72 << 8 | 80 << 16,
+        ],
+        later,
+    );
+    assert_eq!(
+        a,
+        vec![Act::Commit("CP Editor: step input"), Act::Seek(41.0)]
+    );
+    assert_eq!(at(&v, 40.5), vec![(64, 80), (67, 80), (72, 80)]);
+    // Pendant la lecture : rien.
+    v.playing = true;
+    assert!(v.step_notes(&[0x90 | 62 << 8 | 80 << 16]).is_empty());
+    v.playing = false;
+    assert_eq!(v.transform(61), vec![Act::StepListen(false)]);
+}

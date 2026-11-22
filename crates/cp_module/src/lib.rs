@@ -1432,6 +1432,8 @@ impl Module for App {
         if tp.clock.dev >= 0 {
             host.clock_device(tp.clock.dev);
         }
+        // Un module recharge repart sans saisie pas a pas.
+        host.midi_listen(false);
         let mut app = App {
             host,
             r,

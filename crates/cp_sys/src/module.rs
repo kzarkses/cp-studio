@@ -169,6 +169,18 @@ impl HostRef {
         (self.0.audio.levels)(port, v.as_mut_ptr());
         v
     }
+    /// Ecouter (ou plus) les notes des entrees MIDI.
+    pub fn midi_listen(&self, on: bool) {
+        (self.0.audio.midi_listen)(on as i32)
+    }
+    /// Les notes arrivees depuis le dernier appel (statut, note, velocite,
+    /// entree en octets).
+    pub fn midi_notes(&self) -> Vec<u32> {
+        let mut v = vec![0u32; 1024];
+        let n = (self.0.audio.midi_notes)(v.as_mut_ptr(), v.len());
+        v.truncate(n);
+        v
+    }
     /// La clock MIDI externe : ecouter l'entree `dev` (-1 : aucune).
     pub fn clock_device(&self, dev: i32) {
         (self.0.audio.clock_device)(dev)

@@ -282,6 +282,8 @@ pub enum Act {
     AudioCommit(&'static str),
     AudioReverse,
     AudioNormalize,
+    /// La saisie pas a pas : ecouter (ou plus) les claviers MIDI.
+    StepListen(bool),
 }
 
 /// Une cible de la barre : rectangle et ce qu'elle est.
@@ -493,6 +495,11 @@ pub struct Ed {
     last_chan: i32,
     /// Le hasard reproductible des arpeges (un tirage par geste).
     gen_seed: u64,
+    /// La saisie pas a pas depuis un clavier MIDI.
+    pub step_input: bool,
+    /// Le dernier pas pose : sa place, sa longueur, son heure (les notes
+    /// jouees ensemble font un accord).
+    step: Option<(f64, f64, std::time::Instant)>,
     dirty: bool,
     /// Les zones a redessiner quand tout ne l'est pas (un survol).
     damage: Vec<cp_gfx::IRect>,
@@ -547,6 +554,8 @@ impl Ed {
             last_vel: 100,
             last_chan: 0,
             gen_seed: 0,
+            step_input: false,
+            step: None,
             dirty: true,
             edit_cursor: None,
             guide: cp_ui::Guide::default(),
@@ -2600,6 +2609,11 @@ impl Ed {
             v.push(s(90 + k as u32, &format!("Euclid {p}/{n}")));
         }
         v.push(None);
+        v.push(Some((
+            61,
+            "Step input from MIDI keyboard".to_string(),
+            self.step_input,
+        )));
         v.push(s(60, "Open in REAPER's MIDI editor"));
         v
     }
@@ -2618,6 +2632,11 @@ impl Ed {
                 return Vec::new();
             }
             60 => return vec![Act::OpenReaper],
+            61 => {
+                self.step_input = !self.step_input;
+                self.step = None;
+                return vec![Act::StepListen(self.step_input)];
+            }
             _ => {}
         }
         self.dirty = true;
@@ -2700,6 +2719,69 @@ impl Ed {
             _ => (0, ""),
         };
         self.commit_if(k, label)
+    }
+
+    /// La saisie pas a pas : chaque note jouee sur un clavier MIDI se pose
+    /// au curseur d'edition, longue d'un pas de grille, et le curseur avance
+    /// d'autant ; des notes jouees ensemble (60 ms) font un accord. Rien
+    /// pendant la lecture. `ev` : (statut, note, velocite) en octets.
+    pub fn step_notes(&mut self, ev: &[u32]) -> Vec<Act> {
+        self.step_notes_at(ev, std::time::Instant::now())
+    }
+
+    /// `step_notes`, a l'heure `now` (les essais).
+    pub fn step_notes_at(&mut self, ev: &[u32], now: std::time::Instant) -> Vec<Act> {
+        if !self.step_input || self.playing || ev.is_empty() {
+            return Vec::new();
+        }
+        let len = if self.grid > 0.0 {
+            self.grid
+        } else {
+            self.last_len.max(1.0 / 64.0)
+        };
+        let mut out = Vec::new();
+        let mut n = 0;
+        for &e in ev {
+            let (st, p, v) = (e & 0xFF, (e >> 8 & 0x7F) as i32, (e >> 16 & 0x7F) as i32);
+            if st & 0xF0 != 0x90 || v == 0 {
+                continue;
+            }
+            let chord = self
+                .step
+                .filter(|s| now.duration_since(s.2) < std::time::Duration::from_millis(60));
+            let (q, len) = match chord {
+                Some((q, l, _)) => (q, l),
+                None => (self.edit_cursor.unwrap_or(0.0).max(0.0), len),
+            };
+            let chan = self.last_chan;
+            let Some(md) = self.midi_mut() else {
+                return Vec::new();
+            };
+            if md
+                .roll
+                .notes
+                .iter()
+                .any(|x| x.pitch == p && (x.qn0 - q).abs() < EPS)
+            {
+                continue;
+            }
+            let id = md.roll.insert(q, len, p, chan, v);
+            if chord.is_none() {
+                md.roll.select_only(id);
+                out.push(Act::Seek(q + len));
+                self.edit_cursor = Some(q + len);
+            } else {
+                md.roll.add_sel(id);
+            }
+            self.step = Some((q, len, now));
+            self.last_vel = v;
+            n += 1;
+        }
+        if n > 0 {
+            self.dirty = true;
+            out.insert(0, Act::Commit("CP Editor: step input"));
+        }
+        out
     }
 
     /// Un nouveau tirage pour un generateur.

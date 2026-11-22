@@ -390,6 +390,7 @@ impl App {
             match a {
                 Act::Commit(label) => self.ed_commit(label),
                 Act::Seek(q) => r.set_edit_cursor(r.qn_to_time(q)),
+                Act::StepListen(on) => self.host.midi_listen(on),
                 Act::Play => r.main_on_command(40044),
                 Act::Undo | Act::Redo => {
                     r.main_on_command(if a == Act::Undo { 40029 } else { 40030 });
@@ -558,6 +559,14 @@ impl App {
         }
         if self.ed.win.is_none() {
             return;
+        }
+        // La saisie pas a pas : les notes jouees sur les claviers MIDI.
+        if self.ed.ed.step_input {
+            let ev = self.host.midi_notes();
+            if !ev.is_empty() {
+                let acts = self.ed.ed.step_notes(&ev);
+                self.ed_act(acts);
+            }
         }
         let r = self.r;
         // L'item a ouvrir (action, Guitar Tab, rechargement).
@@ -840,6 +849,10 @@ impl App {
 
     pub(crate) fn ed_close(&mut self, user: bool) {
         self.ed_audition_off();
+        if self.ed.ed.step_input {
+            self.ed.ed.step_input = false;
+            self.host.midi_listen(false);
+        }
         let in_band = self.ed_in_band();
         if let Some(w) = &mut self.ed.win {
             w.closing = true;

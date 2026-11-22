@@ -87,6 +87,12 @@ pub trait Host: Send + Sync {
     }
     /// La clock externe : l'entree ecoutee.
     fn clock_device(&self, _dev: i32) {}
+    /// Les notes des entrees MIDI : ecouter.
+    fn midi_listen(&self, _on: bool) {}
+    /// Les notes arrivees.
+    fn midi_notes(&self) -> Vec<u32> {
+        Vec::new()
+    }
     /// La clock externe : ses 14 valeurs.
     fn clock_read(&self) -> Option<[f64; 14]> {
         None
@@ -163,6 +169,8 @@ static API: HostApi = HostApi {
         levels: a_levels,
         clock_device: a_clock_device,
         clock_read: a_clock_read,
+        midi_listen: a_midi_listen,
+        midi_notes: a_midi_notes,
     },
     create_view: v_create,
     destroy_window: v_destroy,
@@ -410,6 +418,21 @@ extern "C" fn a_levels(port: u32, out: *mut f32) -> i32 {
         }
         None => 0,
     }
+}
+
+extern "C" fn a_midi_listen(on: i32) {
+    with((), |h| h.midi_listen(on != 0));
+}
+
+extern "C" fn a_midi_notes(out: *mut u32, cap: usize) -> usize {
+    if out.is_null() || cap == 0 {
+        return 0;
+    }
+    let v = with(Vec::new(), |h| h.midi_notes());
+    let n = v.len().min(cap);
+    // SAFETY: le module passe `cap` u32 a lui.
+    unsafe { std::ptr::copy_nonoverlapping(v.as_ptr(), out, n) };
+    n
 }
 
 extern "C" fn a_clock_device(dev: i32) {

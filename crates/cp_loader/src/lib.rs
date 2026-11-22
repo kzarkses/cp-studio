@@ -296,6 +296,14 @@ impl Host for LoaderHost {
         audio(0.0, |a| a.core().srate())
     }
 
+    fn midi_listen(&self, on: bool) {
+        audio((), |a| a.midi_listen(on));
+    }
+
+    fn midi_notes(&self) -> Vec<u32> {
+        audio(Vec::new(), |a| a.midi_notes())
+    }
+
     fn clock_device(&self, dev: i32) {
         audio((), |a| a.set_clock_device(dev));
     }

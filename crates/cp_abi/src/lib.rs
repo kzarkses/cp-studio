@@ -13,7 +13,7 @@ use core::ffi::{c_char, c_void};
 
 /// Version du contrat. Un entier : jamais de mineure (le piege du double de
 /// l'ancien moteur, ou `1.10` valait `1.1`).
-pub const ABI: u32 = 10;
+pub const ABI: u32 = 11;
 
 /// Le symbole exporte par le module.
 pub const ENTRY_SYMBOL: &[u8] = b"cp_module_entry\0";
@@ -253,6 +253,12 @@ pub struct AudioApi {
     /// les Stop, les impulsions, puis la position du maitre MAINTENANT en
     /// noires. 1 si publie. ABI 10.
     pub clock_read: extern "C" fn(out: *mut f64) -> i32,
+    /// Ecouter (1) ou plus (0) les notes des entrees MIDI. ABI 11.
+    pub midi_listen: extern "C" fn(on: i32),
+    /// Les notes arrivees depuis le dernier appel, au plus `cap` : (statut,
+    /// note, velocite, entree) en octets, du bas vers le haut. Rend leur
+    /// nombre. ABI 11.
+    pub midi_notes: extern "C" fn(out: *mut u32, cap: usize) -> usize,
 }
 
 /// Ce que le module offre au chargeur. Tous les appels se font sur le fil
