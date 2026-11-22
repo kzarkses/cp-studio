@@ -75,8 +75,8 @@ impl RecRing {
         let n = l.len();
         let w0 = self.w.load(Relaxed);
         let mut w = w0;
-        for k in 0..n {
-            let a = l[k] as f32;
+        for (k, &x) in l.iter().enumerate() {
+            let a = x as f32;
             let b = r.and_then(|r| r.get(k)).map_or(a, |&x| x as f32);
             self.buf[w % RN].store(a.to_bits(), Relaxed);
             self.buf[(w + 1) % RN].store(b.to_bits(), Relaxed);
