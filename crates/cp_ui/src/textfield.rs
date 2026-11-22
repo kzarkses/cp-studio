@@ -287,6 +287,7 @@ mod tests {
                 shift: true,
                 ctrl: true,
                 alt: false,
+                win: false,
             },
         );
         assert_eq!(f.selected(), "kick ");

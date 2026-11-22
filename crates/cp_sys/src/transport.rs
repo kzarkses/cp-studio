@@ -144,6 +144,70 @@ impl Reaper {
         unsafe { CStr::from_ptr(p) }.to_string_lossy().into_owned()
     }
 
+    /// Les raccourcis PAR DEFAUT d'une section d'actions de REAPER (32060 :
+    /// l'editeur MIDI) : (touche, action, drapeaux), tels que REAPER les
+    /// tient dans sa `KbdSectionInfo`.
+    pub fn section_default_keys(&self, section: i32) -> Vec<(u32, u32, u32)> {
+        /// `KbdKeyBindingInfo` (reaper_plugin.h).
+        #[repr(C)]
+        struct Binding {
+            key: i32,
+            cmd: i32,
+            flags: i32,
+        }
+        /// Le debut de `KbdSectionInfo` (reaper_plugin.h), jusqu'aux defauts.
+        #[repr(C)]
+        struct Head {
+            unique_id: i32,
+            name: *const c_char,
+            action_list: P,
+            action_list_cnt: i32,
+            def_keys: *const Binding,
+            def_keys_cnt: i32,
+        }
+        type F = unsafe extern "C" fn(i32) -> P;
+        // SAFETY: KbdSectionInfo* SectionFromUniqueID(int uniqueID).
+        let Some(f) = (unsafe { self.api::<F>(c"SectionFromUniqueID") }) else {
+            return Vec::new();
+        };
+        // SAFETY: fil principal ; la section est tenue par REAPER.
+        let p = unsafe { f(section) } as *const Head;
+        if p.is_null() {
+            return Vec::new();
+        }
+        // SAFETY: `p` pointe sur une KbdSectionInfo, dont `Head` reprend le
+        // debut champ pour champ (repr(C), memes alignements).
+        let h = unsafe { &*p };
+        if h.unique_id != section || h.def_keys.is_null() || !(0..100_000).contains(&h.def_keys_cnt)
+        {
+            return Vec::new();
+        }
+        // SAFETY: REAPER annonce `def_keys_cnt` liaisons a `def_keys`.
+        let keys = unsafe { std::slice::from_raw_parts(h.def_keys, h.def_keys_cnt as usize) };
+        keys.iter()
+            .map(|b| (b.key as u32, b.cmd as u32, b.flags as u32))
+            .collect()
+    }
+
+    /// Le nom d'une action d'une section (32060 : l'editeur MIDI).
+    pub fn section_command_text(&self, section: i32, cmd: i32) -> String {
+        type S = unsafe extern "C" fn(i32) -> P;
+        type F = unsafe extern "C" fn(i32, P) -> *const c_char;
+        // SAFETY: SectionFromUniqueID ; kbd_getTextFromCmd(int, KbdSectionInfo*).
+        let (Some(s), Some(f)) = (unsafe { self.api::<S>(c"SectionFromUniqueID") }, unsafe {
+            self.api::<F>(c"kbd_getTextFromCmd")
+        }) else {
+            return String::new();
+        };
+        // SAFETY: fil principal ; chaine tenue par REAPER.
+        let p = unsafe { f(cmd, s(section)) };
+        if p.is_null() {
+            return String::new();
+        }
+        // SAFETY: chaine terminee par zero.
+        unsafe { CStr::from_ptr(p) }.to_string_lossy().into_owned()
+    }
+
     /// Le nom stable d'une action (« _RS... », « _SWS_... ») ; `None` pour une
     /// action native (son numero est stable).
     pub fn command_name(&self, cmd: i32) -> Option<String> {

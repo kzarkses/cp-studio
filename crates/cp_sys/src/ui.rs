@@ -485,6 +485,7 @@ pub struct Mods {
     pub shift: bool,
     pub ctrl: bool,
     pub alt: bool,
+    pub win: bool,
 }
 
 pub fn mods() -> Mods {
@@ -494,6 +495,7 @@ pub fn mods() -> Mods {
         shift: down(0x10),
         ctrl: down(0x11),
         alt: down(0x12),
+        win: down(0x5B) || down(0x5C),
     }
 }
 

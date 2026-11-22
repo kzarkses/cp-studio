@@ -58,6 +58,59 @@ unsafe extern "system" {
     fn OleInitialize(reserved: Raw) -> i32;
 }
 
+#[link(name = "shell32")]
+unsafe extern "system" {
+    fn DragAcceptFiles(hwnd: Raw, accept: i32);
+    fn DragQueryFileW(drop: Raw, i: u32, buf: *mut u16, n: u32) -> u32;
+    fn DragQueryPoint(drop: Raw, pt: *mut [i32; 2]) -> i32;
+    fn DragFinish(drop: Raw);
+}
+
+#[link(name = "user32")]
+unsafe extern "system" {
+    fn PeekMessageW(msg: *mut [usize; 6], hwnd: Raw, min: u32, max: u32, remove: u32) -> i32;
+}
+
+/// `WM_DROPFILES`.
+pub const WM_DROPFILES: u32 = 0x0233;
+
+/// La fenetre accepte (ou plus) des fichiers deposes : ils arrivent en
+/// `WM_DROPFILES` (Windows tient le geste ; aucun objet COM a nous).
+pub fn accept_files(owner: Hwnd, on: bool) {
+    // SAFETY: fenetre vivante (ou appel sans effet).
+    unsafe { DragAcceptFiles(owner.0 as Raw, on as i32) };
+}
+
+/// Les fichiers d'un `WM_DROPFILES` (son `wParam`) et le point du depot
+/// (pixels de la fenetre). Libere le depot.
+pub fn take_drop(hdrop: usize) -> (Vec<String>, i32, i32) {
+    let h = hdrop as Raw;
+    let mut out = Vec::new();
+    let mut pt = [0i32; 2];
+    // SAFETY: `hdrop` vient du message ; tampons de la taille annoncee ;
+    // DragFinish une seule fois.
+    unsafe {
+        let n = DragQueryFileW(h, 0xFFFF_FFFF, null_mut(), 0);
+        for i in 0..n {
+            let len = DragQueryFileW(h, i, null_mut(), 0) as usize;
+            let mut buf = vec![0u16; len + 1];
+            let got = DragQueryFileW(h, i, buf.as_mut_ptr(), buf.len() as u32) as usize;
+            out.push(String::from_utf16_lossy(&buf[..got.min(len)]));
+        }
+        DragQueryPoint(h, &mut pt);
+        DragFinish(h);
+    }
+    (out, pt[0], pt[1])
+}
+
+/// Un message `msg` attend-il dans la file de la fenetre (sans le retirer) ?
+pub fn pending(owner: Hwnd, msg: u32) -> bool {
+    let mut m = [0usize; 6];
+    // SAFETY: tampon de la taille d'un MSG (6 mots sur 64 bits, avec le
+    // point et le remplissage) ; PM_NOREMOVE.
+    unsafe { PeekMessageW(&mut m, owner.0 as Raw, msg, msg, 0) != 0 }
+}
+
 const DROPEFFECT_COPY: u32 = 1;
 const DROPEFFECT_LINK: u32 = 4;
 const DRAGDROP_S_DROP: i32 = 0x0004_0100;

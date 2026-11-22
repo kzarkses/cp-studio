@@ -36,6 +36,8 @@ pub struct Mods {
     pub shift: bool,
     pub ctrl: bool,
     pub alt: bool,
+    /// La touche Windows (REAPER s'en sert dans ses gestes souris).
+    pub win: bool,
 }
 
 /// Un evenement d'entree, en pixels de la vue.

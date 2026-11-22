@@ -655,6 +655,126 @@ impl Reaper {
         unsafe { m(it, tr) }
     }
 
+    /// Le magnetisme de REAPER sur un temps (s) : sa grille, ses reglages ;
+    /// le temps tel quel si le magnetisme est coupe.
+    pub fn snap_time(&self, t: f64) -> f64 {
+        type F = unsafe extern "C" fn(P, f64) -> f64;
+        match self.tf::<F>(c"SnapToGrid") {
+            // SAFETY: double SnapToGrid(ReaProject*, double) ; projet nul =
+            // courant.
+            Some(f) => unsafe { f(null_mut(), t) },
+            None => t,
+        }
+    }
+
+    /// Un fichier audio pose sur une piste a `pos` (s), en un item de toute
+    /// sa longueur. Les cretes sont construites. Rend le GUID de l'item.
+    pub fn insert_audio_item(&self, track: &str, path: &str, pos: f64) -> Option<String> {
+        type Add = unsafe extern "C" fn(P) -> P;
+        type AddTake = unsafe extern "C" fn(P) -> P;
+        type Create = unsafe extern "C" fn(*const c_char) -> P;
+        type SetSrc = unsafe extern "C" fn(P, P) -> bool;
+        type Len = unsafe extern "C" fn(P, *mut bool) -> f64;
+        type Peaks = unsafe extern "C" fn(P, i32) -> i32;
+        type SetVal = unsafe extern "C" fn(P, *const c_char, f64) -> bool;
+        type Upd = unsafe extern "C" fn(P) -> bool;
+        let tr = self.track_of(track)?;
+        let add: Add = self.tf(c"AddMediaItemToTrack")?;
+        let add_take: AddTake = self.tf(c"AddTakeToMediaItem")?;
+        let create: Create = self.tf(c"PCM_Source_CreateFromFile")?;
+        let set_src: SetSrc = self.tf(c"SetMediaItemTake_Source")?;
+        let len: Len = self.tf(c"GetMediaSourceLength")?;
+        let peaks: Peaks = self.tf(c"PCM_Source_BuildPeaks")?;
+        let set: SetVal = self.tf(c"SetMediaItemInfo_Value")?;
+        let upd: Upd = self.tf(c"UpdateItemInProject")?;
+        let c = CString::new(path).ok()?;
+        let name = std::path::Path::new(path)
+            .file_stem()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        // SAFETY: piste vivante ; chaque pointeur rendu par REAPER est verifie
+        // non nul ; la source passe a la prise (REAPER la detruit avec elle).
+        unsafe {
+            let src = create(c.as_ptr());
+            if src.is_null() {
+                return None;
+            }
+            let mut qn = false;
+            let l = len(src, &mut qn);
+            let l = if qn { self.qn_to_time(l) } else { l };
+            if l <= 0.0 {
+                return None;
+            }
+            let it = add(tr);
+            if it.is_null() {
+                return None;
+            }
+            let tk = add_take(it);
+            if tk.is_null() {
+                return None;
+            }
+            set_src(tk, src);
+            self.tk_str(tk, "P_NAME", Some(&name));
+            set(it, c"D_POSITION".as_ptr(), pos.max(0.0));
+            set(it, c"D_LENGTH".as_ptr(), l);
+            // Les cretes : la vue les lit tout de suite.
+            if peaks(src, 0) != 0 {
+                let t0 = std::time::Instant::now();
+                while peaks(src, 1) != 0 && t0.elapsed().as_secs_f64() < 10.0 {}
+                peaks(src, 2);
+            }
+            upd(it);
+            self.it_str(it, "GUID", None)
+        }
+    }
+
+    /// Une copie d'un item sur une piste, a `pos` (s) : son etat entier (ses
+    /// prises, ses donnees privees), de nouveaux GUID. Rend le GUID.
+    pub fn copy_item(&self, item: &str, track: &str, pos: f64) -> Option<String> {
+        type GetChunk = unsafe extern "C" fn(P, *mut c_char, i32, bool) -> bool;
+        type SetChunk = unsafe extern "C" fn(P, *const c_char, bool) -> bool;
+        type Add = unsafe extern "C" fn(P) -> P;
+        type SetVal = unsafe extern "C" fn(P, *const c_char, f64) -> bool;
+        let src = self.find_item(item, None)?;
+        let tr = self.track_of(track)?;
+        let get: GetChunk = self.tf(c"GetItemStateChunk")?;
+        let put: SetChunk = self.tf(c"SetItemStateChunk")?;
+        let add: Add = self.tf(c"AddMediaItemToTrack")?;
+        let set: SetVal = self.tf(c"SetMediaItemInfo_Value")?;
+        // SAFETY: tampon de la taille annoncee ; item et piste vivants.
+        unsafe {
+            let mut buf = vec![0u8; 1 << 20];
+            if !get(
+                src,
+                buf.as_mut_ptr() as *mut c_char,
+                buf.len() as i32,
+                false,
+            ) {
+                return None;
+            }
+            let text = CStr::from_ptr(buf.as_ptr() as *const c_char).to_string_lossy();
+            // Sans ses GUID, REAPER en donne de neufs a l'item et a ses prises.
+            let chunk: String = text
+                .lines()
+                .filter(|l| {
+                    let t = l.trim_start();
+                    !(t.starts_with("IGUID ") || t.starts_with("GUID "))
+                })
+                .map(|l| format!("{l}\n"))
+                .collect();
+            let it = add(tr);
+            if it.is_null() {
+                return None;
+            }
+            let c = CString::new(chunk).ok()?;
+            if !put(it, c.as_ptr(), false) {
+                return None;
+            }
+            set(it, c"D_POSITION".as_ptr(), pos.max(0.0));
+            self.it_str(it, "GUID", None)
+        }
+    }
+
     /// Un item MIDI vide sur une piste, de `t0` a `t1`. Rend son GUID.
     pub fn create_midi_item_on(&self, track: &str, name: &str, t0: f64, t1: f64) -> Option<String> {
         type NewMidi = unsafe extern "C" fn(P, f64, f64, *const bool) -> P;

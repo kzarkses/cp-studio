@@ -94,6 +94,7 @@ pub(crate) fn mods() -> Mods {
         shift: m.shift,
         ctrl: m.ctrl,
         alt: m.alt,
+        win: m.win,
     }
 }
 
@@ -124,11 +125,19 @@ impl Place {
     }
 }
 
+/// Le passage choisi dans le navigateur quand son fichier est depose dans
+/// Guitar Tab : (fichier, debut, fin en secondes du fichier). Guitar Tab le
+/// prend en posant la prise.
+pub(crate) static DROP_SECTION: std::sync::Mutex<Option<(String, f64, f64)>> =
+    std::sync::Mutex::new(None);
+
 /// Ce que le navigateur demande, branche sur le chargeur et REAPER.
 struct Adapter<'a> {
     host: HostRef,
     r: Reaper,
     hwnd: Hwnd,
+    /// La fenetre de Guitar Tab (un depot y arrive en WM_DROPFILES).
+    gtab: Option<Hwnd>,
     place: Place,
     perf: bool,
     action: &'a mut Option<u32>,
@@ -187,7 +196,16 @@ impl BrowserHost for Adapter<'_> {
         ui::release_capture();
         match cp_sys::shell::drag_file(self.hwnd, path) {
             DragResult::Dropped => {
-                if let Some((a, b)) = section {
+                // Depose dans Guitar Tab : c'est elle qui pose la prise (et
+                // garde le passage choisi).
+                let in_gtab = self
+                    .gtab
+                    .is_some_and(|g| cp_sys::shell::pending(g, cp_sys::shell::WM_DROPFILES));
+                if in_gtab {
+                    if let (Some((a, b)), Ok(mut s)) = (section, DROP_SECTION.lock()) {
+                        *s = Some((path.to_string(), a, b));
+                    }
+                } else if let Some((a, b)) = section {
                     self.r.trim_dropped(path, a, b);
                 }
                 true
@@ -459,6 +477,7 @@ impl App {
             host: self.host,
             r: self.r,
             hwnd,
+            gtab: self.gt.win.as_ref().map(|w| w.hwnd),
             place,
             perf: self.show_perf,
             action: &mut self.action,
@@ -751,6 +770,7 @@ impl App {
                 host: self.host,
                 r: self.r,
                 hwnd,
+                gtab: self.gt.win.as_ref().map(|w| w.hwnd),
                 place,
                 perf: self.show_perf,
                 action: &mut self.action,
@@ -1385,6 +1405,7 @@ impl Module for App {
             host: self.host,
             r: self.r,
             hwnd,
+            gtab: self.gt.win.as_ref().map(|w| w.hwnd),
             place,
             perf: self.show_perf,
             action: &mut self.action,
