@@ -154,7 +154,7 @@ impl Reaper {
     }
 
     /// La piste d'un GUID.
-    fn track_of(&self, guid: &str) -> Option<P> {
+    pub(crate) fn track_of(&self, guid: &str) -> Option<P> {
         self.tracks_raw()
             .into_iter()
             .find(|&t| self.tr_str(t, "GUID", None).as_deref() == Some(guid))
@@ -732,6 +732,17 @@ impl Reaper {
         if let (Some(f), Ok(c)) = (self.tf::<F>(c"Undo_EndBlock2"), CString::new(label)) {
             // SAFETY: projet nul = courant ; chaine vivante.
             unsafe { f(null_mut(), c.as_ptr(), what) };
+        }
+    }
+
+    /// Un pas d'annulation pour ce qui vient de changer (des valeurs posees
+    /// pendant un geste, sans bloc) : REAPER retient l'etat present, annuler
+    /// revient a celui d'avant le geste.
+    pub fn undo_point(&self, label: &str) {
+        type F = unsafe extern "C" fn(P, *const c_char);
+        if let (Some(f), Ok(c)) = (self.tf::<F>(c"Undo_OnStateChange2"), CString::new(label)) {
+            // SAFETY: projet nul = courant ; chaine vivante.
+            unsafe { f(null_mut(), c.as_ptr()) };
         }
     }
 

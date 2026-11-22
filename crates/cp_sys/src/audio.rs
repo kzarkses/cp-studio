@@ -283,6 +283,155 @@ impl Drop for Preview {
 }
 
 // ---------------------------------------------------------------------------
+// Entendre une note par sa piste
+// ---------------------------------------------------------------------------
+
+type PlayTrackFn = unsafe extern "C" fn(*mut c_void, *mut PreviewRegister, i32, f64) -> i32;
+type StopTrackFn = unsafe extern "C" fn(*mut c_void, *mut PreviewRegister) -> i32;
+
+/// Faire entendre une note dans l'editeur : un petit fichier MIDI (une note
+/// longue) joue en apercu de PISTE, donc par ses effets et son instrument,
+/// comme le fait l'editeur MIDI de REAPER. Elle sonne jusqu'a [`stop`].
+///
+/// [`stop`]: Audition::stop
+pub struct Audition {
+    reg: Box<PreviewRegister>,
+    src: Option<CppSource>,
+    playing: bool,
+    play: Option<PlayTrackFn>,
+    stop: Option<StopTrackFn>,
+}
+
+// SAFETY: le registre n'est touche que par le fil principal ; REAPER le lit
+// sous sa section critique.
+unsafe impl Send for Audition {}
+
+/// Une note de `secs` secondes a 120 BPM, format 0.
+fn one_note_smf(pitch: i32, chan: i32, vel: i32, secs: f64) -> Vec<u8> {
+    let ticks = (secs * 2.0 * 960.0) as u32;
+    let mut vlq = vec![(ticks & 0x7F) as u8];
+    let mut t = ticks >> 7;
+    while t > 0 {
+        vlq.insert(0, ((t & 0x7F) as u8) | 0x80);
+        t >>= 7;
+    }
+    let c = (chan.clamp(0, 15)) as u8;
+    let p = pitch.clamp(0, 127) as u8;
+    let v = vel.clamp(1, 127) as u8;
+    let mut trk = vec![
+        0x00,
+        0xFF,
+        0x51,
+        0x03,
+        0x07,
+        0xA1,
+        0x20,
+        0x00,
+        0x90 | c,
+        p,
+        v,
+    ];
+    trk.extend_from_slice(&vlq);
+    trk.extend_from_slice(&[0x80 | c, p, 0x00, 0x00, 0xFF, 0x2F, 0x00]);
+    let mut f = b"MThd\x00\x00\x00\x06\x00\x00\x00\x01\x03\xC0MTrk".to_vec();
+    f.extend_from_slice(&(trk.len() as u32).to_be_bytes());
+    f.extend_from_slice(&trk);
+    f
+}
+
+impl Audition {
+    pub fn new(r: &Reaper) -> Audition {
+        let mut reg = Box::new(PreviewRegister {
+            cs: CriticalSection([0; 5]),
+            src: null_mut(),
+            m_out_chan: -1,
+            curpos: 0.0,
+            loop_: false,
+            volume: 1.0,
+            peakvol: [0.0; 2],
+            preview_track: null_mut(),
+        });
+        // SAFETY: section critique dans une boite a adresse stable, detruite au Drop.
+        unsafe { InitializeCriticalSection(&mut reg.cs) };
+        Audition {
+            reg,
+            src: None,
+            playing: false,
+            // SAFETY: int PlayTrackPreview2Ex(ReaProject*, preview_register_t*,
+            // int flags, double measure_align) ; int StopTrackPreview2(ReaProject*,
+            // preview_register_t*).
+            play: unsafe { r.api::<PlayTrackFn>(c"PlayTrackPreview2Ex") },
+            // SAFETY: voir ci-dessus.
+            stop: unsafe { r.api::<StopTrackFn>(c"StopTrackPreview2") },
+        }
+    }
+
+    /// Fait sonner `pitch` sur la piste `track` (GUID), canal et velocite
+    /// donnes. Rend faux si REAPER refuse.
+    pub fn start(&mut self, r: &Reaper, track: &str, pitch: i32, chan: i32, vel: i32) -> bool {
+        self.stop();
+        let (Some(play), Some(tr)) = (self.play, r.track_of(track)) else {
+            return false;
+        };
+        type CreateFn = unsafe extern "C" fn(*const std::ffi::c_char, bool) -> *mut c_void;
+        type DestroyFn = unsafe extern "C" fn(*mut c_void);
+        // SAFETY: signatures de reaper_plugin_functions.h.
+        let (Some(create), Some(destroy)) = (
+            unsafe { r.api::<CreateFn>(c"PCM_Source_CreateFromFileEx") },
+            unsafe { r.api::<DestroyFn>(c"PCM_Source_Destroy") },
+        ) else {
+            return false;
+        };
+        let path = std::env::temp_dir().join("cp_studio_audition.mid");
+        if std::fs::write(&path, one_note_smf(pitch, chan, vel, 30.0)).is_err() {
+            return false;
+        }
+        let Ok(c) = CString::new(path.to_string_lossy().as_bytes()) else {
+            return false;
+        };
+        // SAFETY: chaine valide pendant l'appel ; faux = importer le MIDI.
+        let p = unsafe { create(c.as_ptr(), false) };
+        // SAFETY: source neuve, a nous, detruite par PCM_Source_Destroy.
+        let Some(src) = (unsafe { CppSource::from_raw(p, Some(destroy)) }) else {
+            return false;
+        };
+        self.reg.src = src.as_ptr();
+        self.reg.preview_track = tr;
+        self.reg.m_out_chan = -1;
+        self.reg.curpos = 0.0;
+        self.src = Some(src);
+        // SAFETY: registre et source vivants tant que `self` vit ; `stop`
+        // arrete l'apercu avant de liberer la source.
+        self.playing = unsafe { play(null_mut(), &mut *self.reg, 0, -1.0) } != 0;
+        self.playing
+    }
+
+    pub fn stop(&mut self) {
+        if self.playing {
+            if let Some(stop) = self.stop {
+                // SAFETY: le registre lance par `start`.
+                unsafe { stop(null_mut(), &mut *self.reg) };
+            }
+            self.playing = false;
+        }
+        self.reg.src = null_mut();
+        self.src = None;
+    }
+
+    pub fn is_playing(&self) -> bool {
+        self.playing
+    }
+}
+
+impl Drop for Audition {
+    fn drop(&mut self) {
+        self.stop();
+        // SAFETY: initialisee dans `new`, plus utilisee par REAPER (arretee).
+        unsafe { DeleteCriticalSection(&mut self.reg.cs) };
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Les fichiers
 // ---------------------------------------------------------------------------
 

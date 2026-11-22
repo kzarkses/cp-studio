@@ -419,4 +419,257 @@ impl Reaper {
             unsafe { f(t.max(0.0), false, true) };
         }
     }
+
+    // -----------------------------------------------------------------------
+    // L'editeur : un item ouvert (MIDI ou audio)
+    // -----------------------------------------------------------------------
+
+    /// Ce que l'editeur lit d'un item : sa place, son gain, ses fondus, sa
+    /// prise active.
+    pub fn item_info(&self, guid: &str) -> Option<ItemInfo> {
+        type GetVal = unsafe extern "C" fn(P, *const c_char) -> f64;
+        type ActTake = unsafe extern "C" fn(P) -> P;
+        type IsMidi = unsafe extern "C" fn(P, bool) -> bool;
+        type TrackOf = unsafe extern "C" fn(P) -> P;
+        let item = self.item_of(guid)?;
+        let gi: GetVal = self.f(c"GetMediaItemInfo_Value")?;
+        let gt: GetVal = self.f(c"GetMediaItemTakeInfo_Value")?;
+        let at: ActTake = self.f(c"GetActiveTake")?;
+        let im: IsMidi = self.f(c"TakeIsMIDI")?;
+        let tr_of: TrackOf = self.f(c"GetMediaItem_Track")?;
+        let tks: GetStr = self.f(c"GetSetMediaItemTakeInfo_String")?;
+        let trs: GetStr = self.f(c"GetSetMediaTrackInfo_String")?;
+        // SAFETY: item vivant ; prise et piste verifiees non nulles ; tampons
+        // termines par zero.
+        unsafe {
+            let take = at(item);
+            if take.is_null() {
+                return None;
+            }
+            let mut nb = vec![0u8; 512];
+            tks(
+                take,
+                c"P_NAME".as_ptr(),
+                nb.as_mut_ptr() as *mut c_char,
+                false,
+            );
+            let name = CStr::from_ptr(nb.as_ptr() as *const c_char)
+                .to_string_lossy()
+                .into_owned();
+            let tr = tr_of(item);
+            let mut tb = vec![0u8; 128];
+            if !tr.is_null() {
+                trs(tr, c"GUID".as_ptr(), tb.as_mut_ptr() as *mut c_char, false);
+            }
+            let track = CStr::from_ptr(tb.as_ptr() as *const c_char)
+                .to_string_lossy()
+                .into_owned();
+            let rate = gt(take, c"D_PLAYRATE".as_ptr());
+            Some(ItemInfo {
+                pos: gi(item, c"D_POSITION".as_ptr()),
+                len: gi(item, c"D_LENGTH".as_ptr()),
+                vol: gi(item, c"D_VOL".as_ptr()),
+                fade_in: gi(item, c"D_FADEINLEN".as_ptr()),
+                fade_out: gi(item, c"D_FADEOUTLEN".as_ptr()),
+                name,
+                midi: im(take, false),
+                pitch: gt(take, c"D_PITCH".as_ptr()),
+                rate: if rate > 0.0 { rate } else { 1.0 },
+                offs: gt(take, c"D_STARTOFFS".as_ptr()),
+                track,
+            })
+        }
+    }
+
+    /// Toutes les notes d'une prise MIDI, muettes et choisies comprises.
+    pub fn ed_notes(&self, guid: &str) -> Option<Vec<EdNote>> {
+        type Count = unsafe extern "C" fn(P, *mut i32, *mut i32, *mut i32) -> i32;
+        type GetNote = unsafe extern "C" fn(
+            P,
+            i32,
+            *mut bool,
+            *mut bool,
+            *mut f64,
+            *mut f64,
+            *mut i32,
+            *mut i32,
+            *mut i32,
+        ) -> bool;
+        type ToQn = unsafe extern "C" fn(P, f64) -> f64;
+        let take = self.midi_take(guid)?;
+        let count: Count = self.f(c"MIDI_CountEvts")?;
+        let get: GetNote = self.f(c"MIDI_GetNote")?;
+        let qn: ToQn = self.f(c"MIDI_GetProjQNFromPPQPos")?;
+        let mut out = Vec::new();
+        // SAFETY: prise MIDI vivante ; sorties a nous.
+        unsafe {
+            let mut n = 0i32;
+            count(take, &mut n, null_mut(), null_mut());
+            for i in 0..n {
+                let (mut s, mut m, mut a, mut b, mut c, mut p, mut v) =
+                    (false, false, 0f64, 0f64, 0i32, 0i32, 0i32);
+                if get(
+                    take, i, &mut s, &mut m, &mut a, &mut b, &mut c, &mut p, &mut v,
+                ) {
+                    out.push(EdNote {
+                        qn0: qn(take, a),
+                        qn1: qn(take, b),
+                        pitch: p,
+                        chan: c,
+                        vel: v,
+                        sel: s,
+                        mute: m,
+                    });
+                }
+            }
+        }
+        Some(out)
+    }
+
+    /// Remplace toutes les notes d'une prise MIDI (les CC restent). Un pas
+    /// d'annulation.
+    pub fn set_ed_notes(&self, guid: &str, notes: &[EdNote], undo: &str) -> bool {
+        type Count = unsafe extern "C" fn(P, *mut i32, *mut i32, *mut i32) -> i32;
+        type Del = unsafe extern "C" fn(P, i32) -> bool;
+        type FromQn = unsafe extern "C" fn(P, f64) -> f64;
+        type InsNote =
+            unsafe extern "C" fn(P, bool, bool, f64, f64, i32, i32, i32, *const bool) -> bool;
+        type Sort = unsafe extern "C" fn(P) -> bool;
+        type UndoBegin = unsafe extern "C" fn(P);
+        type UndoEnd = unsafe extern "C" fn(P, *const c_char, i32);
+        type Update = unsafe extern "C" fn();
+        let Some(take) = self.midi_take(guid) else {
+            return false;
+        };
+        let (Some(count), Some(del), Some(ppq), Some(ins), Some(sort)) = (
+            self.f::<Count>(c"MIDI_CountEvts"),
+            self.f::<Del>(c"MIDI_DeleteNote"),
+            self.f::<FromQn>(c"MIDI_GetPPQPosFromProjQN"),
+            self.f::<InsNote>(c"MIDI_InsertNote"),
+            self.f::<Sort>(c"MIDI_Sort"),
+        ) else {
+            return false;
+        };
+        let ub = self.f::<UndoBegin>(c"Undo_BeginBlock2");
+        let ue = self.f::<UndoEnd>(c"Undo_EndBlock2");
+        let upd = self.f::<Update>(c"UpdateArrange");
+        let label = CString::new(undo).unwrap_or_default();
+        // SAFETY: prise MIDI vivante ; appels du SDK sur le fil principal.
+        unsafe {
+            if let Some(f) = ub {
+                f(null_mut());
+            }
+            let mut n = 0i32;
+            count(take, &mut n, null_mut(), null_mut());
+            for i in (0..n).rev() {
+                del(take, i);
+            }
+            let nosort = true;
+            for nt in notes {
+                let a = ppq(take, nt.qn0);
+                let b = ppq(take, nt.qn1).max(a + 1.0);
+                ins(
+                    take,
+                    nt.sel,
+                    nt.mute,
+                    a,
+                    b,
+                    nt.chan.clamp(0, 15),
+                    nt.pitch.clamp(0, 127),
+                    nt.vel.clamp(1, 127),
+                    &nosort,
+                );
+            }
+            sort(take);
+            if let Some(f) = ue {
+                // 4 = UNDO_STATE_ITEMS.
+                f(null_mut(), label.as_ptr(), 4);
+            }
+            if let Some(f) = upd {
+                f();
+            }
+        }
+        true
+    }
+
+    /// Les cretes (min, max) de la prise active d'un item de `t0` a `t1`
+    /// (temps du projet), en `cols` colonnes ; les canaux confondus.
+    pub fn take_peaks(&self, guid: &str, t0: f64, t1: f64, cols: usize) -> Option<Vec<(f32, f32)>> {
+        type ActTake = unsafe extern "C" fn(P) -> P;
+        type Peaks = unsafe extern "C" fn(P, f64, f64, i32, i32, i32, *mut f64) -> i32;
+        type GetSrc = unsafe extern "C" fn(P) -> P;
+        type Nch = unsafe extern "C" fn(P) -> i32;
+        if cols == 0 || t1 <= t0 {
+            return None;
+        }
+        let item = self.item_of(guid)?;
+        let at: ActTake = self.f(c"GetActiveTake")?;
+        let pk: Peaks = self.f(c"GetMediaItemTake_Peaks")?;
+        let gs: GetSrc = self.f(c"GetMediaItemTake_Source")?;
+        let nc: Nch = self.f(c"GetMediaSourceNumChannels")?;
+        let cols = cols.min(16384);
+        // SAFETY: item vivant ; tampon de 2 x canaux x colonnes doubles.
+        unsafe {
+            let take = at(item);
+            if take.is_null() {
+                return None;
+            }
+            let src = gs(take);
+            let nch = if src.is_null() {
+                1
+            } else {
+                nc(src).clamp(1, 2)
+            } as usize;
+            let rate = cols as f64 / (t1 - t0);
+            let mut buf = vec![0f64; nch * cols * 2];
+            let r = pk(take, rate, t0, nch as i32, cols as i32, 0, buf.as_mut_ptr());
+            let got = (r & 0xFFFFF) as usize;
+            if r <= 0 || got == 0 {
+                return None;
+            }
+            let got = got.min(cols);
+            let mut out = vec![(0f32, 0f32); cols];
+            for (k, o) in out.iter_mut().enumerate().take(got) {
+                let mut hi = f64::NEG_INFINITY;
+                let mut lo = f64::INFINITY;
+                for c in 0..nch {
+                    hi = hi.max(buf[k * nch + c]);
+                    lo = lo.min(buf[nch * cols + k * nch + c]);
+                }
+                *o = (lo as f32, hi as f32);
+            }
+            Some(out)
+        }
+    }
+}
+
+/// Une note d'une prise MIDI, telle que l'editeur la lit et l'ecrit.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct EdNote {
+    pub qn0: f64,
+    pub qn1: f64,
+    pub pitch: i32,
+    pub chan: i32,
+    pub vel: i32,
+    pub sel: bool,
+    pub mute: bool,
+}
+
+/// Ce que l'editeur lit d'un item (temps en secondes du projet).
+#[derive(Clone, Debug, PartialEq)]
+pub struct ItemInfo {
+    pub pos: f64,
+    pub len: f64,
+    /// Le volume de l'item (lineaire).
+    pub vol: f64,
+    pub fade_in: f64,
+    pub fade_out: f64,
+    /// La prise active.
+    pub name: String,
+    pub midi: bool,
+    pub pitch: f64,
+    pub rate: f64,
+    pub offs: f64,
+    /// Le GUID de la piste.
+    pub track: String,
 }
