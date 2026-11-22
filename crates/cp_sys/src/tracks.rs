@@ -566,14 +566,23 @@ impl Reaper {
         }
     }
 
-    /// Ajoute un effet a la fin de la chaine (sans ouvrir sa fenetre).
+    /// Ajoute un effet a la fin de la chaine, sans ouvrir sa fenetre : la
+    /// preference « Auto-float newly created FX windows » (`fxfloat_focus`)
+    /// ouvre la fenetre DANS l'appel ; on la coupe le temps de l'ajout.
     pub fn track_fx_add(&self, guid: &str, name: &str) -> Option<i32> {
         type Add = unsafe extern "C" fn(P, *const c_char, bool, i32) -> i32;
         let tr = self.track_of(guid)?;
         let add: Add = self.tf(c"TrackFX_AddByName")?;
         let c = CString::new(name).ok()?;
+        let float = self.config_int("fxfloat_focus");
+        if float.is_some_and(|v| v != 0) {
+            self.set_config_int("fxfloat_focus", 0);
+        }
         // SAFETY: piste vivante ; -1 = toujours ajouter.
         let i = unsafe { add(tr, c.as_ptr(), false, -1) };
+        if let Some(v) = float.filter(|&v| v != 0) {
+            self.set_config_int("fxfloat_focus", v);
+        }
         (i >= 0).then_some(i)
     }
 
