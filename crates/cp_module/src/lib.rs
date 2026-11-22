@@ -1181,14 +1181,77 @@ impl App {
         const WANT: i32 = 4096;
         match self.r.config_int(SIZE) {
             Some(was) if was < WANT => {
+                self.docker_margins();
                 if self.r.set_config_int(SIZE, WANT) {
                     self.r.dock_refresh();
+                    // Les dockers deja poses gardaient leur bande jusqu'au
+                    // premier redimensionnement (le pixel que Cedric devait
+                    // bouger au demarrage) : chacun refait sa mise en page.
+                    self.docker_relayout();
                 }
                 self.host
                     .info(&format!("onglets des dockers : {SIZE} {was} -> {WANT}"));
             }
             Some(_) => {}
             None => self.host.warn("dock_mini_tab_size introuvable"),
+        }
+    }
+
+    /// Chaque docker (ancre dans la fenetre principale ou flottant) recoit
+    /// sa taille actuelle : il refait sa mise en page, la bande d'onglets
+    /// avec.
+    fn docker_relayout(&self) {
+        // Un docker est la boite (#32770) qui tient les fenetres ancrees :
+        // le parent de chaque fenetre que REAPER dit dans un docker.
+        let mut hosts: Vec<Hwnd> = Vec::new();
+        for h in self.docked_windows() {
+            let p = ui::parent(h);
+            if p.0 != 0 && !hosts.contains(&p) && ui::class_name(p) == "#32770" {
+                hosts.push(p);
+            }
+        }
+        for &h in &hosts {
+            ui::resend_size(h);
+        }
+        self.host.info(&format!(
+            "onglets des dockers : {} docker(s) remis en page",
+            hosts.len()
+        ));
+        self.docker_margins();
+    }
+
+    /// Les fenetres dans un docker (de REAPER ou a nous), une fois chacune.
+    fn docked_windows(&self) -> Vec<Hwnd> {
+        let main = self.r.main_hwnd();
+        let mut wins = ui::descendants(main);
+        for t in ui::process_windows() {
+            if t != main {
+                wins.extend(ui::descendants(t));
+            }
+        }
+        wins.retain(|&h| self.r.dock_of(h).is_some());
+        wins.dedup();
+        wins
+    }
+
+    /// Ce que chaque docker garde autour de nos vues ancrees (sa bande
+    /// d'onglets) : a 0, la vue va jusqu'au bord.
+    fn docker_margins(&self) {
+        for h in self.docked_windows() {
+            if ui::class_name(h) != "CPStudioWindow" {
+                continue;
+            }
+            let p = ui::parent(h);
+            let (v, r) = (ui::window_rect(h), ui::window_rect(p));
+            self.host.info(&format!(
+                "onglets des dockers : « {} » dans « {} » : marges gauche {}, droite {}, haut {}, bas {}",
+                ui::window_text(h),
+                ui::class_name(p),
+                v.left - r.left,
+                r.right - v.right,
+                v.top - r.top,
+                r.bottom - v.bottom
+            ));
         }
     }
 }
@@ -1445,6 +1508,9 @@ impl Module for App {
         // de se construire (ses dockers compris).
         if !self.ops.is_empty() && self.ticks >= 15 {
             self.do_ops();
+        }
+        if self.ticks == 60 && crate::gtab::selftest() {
+            self.docker_margins();
         }
         if self.ticks == 15 {
             self.docker_tabs();

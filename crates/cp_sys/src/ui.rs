@@ -1065,3 +1065,70 @@ impl Drop for Tooltip {
         unsafe { DestroyWindow2(self.h.raw()) };
     }
 }
+
+// ---------------------------------------------------------------------------
+// Les fenetres du processus, et leur mise en page
+// ---------------------------------------------------------------------------
+
+#[link(name = "user32")]
+unsafe extern "system" {
+    #[link_name = "GetDesktopWindow"]
+    fn GetDesktopWindow3() -> Raw;
+    #[link_name = "GetWindowThreadProcessId"]
+    fn GetWindowThreadProcessId3(h: Raw, pid: *mut u32) -> u32;
+    #[link_name = "IsZoomed"]
+    fn IsZoomed3(h: Raw) -> i32;
+}
+
+#[link(name = "kernel32")]
+unsafe extern "system" {
+    #[link_name = "GetCurrentProcessId"]
+    fn GetCurrentProcessId3() -> u32;
+}
+
+/// Toutes les descendantes de `h`, en largeur (bornees a 20 000).
+pub fn descendants(h: Hwnd) -> Vec<Hwnd> {
+    let mut out = children(h);
+    let mut k = 0;
+    while k < out.len() && out.len() < 20_000 {
+        let c = children(out[k]);
+        out.extend(c);
+        k += 1;
+    }
+    out
+}
+
+/// Les fenetres de premier niveau de ce processus (les dockers flottants
+/// compris).
+pub fn process_windows() -> Vec<Hwnd> {
+    // SAFETY: sans argument.
+    let me = unsafe { GetCurrentProcessId3() };
+    // SAFETY: sans argument.
+    let desk = Hwnd(unsafe { GetDesktopWindow3() } as isize);
+    children(desk)
+        .into_iter()
+        .filter(|h| {
+            let mut pid = 0u32;
+            // SAFETY: ecrit un u32 ; un handle mort rend 0.
+            unsafe { GetWindowThreadProcessId3(h.raw(), &mut pid) };
+            pid == me
+        })
+        .collect()
+}
+
+/// Rejoue a `h` sa taille actuelle (WM_SIZE) : il refait sa mise en page
+/// comme si on venait de le redimensionner.
+pub fn resend_size(h: Hwnd) {
+    const WM_SIZE: u32 = 0x0005;
+    let r = client_rect(h);
+    let (w, hh) = ((r.right - r.left).max(0), (r.bottom - r.top).max(0));
+    // SAFETY: rend 0 sur un handle mort.
+    let kind = if unsafe { IsZoomed3(h.raw()) } != 0 {
+        2
+    } else {
+        0
+    };
+    let lp = (((hh as isize) & 0xFFFF) << 16) | ((w as isize) & 0xFFFF);
+    // SAFETY: message standard, sans pointeur ; fil principal.
+    unsafe { SendMessageW2(h.raw(), WM_SIZE, kind, lp) };
+}
