@@ -106,6 +106,7 @@ version = "0.1.0"
 dependencies = [
  "cp_abi",
  "cp_gfx",
+ "cp_ui",
 ]
 
 [[package]]
