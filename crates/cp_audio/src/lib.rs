@@ -272,7 +272,7 @@ impl AudioHost {
         if !self.ensure_port(port) {
             return false;
         }
-        let Some(r) = self.reaper.clone() else {
+        let Some(r) = self.reaper else {
             return track.is_none();
         };
         let Some(pv) = self.ports[port].preview.as_mut() else {
@@ -305,7 +305,7 @@ impl AudioHost {
     /// Une piste de sortie effacee (ou deplacee dans un autre projet) : le
     /// port revient a la sortie materielle. Rend le nombre de ports rendus.
     fn check_routes(&mut self) -> usize {
-        let Some(r) = self.reaper.clone() else {
+        let Some(r) = self.reaper else {
             return 0;
         };
         let mut k = 0;
