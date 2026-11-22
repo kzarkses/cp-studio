@@ -463,17 +463,86 @@ navigateur utilise ; de D, ce que le navigateur appelle.
 **Fini quand :** Cedric s'en sert comme navigateur au quotidien, ancré dans
 REAPER, et en fait un vrai retour.
 
+### Guitar Tab v2 — des pistes de guitare (en cours, 2026-11-22)
+
+La V1 (une prise, sa partition et sa tab) est construite et passe l'auto-test.
+Le premier usage de Cedric a montré qu'il faut un vrai système de pistes :
+enregistrer, effacer, recommencer, **sans jamais retourner ranger
+l'arrangement** (aucune « dette » d'organisation). Maquette v2 :
+https://claude.ai/artifact/3Gmk5y4SXg7x7qJ1sPdhiD.
+
+Ce que Cedric a tranché le 2026-11-22 :
+- **Une piste Guitar Tab = un dossier de deux pistes REAPER** : la guitare
+  (audio) et sa tab (MIDI, avec le synthé de Guitar Tab).
+- **Des pistes hautes** avec des couches alignées sur les mêmes mesures :
+  audio, MIDI, partition, tab. Par défaut : audio, partition et tab ; le MIDI est
+  caché.
+- **Réenregistrer au même endroit suit les réglages de REAPER** : des prises
+  empilées ou des lanes, selon ce que REAPER fait déjà.
+- **Guitar Tab ne montre que ses propres pistes.** Une piste existante y entre
+  par un clic droit.
+- **Un double-clic sur le MIDI ouvre l'éditeur MIDI** (celui de REAPER, puis le
+  nôtre quand il reviendra, voir plus bas).
+- **Le son de la tab** : un JSFX maison posé sur les NOUVELLES pistes tab, avec
+  quatre sons, Guitar, Piano, Sine et Bass.
+- **L'accordeur dans CP Transport, réglable** : soit à la place du compteur
+  quand le transport est à l'arrêt, soit dans un emplacement à lui (au centre,
+  où il y a de la place). Il lit l'entrée de la carte son dans le crochet audio
+  du chargeur.
+
+### L'éditeur de clips revient (demande de Cedric, 2026-11-22)
+
+**Ce qu'on avait.** CP_Editor (Lua) était complet, très fonctionnel, et Cedric
+le jugeait excellent. Il n'existe plus dans la suite : il faut le réintégrer en
+Rust. Il avait :
+- le piano roll et la forme d'onde, audio et MIDI ;
+- la couche de commandes partagée avec le Looper :
+  - le modèle `Roll` (sélections, transposition, quantification avec force,
+    humanize, legato, reverse, arpège, euclidien, gammes, copier-coller) ;
+  - `RollUI`, un seul clavier et un seul menu pour les deux hôtes ;
+- les raccourcis comme une donnée (`Keymap`), avec les six contextes MIDI de la
+  configuration de Cedric reproduits fidèlement ;
+- les enveloppes ADSR ou dessinées (ENV), et l'établi d'un son (recette CPC1) ;
+- la probabilité par note (décidée), le curseur local à une case.
+
+**Où sont les spécifications.**
+- `ROADMAP_Editeur.md` (624 lignes), dans l'ancien dossier
+  `REAPER\Scripts\CP_Scripts` :
+  - §1 : ce que l'éditeur savait faire ;
+  - §2 : la configuration souris de Cedric, contexte par contexte ;
+  - §3 à §8 : la suite prévue.
+- Les sources Lua (`CP_Editor/`, `CP_Engine/Roll.lua`, `RollUI.lua`,
+  `Keymap.lua`) sont dans `E:\CP_Scripts_recovery_20261120\github_2026-08-22.git`.
+  Ce dépôt est en lecture seule : on le lit pour porter, on ne le relance pas.
+- Les mémoires `project-midi-command-layer`, `project-keymap`,
+  `project-editor-sound-workbench`.
+
+**Le chemin.**
+1. Porter le modèle `Roll` dans une crate Rust pure (`cp_roll`), sans unité,
+   avec ses tests. Les pièges trouvés en 2026-07 deviennent des tests.
+2. La vue piano roll sur `cp_ui`, puis le clavier et la souris pris de la
+   configuration de Cedric.
+3. Le brancher partout où un item MIDI s'ouvre :
+   - le double-clic dans Guitar Tab (une note y garde sa corde : canal = corde) ;
+   - les items de l'arrangement ;
+   - plus tard, la Session.
+4. La partie audio de l'éditeur vient avec A4 et A5 (vitesse, hauteur,
+   étirement).
+
+**Fini quand :** Cedric ouvre ses items MIDI dans notre éditeur plutôt que dans
+celui de REAPER.
+
 | application | ce qu'elle fait | où est sa spécification |
 |---|---|---|
 | Navigateur de fichiers (Media Explorer) | parcourir, écouter, glisser dans REAPER, à la FL Studio | mémoire `project-media-explorer`, `reference-reaper-browser-scripts` |
-| Éditeur de clips | audio et MIDI, piano roll, enveloppes, établi d'un son | mémoires `project-sampler`, `project-editor-sound-workbench`, `project-midi-command-layer` |
+| Éditeur de clips | audio et MIDI, piano roll, enveloppes, établi d'un son | **à réintégrer** (section ci-dessus) ; ancien `ROADMAP_Editeur.md`, mémoires `project-midi-command-layer`, `project-keymap`, `project-editor-sound-workbench` |
 | Session | lanceur de clips, prises, vers l'arrangeur, sortie MIDI par colonne | mémoires `project-session-*`, `ROADMAP_Chantiers.md` (ancien dépôt) |
 | Sampler | kits de pads, un effet par kit | mémoires `project-kit-sampler-jsfx`, `project-sampler` |
 | Transport | le transport à la place de celui de REAPER, clock externe | **construit le 2026-11-22** (`cp_transport`) ; reste la clock externe : mémoire `project-ext-clock` |
 | FX Constellation | moteur de modulation, pad, graphe, liens | mémoires `project-fx-constellation-refonte`, `project-moteur-modulation-plan`, `ROADMAP_FXConstellation.md` |
 | Séquenceur / Sound Gen | séquenceur à la Pigments, synthé JSFX | mémoires `project-sequenceur`, `project-soundgen-modulation`, `ROADMAP_Sequenceur.md` |
 | Vidéo | caméra, stop motion, calage par le son | mémoire `project-video`, `ROADMAP_Video.md` |
-| Guitar Tab | audio → tablature dans MuseScore | **construit le 2026-11-22** (`cp_tab`) ; à venir : bends écrits, triolets, plusieurs voix |
+| Guitar Tab | guitare enregistrée → MIDI, partition et tab éditables dans REAPER | **V1 construite le 2026-11-22** (`cp_tab`, `cp_tabview`) ; V2 en cours (section ci-dessus) ; plus tard : bends écrits, triolets, plusieurs voix |
 | ChordLab, PaintSynth, barres d'outils… | les plus petits outils | mémoires et anciennes ROADMAP |
 
 Pour chaque application, une ROADMAP à elle (`ROADMAP_<Nom>.md`) sera écrite au
@@ -517,7 +586,7 @@ moment de la commencer.
 | le chemin de présentation | GDI (`SetDIBitsToDevice` des seules rangées changées), calé sur `D3DKMTWaitForVerticalBlankEvent` ; `DwmFlush` écarté (il bloque sur un écran immobile) ; DXGI si la mesure le demande |
 | le rendu du texte | GDI pour l'instant (`GGO_GRAY8_BITMAP`), net dans les captures ; DirectWrite si les retours le demandent (idéogrammes, emoji) |
 | ~~la première application~~ | **tranché** : le navigateur de fichiers (Cedric, 2026-11-21) |
-| l'application suivante | à décider après le retour de Cedric sur le jalon 1 |
+| l'application suivante | Guitar Tab v2 est en cours ; l'éditeur de clips est demandé (2026-11-22), son ordre reste à fixer avec Cedric |
 
 ## Ce que CP Studio ne fera pas
 
