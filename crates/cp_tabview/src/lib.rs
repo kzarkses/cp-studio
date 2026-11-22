@@ -939,10 +939,16 @@ pub enum Mark {
     OneHalf,
     /// Le bend est relache.
     Release,
+    /// Les techniques de jeu (chacune se pose ou s'enleve).
+    Palm,
+    Dead,
+    Harmonic,
+    Ring,
+    Vibrato,
 }
 
 impl Mark {
-    pub const ALL: [Mark; 9] = [
+    pub const ALL: [Mark; 14] = [
         Mark::Plain,
         Mark::Legato,
         Mark::Slide,
@@ -952,7 +958,24 @@ impl Mark {
         Mark::Full,
         Mark::OneHalf,
         Mark::Release,
+        Mark::Palm,
+        Mark::Dead,
+        Mark::Harmonic,
+        Mark::Ring,
+        Mark::Vibrato,
     ];
+
+    /// Une technique de jeu : son drapeau dans [`TNote::marks`].
+    pub fn bit(self) -> Option<u8> {
+        match self {
+            Mark::Palm => Some(TNote::PALM),
+            Mark::Dead => Some(TNote::DEAD),
+            Mark::Harmonic => Some(TNote::HARMONIC),
+            Mark::Ring => Some(TNote::RING),
+            Mark::Vibrato => Some(TNote::VIBRATO),
+            _ => None,
+        }
+    }
 
     /// Un bend : ses demi-tons.
     pub fn semis(self) -> Option<f32> {
@@ -970,7 +993,8 @@ impl Mark {
             Mark::Plain => 0,
             Mark::Legato | Mark::Slide => 1,
             Mark::InBelow | Mark::InAbove => 2,
-            _ => 3,
+            Mark::Half | Mark::Full | Mark::OneHalf | Mark::Release => 3,
+            _ => 4,
         }
     }
 
@@ -985,8 +1009,30 @@ impl Mark {
             Mark::Full => "Bend full tone",
             Mark::OneHalf => "Bend 1\u{00bd} tones",
             Mark::Release => "Bend and release",
+            Mark::Palm => "Palm mute (P.M.)",
+            Mark::Dead => "Dead note (x)",
+            Mark::Harmonic => "Natural harmonic",
+            Mark::Ring => "Let ring",
+            Mark::Vibrato => "Vibrato",
         }
     }
+}
+
+/// Une ondulation de vibrato sur une note de `len` noires a `bpm` : 5,5 Hz,
+/// un quart de ton de part et d'autre, apres un huitieme de la note.
+pub fn vibrato_curve(len: f64, bpm: f64) -> Vec<(f64, f32)> {
+    let per = bpm.max(1.0) / 60.0 / 5.5;
+    let q = per / 4.0;
+    let mut v = vec![(0.0, 0.0)];
+    let mut t = (len / 8.0).max(q);
+    let mut k = 0;
+    while t < len - 1e-6 {
+        let y = [0.25f32, 0.0, -0.25, 0.0][k % 4];
+        v.push((t, y));
+        t += q;
+        k += 1;
+    }
+    v
 }
 
 /// La palette ouverte : la note, et ou elle s'ouvre.
@@ -1678,6 +1724,9 @@ impl Arr {
             return false;
         };
         let bm = note.bend_mark();
+        if let Some(b) = m.bit() {
+            return note.has(b);
+        }
         match m {
             Mark::Plain => note.tech == Tech::Plain && note.bend.is_empty(),
             Mark::Legato => matches!(note.tech, Tech::Hammer | Tech::Pull),
@@ -1708,6 +1757,32 @@ impl Arr {
         let it = self.item_mut(t, i)?;
         let mut note = it.doc.get(n)?.clone();
         let bm = note.bend_mark();
+        if let Some(b) = m.bit() {
+            if on {
+                note.marks &= !b;
+                // Un vibrato pose a la main s'en va avec sa courbe.
+                if b == TNote::VIBRATO && bm.is_none() && note.slide_in() == 0 {
+                    note.bend.clear();
+                }
+            } else {
+                note.marks |= b;
+                // Une note morte n'est pas une harmonique, et l'inverse.
+                if b == TNote::DEAD {
+                    note.marks &= !TNote::HARMONIC;
+                }
+                if b == TNote::HARMONIC {
+                    note.marks &= !TNote::DEAD;
+                }
+                // Le vibrato s'entend : une ondulation de 5,5 Hz, un quart de
+                // ton, sur une note droite.
+                if b == TNote::VIBRATO && note.bend.is_empty() {
+                    note.bend = vibrato_curve(note.qn1 - note.qn0, it.bpm);
+                }
+            }
+            note.locked = true;
+            it.doc[n] = note;
+            return self.edited(t, i);
+        }
         match m {
             Mark::Plain => {
                 note.tech = Tech::Plain;

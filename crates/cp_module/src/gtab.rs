@@ -649,6 +649,7 @@ impl App {
                     vel: (40.0 + x.note.amp.clamp(0.0, 1.0) * 87.0) as u8,
                     slid: x.slid,
                     bend,
+                    vibrato: x.vibrato,
                 }
             })
             .collect()

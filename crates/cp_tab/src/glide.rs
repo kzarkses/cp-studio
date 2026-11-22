@@ -43,6 +43,8 @@ pub struct Shaped {
     pub approach: usize,
     /// Arrivee glissee depuis la note precedente (meme corde).
     pub slid: bool,
+    /// La hauteur ondule autour d'elle-meme (un vibrato).
+    pub vibrato: bool,
 }
 
 /// La case d'une hauteur juste. MESUREE, pas la formule de Basic Pitch : un
@@ -234,6 +236,7 @@ pub fn shape(notes: &[Note], c: &Contour) -> Vec<Shaped> {
                     slide_in: 0,
                     approach: 0,
                     slid: true,
+                    vibrato: false,
                 });
                 stop.push(usize::MAX);
                 open.push(Open {
@@ -251,6 +254,7 @@ pub fn shape(notes: &[Note], c: &Contour) -> Vec<Shaped> {
             slide_in: 0,
             approach: 0,
             slid: false,
+            vibrato: false,
         });
         stop.push(usize::MAX);
         open.push(Open {
@@ -261,7 +265,7 @@ pub fn shape(notes: &[Note], c: &Contour) -> Vec<Shaped> {
     }
     // Les courbes et les approches.
     for (s, &st) in out.iter_mut().zip(&stop) {
-        s.bend = curve(c, &s.note, st);
+        (s.bend, s.vibrato) = curve(c, &s.note, st);
         if !s.slid {
             approach(c, s);
         }
@@ -336,20 +340,22 @@ fn link(c: &Contour, a: &Note, a_tail: i32, b: &Note) -> Option<Link> {
 
 /// La courbe de hauteur d'une note par rapport a elle (demi-tons), en
 /// quelques points ; vide si elle reste sous [`BEND_MIN`].
-fn curve(c: &Contour, n: &Note, stop: usize) -> Vec<(usize, f32)> {
+/// La courbe d'une note (vide : juste), et si elle ondule (un vibrato).
+fn curve(c: &Contour, n: &Note, stop: usize) -> (Vec<(usize, f32)>, bool) {
+    let none = (Vec::new(), false);
     let Some(t0) = c.anchor(n) else {
-        return Vec::new();
+        return none;
     };
     let base = n.pitch as f32;
     let b0 = bin_of(base);
     let Some(start) = c.peak(t0, b0, 1) else {
-        return Vec::new();
+        return none;
     };
     let end = n.end.min(c.frames).min(stop.max(t0 + 1));
     let mut pts: Vec<(usize, f32)> = c.follow(t0, end, start);
     // Avant l'ancre : rien (l'attaque).
     if pts.len() < 3 {
-        return Vec::new();
+        return none;
     }
     let semis: Vec<(usize, f32)> = pts
         .drain(..)
@@ -371,13 +377,69 @@ fn curve(c: &Contour, n: &Note, stop: usize) -> Vec<(usize, f32)> {
         x.1 = (x.1 - off).clamp(-1.0, BEND_MAX as f32 + 1.0);
     }
     let top = sm.iter().map(|x| x.1).fold(0f32, f32::max);
-    if top < BEND_MIN {
-        return Vec::new();
+    // Le vibrato se lit sur la hauteur non lissee (la mediane de trois
+    // aplatit ses crêtes).
+    let vib = is_vibrato(&semis);
+    if top < BEND_MIN && !vib {
+        return none;
     }
     // Depart a 0 au debut de la note.
     let mut v = vec![(0usize, 0f32)];
     v.extend(sm.iter().copied().filter(|x| x.0 > 0));
-    simplify(&v, 0.12)
+    // Un vibrato garde ses ondulations (le synthe les rejoue).
+    (simplify(&v, if vib { 0.06 } else { 0.12 }), vib)
+}
+
+/// La hauteur ondule-t-elle (un vibrato) ? Autour de sa moyenne glissante
+/// (une periode), au moins deux allers-retours reguliers de plus de 0,15
+/// demi-ton de part et d'autre,
+/// a 3,3..11 Hz (4 a 13 trames du reseau, 86 par seconde, par demi-periode).
+pub fn is_vibrato(semis: &[(usize, f32)]) -> bool {
+    // L'attaque d'abord : trois trames.
+    let x: Vec<f32> = semis.iter().skip(3).map(|p| p.1).collect();
+    if x.len() < 20 {
+        return false;
+    }
+    let half = 7usize;
+    let r: Vec<f32> = (0..x.len())
+        .map(|k| {
+            let (a, b) = (k.saturating_sub(half), (k + half + 1).min(x.len()));
+            x[k] - x[a..b].iter().sum::<f32>() / (b - a) as f32
+        })
+        .collect();
+    // Les passages d'un cote a l'autre, avec une marge (le bruit ne compte
+    // pas).
+    const H: f32 = 0.15;
+    let mut side = 0i8;
+    let mut cross: Vec<usize> = Vec::new();
+    let (mut lo, mut hi) = (0f32, 0f32);
+    for (k, &v) in r.iter().enumerate() {
+        lo = lo.min(v);
+        hi = hi.max(v);
+        let s = if v > H {
+            1
+        } else if v < -H {
+            -1
+        } else {
+            0
+        };
+        if s != 0 && s != side {
+            if side != 0 {
+                cross.push(k);
+            }
+            side = s;
+        }
+    }
+    if cross.len() < 4 || hi - lo > 3.0 {
+        return false;
+    }
+    let p = (cross[cross.len() - 1] - cross[0]) as f32 / (cross.len() - 1) as f32;
+    // Une onde reguliere : chaque demi-periode proche de la moyenne (le
+    // bruit passe d'un cote a l'autre au hasard).
+    let regular = cross
+        .windows(2)
+        .all(|w| (0.5 * p..=1.6 * p).contains(&((w[1] - w[0]) as f32)));
+    regular && (4.0..=13.0).contains(&p)
 }
 
 /// Garde les points qui comptent (Douglas-Peucker, `tol` demi-tons).
@@ -455,5 +517,36 @@ fn approach(c: &Contour, s: &mut Shaped) {
             p.0 += shift;
         }
         s.note.start = te;
+    }
+}
+
+#[cfg(test)]
+mod vib_tests {
+    use super::is_vibrato;
+
+    /// Une hauteur au fil des trames (86 par seconde).
+    fn series(f: impl Fn(f32) -> f32, frames: usize) -> Vec<(usize, f32)> {
+        (0..frames).map(|k| (k, f(k as f32 / 86.13))).collect()
+    }
+
+    #[test]
+    fn le_vibrato_se_reconnait() {
+        let tau = std::f32::consts::TAU;
+        // 6 Hz, un demi-ton crete a crete, une demi-seconde.
+        assert!(is_vibrato(&series(|t| 0.25 * (tau * 6.0 * t).sin(), 45)));
+        // Un vibrato large et lent (4 Hz) sur un bend d'un ton.
+        assert!(is_vibrato(&series(
+            |t| 2.0 + 0.4 * (tau * 4.0 * t).sin(),
+            60
+        )));
+        // Pas un vibrato : un bend qui monte, une note juste un peu bruitee,
+        // un tremblement trop rapide, une note trop courte.
+        assert!(!is_vibrato(&series(|t| (t * 8.0).min(2.0), 60)));
+        assert!(!is_vibrato(&series(
+            |t| 0.07 * ((t * 977.0).sin() + (t * 613.0).cos()),
+            60
+        )));
+        assert!(!is_vibrato(&series(|t| 0.3 * (tau * 25.0 * t).sin(), 60)));
+        assert!(!is_vibrato(&series(|t| 0.3 * (tau * 6.0 * t).sin(), 15)));
     }
 }

@@ -885,3 +885,48 @@ fn une_basse_tenue_sous_la_melodie_fait_une_deuxieme_voix() {
     let m2 = m2.split("<measure number=\"3\"").next().unwrap();
     assert_eq!(m2.matches("<backup>").count(), 1);
 }
+
+#[test]
+fn les_techniques_de_jeu_se_gardent_et_s_ecrivent() {
+    let mut tab = vec![
+        on_string(0.0, 0.5, 0, 3),
+        on_string(0.5, 0.5, 0, 3),
+        on_string(1.0, 0.5, 0, 5),
+        on_string(2.0, 1.0, 2, 2),
+        on_string(3.0, 1.0, 3, 12),
+    ];
+    for n in &mut tab[..3] {
+        n.marks = TNote::PALM;
+    }
+    tab[2].marks |= TNote::DEAD;
+    tab[3].marks = TNote::VIBRATO | TNote::RING;
+    tab[4].marks = TNote::HARMONIC;
+    // Le pense-bete du MIDI et le fichier de la tab les gardent.
+    let side = Sidecar::of(&tab, &Default::default());
+    let back = Sidecar::from_text(&side.to_text());
+    assert_eq!(back.marks, side.marks);
+    assert_eq!(back.marks.len(), 5);
+    let txt = doc::tab_to_text(&tab, &Default::default(), "", 0.0);
+    let (re, _, _) = doc::tab_from_text(&txt, 0.0).unwrap();
+    assert_eq!(
+        re.iter().map(|n| n.marks).collect::<Vec<_>>(),
+        tab.iter().map(|n| n.marks).collect::<Vec<_>>()
+    );
+    // Le MusicXML : un seul « P.M. » pour le passage, la tete x, le
+    // losange et l'harmonique, l'onde du vibrato.
+    let spec = ScoreSpec {
+        title: "t".into(),
+        origin_qn: 0.0,
+        sig: (4, 4),
+        bpm: 100.0,
+        grid: 4,
+        tuning: Tuning::standard(),
+    };
+    let (x, _) = crate::score::write_musicxml(&tab, &spec, 0);
+    assert_eq!(x.matches("<words>P.M.</words>").count(), 1);
+    assert_eq!(x.matches("<words>let ring</words>").count(), 1);
+    assert_eq!(x.matches("<notehead>x</notehead>").count(), 2);
+    assert_eq!(x.matches("<notehead>diamond</notehead>").count(), 2);
+    assert_eq!(x.matches("<harmonic><natural/></harmonic>").count(), 1);
+    assert_eq!(x.matches("<wavy-line type=\"start\"").count(), 1);
+}

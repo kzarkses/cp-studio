@@ -30,6 +30,8 @@ pub struct TabNote {
     pub slid: bool,
     /// La hauteur jouee au fil de la note (voir [`TNote::bend`]).
     pub bend: Vec<(f64, f32)>,
+    /// La hauteur ondule (un vibrato).
+    pub vibrato: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -127,6 +129,9 @@ pub fn write_musicxml(notes: &[TNote], spec: &ScoreSpec, dropped: usize) -> (Str
     x += "  <part-list><score-part id=\"P1\"><part-name>Guitar</part-name></score-part></part-list>\n";
     x += "  <part id=\"P1\">\n";
     let nstr = tuning.strings.len();
+    // Un passage P.M. ou let ring en cours (le mot n'est ecrit qu'a son
+    // debut).
+    let (mut pm_on, mut lr_on) = (false, false);
     for m in 0..eng.measures {
         let _ = writeln!(x, "    <measure number=\"{}\">", m + 1);
         if m == 0 {
@@ -189,6 +194,23 @@ pub fn write_musicxml(notes: &[TNote], spec: &ScoreSpec, dropped: usize) -> (Str
             for sg in eng.signs.iter().filter(|s| s.measure == m && s.voice == v) {
                 let ev = &eng.events[sg.ev];
                 let d = sg.dur;
+                // « P.M. » et « let ring » : un mot au debut de chaque
+                // passage (sur la portee, voix 1).
+                if staff == 1 && v == 1 && sg.first && !ev.notes.is_empty() {
+                    for (bit, word, on) in [
+                        (TNote::PALM, "P.M.", &mut pm_on),
+                        (TNote::RING, "let ring", &mut lr_on),
+                    ] {
+                        let has = ev.notes.iter().any(|&i| notes[i].has(bit));
+                        if has && !*on {
+                            let _ = writeln!(
+                                x,
+                                "      <direction placement=\"below\"><direction-type><words>{word}</words></direction-type><staff>1</staff></direction>"
+                            );
+                        }
+                        *on = has;
+                    }
+                }
                 // Un triolet : trois dans le temps de deux, et son crochet.
                 let tmod = if sg.tuplet == 3 {
                     "<time-modification><actual-notes>3</actual-notes><normal-notes>2</normal-notes></time-modification>"
@@ -245,10 +267,18 @@ pub fn write_musicxml(notes: &[TNote], spec: &ScoreSpec, dropped: usize) -> (Str
                         x += "<dot/>";
                     }
                     x += tmod;
+                    if n.has(TNote::DEAD) {
+                        x += "<notehead>x</notehead>";
+                    } else if n.has(TNote::HARMONIC) {
+                        x += "<notehead>diamond</notehead>";
+                    }
                     let _ = write!(x, "<staff>{staff}</staff>");
                     let mut nots = String::new();
                     if ci == 0 {
                         nots += &tup;
+                    }
+                    if staff == 1 && sg.first && n.has(TNote::VIBRATO) {
+                        nots += "<ornaments><wavy-line type=\"start\" number=\"1\"/><wavy-line type=\"stop\" number=\"1\"/></ornaments>";
                     }
                     if sg.tie_in {
                         nots += "<tied type=\"stop\"/>";
@@ -288,6 +318,9 @@ pub fn write_musicxml(notes: &[TNote], spec: &ScoreSpec, dropped: usize) -> (Str
                         if let Some(k) = lstart.filter(|&k| k != "slide") {
                             let _ =
                                 write!(tech, "<{k} number=\"1\" type=\"start\">{}</{k}>", mark(k));
+                        }
+                        if n.has(TNote::HARMONIC) {
+                            tech += "<harmonic><natural/></harmonic>";
                         }
                         if let Some(b) = n.bend_mark().filter(|_| sg.first) {
                             let _ =

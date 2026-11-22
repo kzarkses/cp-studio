@@ -9,7 +9,7 @@
 
 use cp_gfx::text::{Align, Font, TextCache};
 use cp_gfx::{Canvas, Color, Path};
-use cp_tab::doc::Tech;
+use cp_tab::doc::{TNote, Tech};
 use cp_tab::engrave::Engraved;
 use cp_tab::key;
 use cp_ui::{Icon, IconCache, Theme};
@@ -62,6 +62,56 @@ pub fn staff_pos(pitch: i32) -> (i32, bool) {
     let pc = w.rem_euclid(12) as usize;
     let oct = w.div_euclid(12) - 1;
     (oct * 7 + STEP[pc] - (4 * 7 + 2), SHARP[pc])
+}
+
+/// Une ligne ondulee (le vibrato) de `x0` a `x1` autour de `y` : `amp` de
+/// haut, une onde tous les `wl`.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn wavy(
+    cv: &mut Canvas<'_>,
+    x0: f32,
+    x1: f32,
+    y: f32,
+    amp: f32,
+    wl: f32,
+    lw: f32,
+    c: Color,
+) {
+    if x1 <= x0 + 1.0 {
+        return;
+    }
+    let mut p = Path::new();
+    p.move_to(x0, y);
+    let mut x = x0;
+    let mut up = true;
+    while x < x1 - 1e-3 {
+        let nx = (x + wl * 0.5).min(x1);
+        let cy = if up { y - amp * 2.0 } else { y + amp * 2.0 };
+        p.quad_to((x + nx) * 0.5, cy, nx, y);
+        x = nx;
+        up = !up;
+    }
+    cv.stroke_path(&p, lw, c);
+}
+
+/// Les passages marques d'une technique qui dure (P.M., let ring) : des
+/// notes qui se suivent (moins d'une demi-noire entre deux) ; (debut, fin)
+/// en noires.
+pub(crate) fn mark_spans(doc: &[cp_tab::doc::TNote], bit: u8) -> Vec<(f64, f64)> {
+    let mut v: Vec<(f64, f64)> = doc
+        .iter()
+        .filter(|n| n.has(bit))
+        .map(|n| (n.qn0, n.qn1))
+        .collect();
+    v.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let mut out: Vec<(f64, f64)> = Vec::new();
+    for (a, b) in v {
+        match out.last_mut() {
+            Some(l) if a <= l.1 + 0.5 => l.1 = l.1.max(b),
+            _ => out.push((a, b)),
+        }
+    }
+    out
 }
 
 /// L'armure : ses dieses (ou bemols) a leurs places de la cle de sol, a
@@ -319,6 +369,26 @@ fn mark_icon(
             let d = if m == Mark::InBelow { s(5.0) } else { -s(5.0) };
             dot(cv, cx + s(5.0), cy);
             cv.line(cx - s(7.0), cy + d, cx + s(1.5), cy, lw, c);
+        }
+        Mark::Palm | Mark::Ring => {
+            let lab = if m == Mark::Palm { "PM" } else { "LR" };
+            text.draw_in(cv, fl, x, y, w, h, lab, c, Align::Center);
+        }
+        Mark::Dead => {
+            cv.stroke_round_rect(cx - s(7.0), cy - s(6.5), s(14.0), s(13.0), s(2.0), lw, c);
+            let r = s(3.2);
+            cv.line(cx - r, cy - r, cx + r, cy + r, lw, c);
+            cv.line(cx - r, cy + r, cx + r, cy - r, lw, c);
+        }
+        Mark::Harmonic => {
+            let r = s(6.0);
+            cv.line(cx - r, cy, cx, cy - r, lw, c);
+            cv.line(cx, cy - r, cx + r, cy, lw, c);
+            cv.line(cx + r, cy, cx, cy + r, lw, c);
+            cv.line(cx, cy + r, cx - r, cy, lw, c);
+        }
+        Mark::Vibrato => {
+            wavy(cv, cx - s(8.0), cx + s(8.0), cy, s(2.5), s(4.0), lw, c);
         }
         Mark::Release => {
             let (x0, x1, top, bot) = (cx - s(7.0), cx + s(7.0), cy - s(6.0), cy + s(6.0));
@@ -2865,9 +2935,33 @@ pub(crate) fn draw_score(
             prev = Some(pos);
             let y = y_of(pos);
             let c = if sel_n == Some(n) { th.accent } else { ink };
-            head_at(cv, x + dx, y, rx, ry, c);
-            if hollow {
-                head_at(cv, x + dx, y, rx * 0.62, ry * 0.42, paper);
+            let nt = &it.doc[n];
+            if nt.has(TNote::DEAD) {
+                let (a, b) = (rx * 0.85, ry * 1.1);
+                cv.line(x + dx - a, y - b, x + dx + a, y + b, s(1.4), c);
+                cv.line(x + dx - a, y + b, x + dx + a, y - b, s(1.4), c);
+            } else if nt.has(TNote::HARMONIC) {
+                let mut p = Path::new();
+                p.move_to(x + dx - rx, y)
+                    .line_to(x + dx, y - ry * 1.3)
+                    .line_to(x + dx + rx, y)
+                    .line_to(x + dx, y + ry * 1.3)
+                    .close();
+                if hollow {
+                    cv.stroke_path(&p, s(1.2), c);
+                } else {
+                    cv.fill_path(&p, c);
+                }
+            } else {
+                head_at(cv, x + dx, y, rx, ry, c);
+                if hollow {
+                    head_at(cv, x + dx, y, rx * 0.62, ry * 0.42, paper);
+                }
+            }
+            if nt.has(TNote::VIBRATO) && sg.first {
+                let xe = (geo.x(nt.qn1) + pad - s(2.0)).max(x + s(12.0));
+                let yv = y_of(12).min(y - gap * 2.0);
+                wavy(cv, x - rx, xe, yv, s(1.6), s(6.0), lw, ink);
             }
             // La glisse d'approche : un trait qui monte (ou descend) vers la
             // tete, avant son diese.
@@ -3142,7 +3236,28 @@ pub(crate) fn draw_tab(
         for &n in &ev.notes {
             let note = &it.doc[n];
             let y = line_y(note.string);
-            let tx = note.fret.to_string();
+            let tx = if note.has(TNote::DEAD) {
+                "x".to_string()
+            } else if note.has(TNote::HARMONIC) {
+                format!("<{}>", note.fret)
+            } else {
+                note.fret.to_string()
+            };
+            // Le vibrato : une onde au-dessus de la tablature, le temps de
+            // la note.
+            if note.has(TNote::VIBRATO) {
+                let xe = (geo.x(note.qn1) + pad - s(2.0)).max(x + s(10.0));
+                wavy(
+                    cv,
+                    x - s(2.0),
+                    xe,
+                    tab_y - s(6.0),
+                    s(1.4),
+                    s(5.0),
+                    lw,
+                    th.text_dim,
+                );
+            }
             let tw = text.measure(fd, &tx).ceil() + s(4.0);
             let sel = sel_n == Some(n);
             if sel {
@@ -3258,6 +3373,29 @@ pub(crate) fn draw_tab(
                     }
                 }
             }
+        }
+    }
+    // Les techniques qui durent : « P.M. » et « let ring », suivis de
+    // tirets jusqu'a la fin du passage.
+    // (Au-dessus de la tablature, sous ses bends ; dans la couche.)
+    for (bit, lab, dy) in [
+        (TNote::PALM, "P.M.", s(13.0)),
+        (TNote::RING, "let ring", s(13.0)),
+    ] {
+        for (a, b) in mark_spans(&it.doc, bit) {
+            let (xa, xb) = (geo.x(a) + pad - s(4.0), geo.x(b) + pad);
+            if !geo.visible(xa) && !geo.visible(xb) && !(xa < 0.0 && xb > 0.0) {
+                continue;
+            }
+            let yl = tab_y - dy;
+            let lw_ = text.measure(fl, lab);
+            text.draw(cv, fl, xa, yl + s(3.5), lab, th.text_dim);
+            let mut xx = xa + lw_ + s(3.0);
+            while xx < xb - s(3.0) {
+                cv.fill_rect(xx, yl, s(3.0), lw, th.text_dim);
+                xx += s(6.0);
+            }
+            cv.fill_rect(xb - lw, yl - s(3.0), lw, s(6.0), th.text_dim);
         }
     }
     if it.detect.ghosts {

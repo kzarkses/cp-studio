@@ -52,6 +52,9 @@ pub struct TNote {
     /// est une glisse d'approche ; ce qui monte ensuite est un bend. C'est
     /// elle que portent les pitch bends du MIDI.
     pub bend: Vec<(f64, f32)>,
+    /// Les techniques de jeu : [`TNote::PALM`], [`TNote::DEAD`],
+    /// [`TNote::HARMONIC`], [`TNote::RING`], [`TNote::VIBRATO`].
+    pub marks: u8,
 }
 
 /// Une courbe de hauteur : (noires depuis le debut de la note, demi-tons).
@@ -67,6 +70,21 @@ pub struct BendMark {
 }
 
 impl TNote {
+    /// Etouffee de la paume (« P.M. »).
+    pub const PALM: u8 = 1;
+    /// Note morte (« x ») : la corde frappee sans hauteur.
+    pub const DEAD: u8 = 2;
+    /// Harmonique naturelle (« <12> »).
+    pub const HARMONIC: u8 = 4;
+    /// Laisser sonner (« let ring »).
+    pub const RING: u8 = 8;
+    /// Vibrato (« ~ »).
+    pub const VIBRATO: u8 = 16;
+
+    pub fn has(&self, m: u8) -> bool {
+        self.marks & m != 0
+    }
+
     /// La glisse d'approche : d'ou elle part (demi-tons, negatif : d'en
     /// dessous), 0 : aucune.
     pub fn slide_in(&self) -> i8 {
@@ -147,6 +165,14 @@ impl TNote {
         if top < 0.4 {
             return None;
         }
+        // Un vibrato autour de la note n'est pas un bend (un bend suivi d'un
+        // vibrato l'est : sa courbe reste haute).
+        if self.has(TNote::VIBRATO) {
+            let mean = rest.iter().map(|p| p.1).sum::<f32>() / rest.len().max(1) as f32;
+            if mean < 0.35 {
+                return None;
+            }
+        }
         let pk = rest.iter().position(|p| p.1 >= top * 0.8)?;
         let release = rest[pk..].iter().find(|p| p.1 <= top * 0.35).map(|p| p.0);
         Some(BendMark {
@@ -183,6 +209,7 @@ struct Member {
     vel: u8,
     slid: bool,
     bend: Vec<(f64, f32)>,
+    vibrato: bool,
 }
 
 /// Des notes detectees a la tablature. Les notes qui commencent sur la meme
@@ -204,6 +231,7 @@ pub fn finger(notes: &[TabNote], grid: u32, bpm: f64, tuning: &Tuning) -> (Vec<T
             x.legato &= n.legato;
             x.vel = x.vel.max(n.vel);
             x.slid &= n.slid;
+            x.vibrato |= n.vibrato;
             if x.bend.is_empty() {
                 x.bend = n.bend.clone();
             }
@@ -216,6 +244,7 @@ pub fn finger(notes: &[TabNote], grid: u32, bpm: f64, tuning: &Tuning) -> (Vec<T
                 vel: n.vel,
                 slid: n.slid,
                 bend: n.bend.clone(),
+                vibrato: n.vibrato,
             });
         }
     }
@@ -262,6 +291,7 @@ pub fn finger(notes: &[TabNote], grid: u32, bpm: f64, tuning: &Tuning) -> (Vec<T
                     tech: Tech::Plain,
                     locked: false,
                     bend: m.bend.clone(),
+                    marks: if m.vibrato { TNote::VIBRATO } else { 0 },
                 }),
                 None => dropped += 1,
             }
@@ -345,6 +375,7 @@ pub fn ghosts(candidates: &[TabNote], doc: &[TNote], grid: u32, tuning: &Tuning)
             tech: Tech::Plain,
             locked: false,
             bend: Vec::new(),
+            marks: 0,
         });
     }
     sort(&mut out);
@@ -574,6 +605,8 @@ pub fn simplify_curve(v: &[(f64, f32)], tol: f32) -> Vec<(f64, f32)> {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Sidecar {
     pub tech: HashMap<(i64, i32), Tech>,
+    /// Les techniques de jeu ([`TNote::marks`]).
+    pub marks: HashMap<(i64, i32), u8>,
     pub locked: HashSet<(i64, i32)>,
     pub suppressed: HashSet<(i64, i32)>,
 }
@@ -591,6 +624,9 @@ impl Sidecar {
             }
             if t.locked {
                 s.locked.insert(t.key());
+            }
+            if t.marks != 0 {
+                s.marks.insert(t.key(), t.marks);
             }
         }
         s
@@ -614,6 +650,11 @@ impl Sidecar {
         l.sort();
         for &(q, p) in l {
             v.push(format!("L:{q}:{p}"));
+        }
+        let mut mk: Vec<_> = self.marks.iter().collect();
+        mk.sort();
+        for (&(q, p), &m) in mk {
+            v.push(format!("K:{q}:{p}:{m}"));
         }
         let mut s: Vec<_> = self.suppressed.iter().collect();
         s.sort();
@@ -645,6 +686,11 @@ impl Sidecar {
                 }
                 "L" => {
                     out.locked.insert((q, p));
+                }
+                "K" => {
+                    if let Some(m) = it.next().and_then(|m| m.parse::<u8>().ok()) {
+                        out.marks.insert((q, p), m);
+                    }
                 }
                 "S" => {
                     out.suppressed.insert((q, p));
@@ -698,10 +744,12 @@ pub fn from_midi(
                 tech: Tech::Plain,
                 locked: false,
                 bend: Vec::new(),
+                marks: 0,
             };
             let k = t.key();
             t.tech = side.tech.get(&k).copied().unwrap_or_default();
             t.locked = side.locked.contains(&k);
+            t.marks = side.marks.get(&k).copied().unwrap_or(0);
             // La courbe : les pitch bends du canal pendant la note (celui
             // pose juste avant son debut compris).
             let eps = 1.0 / 480.0;
@@ -843,6 +891,9 @@ pub fn tab_to_text(
             }
             s += "\n";
         }
+        if t.marks != 0 {
+            s += &format!("m {}\n", t.marks);
+        }
     }
     let mut sup: Vec<_> = suppressed.iter().collect();
     sup.sort();
@@ -893,6 +944,7 @@ pub fn tab_from_text(s: &str, at_qn: f64) -> Option<TabFile> {
                     },
                     locked: lo != 0.0,
                     bend: Vec::new(),
+                    marks: 0,
                 });
             }
             // La courbe de la note d'avant.
@@ -905,6 +957,12 @@ pub fn tab_from_text(s: &str, at_qn: f64) -> Option<TabFile> {
             Some(&"s") if v.len() == 3 => {
                 if let (Ok(q), Ok(p)) = (v[1].parse::<i64>(), v[2].parse::<i32>()) {
                     sup.insert((q + base, p));
+                }
+            }
+            // Les techniques de jeu de la note d'avant.
+            Some(&"m") if v.len() == 2 => {
+                if let (Some(last), Ok(m)) = (doc.last_mut(), v[1].parse::<u8>()) {
+                    last.marks = m;
                 }
             }
             _ => {}

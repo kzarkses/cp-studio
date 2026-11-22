@@ -2129,3 +2129,57 @@ fn l_armure_et_les_bemols() {
     let p = print::pdf(&it, v.tracks[0].head.lanes, &mut b.t);
     assert!(p.pages >= 1);
 }
+
+/// Les techniques de jeu : P.M. sur un passage, une note morte, un vibrato
+/// laisse sonner, une harmonique ; la palette pose le vibrato (et sa courbe,
+/// pour l'entendre) puis l'enleve.
+#[test]
+fn les_techniques_de_jeu_se_dessinent() {
+    use cp_tab::doc::TNote;
+    let mut b = Bench::new(1600, 900);
+    let mut v = arranger();
+    v.rec.clear();
+    let q0 = v.tracks[0].items[0].qn0;
+    let open = [40, 45, 50, 55, 59, 64];
+    let note = |q: f64, len: f64, string: usize, fret: i32, marks: u8| TNote {
+        qn0: q0 + q,
+        qn1: q0 + q + len,
+        pitch: open[string] + fret,
+        string,
+        fret,
+        vel: 96,
+        marks,
+        ..Default::default()
+    };
+    let mut d = vec![
+        note(0.0, 0.5, 0, 3, TNote::PALM),
+        note(0.5, 0.5, 0, 3, TNote::PALM),
+        note(1.0, 0.5, 0, 3, TNote::PALM | TNote::DEAD),
+        note(1.5, 0.5, 0, 5, TNote::PALM),
+        note(2.0, 2.0, 4, 8, TNote::VIBRATO | TNote::RING),
+        note(4.0, 1.0, 3, 12, TNote::HARMONIC),
+        note(5.0, 1.0, 2, 7, 0),
+    ];
+    cp_tab::doc::sort(&mut d);
+    v.tracks[0].items[0].set_doc(d);
+    v.tracks[0].items[0].ghosts.clear();
+    b.shot(&mut v, "17_techniques");
+    // La palette : le vibrato sur la derniere note, entendu (une courbe),
+    // puis enleve avec elle.
+    let n = v.tracks[0].items[0].doc.len() - 1;
+    assert!(v.apply_mark(0, 0, n, Mark::Vibrato).is_some());
+    let nt = &v.tracks[0].items[0].doc[n];
+    assert!(nt.has(TNote::VIBRATO) && nt.bend.len() > 4);
+    assert!(nt.bend_mark().is_none(), "un vibrato n'est pas un bend");
+    assert!(v.mark_on(0, 0, n, Mark::Vibrato));
+    v.apply_mark(0, 0, n, Mark::Vibrato);
+    let nt = &v.tracks[0].items[0].doc[n];
+    assert!(!nt.has(TNote::VIBRATO) && nt.bend.is_empty());
+    // Morte et harmonique s'excluent.
+    v.apply_mark(0, 0, n, Mark::Dead);
+    v.apply_mark(0, 0, n, Mark::Harmonic);
+    let nt = &v.tracks[0].items[0].doc[n];
+    assert!(nt.has(TNote::HARMONIC) && !nt.has(TNote::DEAD));
+    // La palette tient ses 14 icones.
+    assert_eq!(Mark::ALL.len(), 14);
+}
