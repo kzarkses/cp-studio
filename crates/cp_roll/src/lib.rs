@@ -420,6 +420,104 @@ impl Roll {
         self.sort();
     }
 
+    /// Deplace la selection sans tenir compte de la gamme (REAPER : « ignoring
+    /// scale/key »).
+    pub fn move_sel_free(&mut self, dq: f64, dp: i32) {
+        for n in self.notes.iter_mut().filter(|n| n.sel) {
+            n.qn0 = (n.qn0 + dq).max(0.0);
+            n.pitch = (n.pitch + dp).clamp(0, 127);
+        }
+        self.sort();
+    }
+
+    /// Rend muettes les cibles (`Some(true)`), les rallume (`Some(false)`), ou
+    /// bascule (`None`, sur l'etat de la premiere).
+    pub fn mute_sel(&mut self, m: Option<bool>) -> usize {
+        let t = self.targets();
+        let Some(&first) = t.first() else { return 0 };
+        let v = m.unwrap_or(!self.notes[first].mute);
+        for &i in &t {
+            self.notes[i].mute = v;
+        }
+        t.len()
+    }
+
+    /// Coupe les cibles sur chaque ligne de grille qu'elles enjambent.
+    pub fn split_grid(&mut self, grid: f64) -> usize {
+        if grid <= EPS {
+            return 0;
+        }
+        let t = self.targets();
+        let mut add = Vec::new();
+        for &i in &t {
+            let n = self.notes[i];
+            let mut q = ((n.qn0 / grid).floor() + 1.0) * grid;
+            let mut start = n.qn0;
+            let mut first = true;
+            while q < n.end() - EPS {
+                if q > start + EPS {
+                    if first {
+                        self.notes[i].len = q - n.qn0;
+                        first = false;
+                    } else {
+                        add.push(Note {
+                            qn0: start,
+                            len: q - start,
+                            ..n
+                        });
+                    }
+                    start = q;
+                }
+                q += grid;
+            }
+            if !first {
+                add.push(Note {
+                    qn0: start,
+                    len: n.end() - start,
+                    ..n
+                });
+            }
+        }
+        let k = add.len();
+        for mut n in add {
+            n.id = self.mint();
+            self.notes.push(n);
+        }
+        self.sort();
+        k
+    }
+
+    /// Les debuts des notes choisies, ecartes selon leur hauteur (REAPER :
+    /// « stretch note positions (arpeggiate) ») : la note `id` avance de `dq`,
+    /// la plus eloignee d'elle en hauteur reste, les autres suivent au prorata.
+    pub fn arpeggiate(&mut self, id: u64, dq: f64) {
+        let Some(g) = self.get(id).copied() else {
+            return;
+        };
+        let sel: Vec<i32> = self
+            .notes
+            .iter()
+            .filter(|n| n.sel)
+            .map(|n| n.pitch)
+            .collect();
+        let (lo, hi) = (
+            sel.iter().copied().min().unwrap_or(g.pitch),
+            sel.iter().copied().max().unwrap_or(g.pitch),
+        );
+        // Le pivot : l'extremite opposee a la note saisie.
+        let pivot = if g.pitch - lo >= hi - g.pitch { lo } else { hi };
+        let span = (g.pitch - pivot) as f64;
+        for n in self.notes.iter_mut().filter(|n| n.sel) {
+            let t = if span.abs() < 0.5 {
+                if n.id == id { 1.0 } else { 0.0 }
+            } else {
+                (n.pitch - pivot) as f64 / span
+            };
+            n.qn0 = (n.qn0 + dq * t).max(0.0);
+        }
+        self.sort();
+    }
+
     /// Allonge (ou raccourcit) la selection de `dlen` noires.
     pub fn resize_sel(&mut self, dlen: f64) {
         for n in self.notes.iter_mut().filter(|n| n.sel) {

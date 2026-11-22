@@ -208,3 +208,44 @@ fn copier_glisser_laisse_la_copie() {
             .any(|n| n.pitch == 40 && n.qn0 == 2.0 && n.sel)
     );
 }
+
+#[test]
+fn muet_grille_arpege_gardent_le_canal() {
+    // Un accord de trois notes sur trois canaux (trois cordes).
+    let mut r = Roll::from_notes([
+        (0.0, 1.0, 40, 5, 100, true, false),
+        (0.0, 1.0, 47, 4, 100, true, false),
+        (0.0, 1.0, 52, 3, 100, true, false),
+    ]);
+    assert_eq!(r.mute_sel(None), 3);
+    assert!(r.notes.iter().all(|n| n.mute));
+    r.mute_sel(Some(false));
+    assert!(r.notes.iter().all(|n| !n.mute));
+    // Couper sur la grille de la double croche : 4 morceaux par note.
+    assert_eq!(r.split_grid(0.25), 9);
+    assert_eq!(r.notes.len(), 12);
+    let mut c: Vec<i32> = r.notes.iter().map(|n| n.chan).collect();
+    c.sort_unstable();
+    c.dedup();
+    assert_eq!(
+        c,
+        vec![3, 4, 5],
+        "le canal de chaque morceau est celui de sa note"
+    );
+    // L'arpege : la note la plus aigue avance d'une noire, la plus grave reste.
+    let mut a = Roll::from_notes([
+        (0.0, 1.0, 40, 5, 100, true, false),
+        (0.0, 1.0, 47, 4, 100, true, false),
+        (0.0, 1.0, 52, 3, 100, true, false),
+    ]);
+    let top = a.notes.iter().find(|n| n.pitch == 52).unwrap().id;
+    a.arpeggiate(top, 1.0);
+    let at = |p: i32| a.notes.iter().find(|n| n.pitch == p).unwrap().qn0;
+    assert!(at(40).abs() < 1e-9 && (at(52) - 1.0).abs() < 1e-9);
+    assert!((at(47) - 7.0 / 12.0).abs() < 1e-9);
+    // Sans la gamme : un demi-ton hors de la gamme reste ou on le met.
+    let mut s = Roll::from_notes([(0.0, 1.0, 60, 2, 100, true, false)]);
+    s.scale = Some(crate::Scale { root: 0, kind: 1 });
+    s.move_sel_free(0.0, 1);
+    assert_eq!((s.notes[0].pitch, s.notes[0].chan), (61, 2));
+}
