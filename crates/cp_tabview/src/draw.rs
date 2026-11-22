@@ -173,7 +173,7 @@ pub fn lane_hz(l: Lane, vz: f32) -> f32 {
 
 /// La hauteur que demande l'en-tete d'une piste (a 96 DPI).
 const HEAD_MIN_H: f32 = 116.0;
-const TRACK_SEP: f32 = 3.0;
+const TRACK_SEP: f32 = 1.0;
 /// Les curseurs de l'inspecteur : ou commence la glissiere, et la place
 /// laissee a droite pour la valeur (a 96 DPI).
 pub(crate) const SLIDER_X: f32 = 80.0;
@@ -278,10 +278,10 @@ impl Arr {
         let l = self.lay;
         cv.fill_rect(0.0, 0.0, w, h, th.bg);
         self.draw_bar(cv, text, icons, th, &mut bx);
-        cv.fill_rect(0.0, l.bar_h, w, 2.0, th.seam);
+        cv.fill_rect(0.0, l.bar_h, w, 1.0, th.seam);
         self.draw_tracks(cv, text, icons, th, &mut bx);
         if l.panel_w > 0.0 {
-            cv.fill_rect(l.panel_x - 2.0, l.top, 2.0, l.bottom - l.top, th.seam);
+            cv.fill_rect(l.panel_x - 1.0, l.top, 1.0, l.bottom - l.top, th.seam);
             self.draw_panel(cv, text, icons, th, &mut bx);
         }
         self.boxes = bx;
@@ -542,8 +542,8 @@ impl Arr {
         let tb = l.bottom - l.hs_h;
         // --- la regle (et le coin des en-tetes, vide)
         cv.fill_rect(0.0, ry, l.head_w, l.ruler_h, th.panel);
-        cv.fill_rect(l.head_w, ry, 2.0, l.bottom - ry, th.seam);
-        cv.fill_rect(l.label_x, ry, l.w, l.ruler_h, th.panel);
+        cv.fill_rect(l.head_w, ry, 1.0, l.bottom - ry, th.seam);
+        cv.fill_rect(l.label_x, ry, l.w, l.ruler_h, th.rp.ruler_bg);
         let geo = Geo {
             sx: l.sx,
             scroll: self.scroll,
@@ -644,29 +644,23 @@ impl Arr {
                     self.draw_lanes(cv, text, icons, th, bx, t, y, h, geo, vis);
                 }
                 y += h;
-                cv.fill_rect(
-                    0.0,
-                    y,
-                    l.panel_x,
-                    s(TRACK_SEP),
-                    th.seam.mix(Color::BLACK, 0.4),
-                );
+                cv.fill_rect(0.0, y, l.panel_x, s(TRACK_SEP), th.rp.tr_div);
                 y += s(TRACK_SEP);
+            }
+            // Le vide sous les pistes : celui de l'arrangement.
+            if y < tb {
+                cv.fill_rect(l.label_x, y, content_r - l.label_x, tb - y, th.rp.arr_bg);
             }
             // La tete de lecture et les curseurs sont des traits, poses
             // par-dessus la scene (`strokes`).
             self.tracks_bottom = y;
-            // Le passage choisi, a travers toutes les pistes.
+            // Le passage choisi, a travers toutes les pistes (la selection de
+            // temps du theme ; son mode « incrustation » rendu en voile clair).
             if let Some((a, b)) = self.range {
-                let (xa, xb) = (geo.x(a).max(l.sx), geo.x(b).min(content_r));
+                let (xa, xb) = (geo.x(a).max(l.sx).round(), geo.x(b).min(content_r).round());
                 if xb > xa {
-                    cv.fill_rect(
-                        xa,
-                        top,
-                        xb - xa,
-                        (y - top).max(0.0),
-                        th.accent.with_alpha(16),
-                    );
+                    let ts = th.rp.timesel;
+                    cv.fill_rect(xa, top, xb - xa, (y - top).max(0.0), ts.with_alpha(ts.a / 3));
                 }
             }
             // Une prise qu'on glisse (elle se dessine a sa nouvelle place) :
@@ -1027,7 +1021,6 @@ impl Arr {
         let right = l.sx + l.sw;
         let lanes = self.tracks[t].head.lanes;
         let nstr = crate::tuning_of(self.tracks[t].head.tuning).strings.len();
-        let paper = th.bg;
         let staff_c = th.text_dim.fade(0.75);
         let vz = self.vzoom;
         let sel = self.sel;
@@ -1050,13 +1043,32 @@ impl Arr {
         }
         let rec: Vec<crate::Rec> = self.rec.iter().filter(|r| r.track == t).cloned().collect();
         let playhead = self.playhead;
+        // Le fond des pistes de REAPER (une sur deux, la choisie plus claire).
+        let k = t % 2;
+        let track_bg = if self.sel.is_some_and(|x| x.t == t) {
+            th.rp.tr_sel_bg[k]
+        } else {
+            th.rp.tr_bg[k]
+        };
         for &(lane, ly, lh) in &lane_ys {
             // Le fond et le nom de la couche.
-            let bg = match lane {
-                Lane::Audio | Lane::Midi => th.field,
-                _ => paper,
-            };
-            cv.fill_rect(l.label_x, ly, right - l.label_x, lh, bg);
+            cv.fill_rect(l.label_x, ly, right - l.label_x, lh, track_bg);
+            // La grille de l'arrangement, sous les items : mesures et temps.
+            if matches!(lane, Lane::Audio | Lane::Midi) && cv.push_clip(l.sx, ly, l.sw, lh) {
+                let beat = 4.0 / self.sig.1.max(1) as f64;
+                let beat_px = beat as f32 * l.ppq;
+                for m in first..=last {
+                    let q = m as f64 * bq;
+                    cv.fill_rect(geo.x(q).round(), ly, 1.0, lh, th.rp.grid_bar);
+                    if beat_px >= s(12.0) {
+                        for b in 1..self.sig.0.max(1) {
+                            let xb = geo.x(q + b as f64 * beat).round();
+                            cv.fill_rect(xb, ly, 1.0, lh, th.rp.grid_beat);
+                        }
+                    }
+                }
+            }
+            cv.pop_clip();
             if matches!(lane, Lane::Audio | Lane::Midi) {
                 cv.fill_rect(
                     l.label_x,
@@ -1974,11 +1986,11 @@ fn draw_item(
     }
     if is_sel {
         cv.stroke_rect(
-            xa,
+            xa.round(),
             lay.y0 + 1.0,
-            xb - xa,
+            (xb - xa).round(),
             (lay.y1 - lay.y0 - 2.0).max(0.0),
-            s(1.5),
+            1.0,
             th.accent,
         );
     }
@@ -1997,30 +2009,18 @@ fn draw_audio_item(
     sel: bool,
 ) {
     let s = |v: f32| v * geo.s;
-    let body = if sel {
-        th.panel.mix(th.text, 0.16)
+    // Un item de REAPER : son fond, son bord d'un pixel (blanc choisi), son
+    // nom et sa forme d'onde aux couleurs du theme.
+    let rp = &th.rp;
+    let (bg, border, label, peak) = if sel {
+        (rp.item_bg_sel, rp.item_border_sel, rp.item_label_sel, rp.peaks_sel)
     } else {
-        th.panel.mix(th.text, 0.1)
+        (rp.item_bg, rp.item_border, rp.item_label, rp.peaks)
     };
-    cv.fill_round_rect(
-        xa + 1.0,
-        ly + s(3.0),
-        (xb - xa - 2.0).max(1.0),
-        lh - s(6.0),
-        s(2.0),
-        body,
-    );
-    cv.fill_rect(
-        xa + 1.0,
-        ly + s(3.0),
-        (xb - xa - 2.0).max(1.0),
-        s(14.0),
-        if sel {
-            th.accent.with_alpha(70)
-        } else {
-            Color::BLACK.with_alpha(40)
-        },
-    );
+    let (x0, x1) = (xa.round(), xb.round().max(xa.round() + 1.0));
+    let (y0, y1) = ((ly + s(1.0)).round(), (ly + lh - s(1.0)).round());
+    cv.fill_rect(x0, y0, x1 - x0, y1 - y0, bg);
+    cv.stroke_rect(x0, y0, x1 - x0, y1 - y0, 1.0, border);
     let f = Font::new(0, s(10.5) as u16, 500);
     let mut name = it.name.clone();
     if it.takes.len() > 1 {
@@ -2033,7 +2033,7 @@ fn draw_audio_item(
             xa.max(geo.clip.0) + s(6.0),
             ly + s(13.5),
             &name,
-            th.text,
+            label,
         );
         // La forme d'onde : celle de REAPER, sinon l'enveloppe de l'analyse.
         let mid = ly + s(17.0) + (lh - s(23.0)) * 0.5;
@@ -2041,7 +2041,7 @@ fn draw_audio_item(
         let n = it.frame_qn.len();
         let np = it.peaks.len();
         if np > 0 && it.qn1 > it.qn0 {
-            let wave_c = th.text_dim.mix(th.text, 0.3).fade(0.85);
+            let wave_c = peak;
             let mut x = xa.max(geo.clip.0).floor();
             let x_end = xb.min(geo.clip.0 + geo.clip.2);
             let k = np as f64 / (it.qn1 - it.qn0);
@@ -2059,7 +2059,7 @@ fn draw_audio_item(
                 x += 1.0;
             }
         } else if n > 0 && !it.env.is_empty() {
-            let wave_c = th.text_dim.mix(th.text, 0.3).fade(0.85);
+            let wave_c = peak.with_alpha(170);
             let mut x = xa.max(geo.clip.0);
             let x_end = xb.min(geo.clip.0 + geo.clip.2);
             while x < x_end {
@@ -2098,11 +2098,11 @@ fn draw_audio_item(
             } else {
                 zone.move_to(x0, top).line_to(x1, top).line_to(x1, bot).close();
             }
-            cv.fill_path(&zone, Color::BLACK.with_alpha(70));
+            cv.fill_path(&zone, rp.fade_zone);
             if fin {
-                cv.line(x0, bot, x1, top, 1.0, th.text_dim);
+                cv.line(x0, bot, x1, top, 1.0, rp.fade_line);
             } else {
-                cv.line(x0, top, x1, bot, 1.0, th.text_dim);
+                cv.line(x0, top, x1, bot, 1.0, rp.fade_line);
             }
         }
         if let Some(st) = &it.state {
@@ -2120,7 +2120,7 @@ fn draw_audio_item(
                     xa.max(geo.clip.0) + s(8.0),
                     mid + s(4.0),
                     &msg,
-                    th.text_dim,
+                    label,
                 );
                 if let State::Busy(p) = st {
                     let pw = (xb - xa - s(4.0)).max(0.0) * (*p as f32 / 100.0);
@@ -2145,14 +2145,11 @@ fn draw_midi_item(
     nstr: usize,
 ) {
     let s = |v: f32| v * geo.s;
-    cv.fill_round_rect(
-        xa + 1.0,
-        ly + s(3.0),
-        (xb - xa - 2.0).max(1.0),
-        lh - s(6.0),
-        s(2.0),
-        th.bg.mix(th.text, 0.05),
-    );
+    let rp = &th.rp;
+    let (x0, x1) = (xa.round(), xb.round().max(xa.round() + 1.0));
+    let (y0, y1) = ((ly + s(1.0)).round(), (ly + lh - s(1.0)).round());
+    cv.fill_rect(x0, y0, x1 - x0, y1 - y0, rp.item_bg);
+    cv.stroke_rect(x0, y0, x1 - x0, y1 - y0, 1.0, rp.item_border);
     let (lo, hi) = (38.0f32, 82.0f32);
     for n in &it.doc {
         let x = geo.x(n.qn0);
@@ -2162,18 +2159,18 @@ fn draw_midi_item(
         }
         let y = ly + s(5.0) + (hi - n.pitch as f32) / (hi - lo) * (lh - s(13.0));
         cv.fill_rect(
-            x,
-            y,
-            w,
+            x.round(),
+            y.round(),
+            w.round().max(1.0),
             s(3.0),
-            string_color(n.string.min(nstr.saturating_sub(1))),
+            string_color(n.string.min(nstr.saturating_sub(1))).mix(Color::BLACK, 0.35),
         );
     }
     for g in &it.ghosts {
         let x = geo.x(g.qn0);
         let w = (geo.x(g.qn1) - x - 1.0).max(1.5);
         let y = ly + s(5.0) + (hi - g.pitch as f32) / (hi - lo) * (lh - s(13.0));
-        dashed_rect(cv, x, y, w, s(3.0), th.text_faint);
+        dashed_rect(cv, x, y, w, s(3.0), rp.peaks.with_alpha(140));
     }
 }
 

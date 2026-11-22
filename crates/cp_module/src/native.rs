@@ -68,6 +68,7 @@ impl App {
     pub(crate) fn reaper_theme(&self, scale: f32) -> Theme {
         let r = self.r;
         let mut th = Theme::reaper(scale, &|k| r.theme_color(k));
+        th.rp = cp_ui::ReaperLook::read(&|k| r.theme_color(k), &|k| r.theme_value(k));
         if let Some(m) = r.theme_value("playcursor_drawmode") {
             let (a, _) = cp_sys::theme::drawmode_alpha(m);
             th.playhead = th.playhead.with_alpha((a * 255.0).round() as u8);

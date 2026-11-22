@@ -524,7 +524,8 @@ impl Ed {
         let l = self.lay;
         let s = |v: f32| th.s(v);
         let ry = l.top;
-        cv.fill_rect(0.0, ry, l.w, l.ruler_h, th.panel);
+        let rp = &th.rp;
+        cv.fill_rect(0.0, ry, l.w, l.ruler_h, rp.m_ruler_bg);
         cv.fill_rect(0.0, ry + l.ruler_h, l.w, 1.0, th.seam);
         if !cv.push_clip(l.sx, ry, l.sw, l.ruler_h) {
             cv.pop_clip();
@@ -536,9 +537,8 @@ impl Ed {
             cv.fill_rect(xa, ry, xb - xa, l.ruler_h, th.text.with_alpha(14));
         }
         if let Some((a, b)) = self.range {
-            let (xa, xb) = (self.x_of(a), self.x_of(b));
-            cv.fill_rect(xa, ry, xb - xa, l.ruler_h, th.accent.with_alpha(40));
-            cv.fill_rect(xa, ry + l.ruler_h - s(3.0), xb - xa, s(3.0), th.accent);
+            let (xa, xb) = (self.x_of(a).round(), self.x_of(b).round());
+            cv.fill_rect(xa, ry, xb - xa, l.ruler_h, rp.m_selbg.with_alpha(60));
         }
         let bq = self.bar_qn();
         let first = (self.scroll / bq).floor().max(0.0) as i64;
@@ -558,7 +558,7 @@ impl Ed {
                 ry + if major { s(3.0) } else { l.ruler_h - s(8.0) },
                 1.0,
                 if major { l.ruler_h - s(3.0) } else { s(8.0) },
-                th.text_faint,
+                rp.m_ruler_fg.fade(0.6),
             );
             if major {
                 text.draw(
@@ -567,7 +567,7 @@ impl Ed {
                     x + s(4.0),
                     ry + s(14.0),
                     &(m + 1).to_string(),
-                    th.text,
+                    rp.m_ruler_fg,
                 );
             }
             if step == 1 && bar_px > s(60.0) {
@@ -580,7 +580,7 @@ impl Ed {
                         ry + l.ruler_h - s(6.0),
                         1.0,
                         s(6.0),
-                        th.text_faint.fade(0.6),
+                        rp.m_ruler_fg.fade(0.35),
                     );
                 }
             }
@@ -602,8 +602,8 @@ impl Ed {
             cv.pop_clip();
             return;
         }
-        let lane = th.bg.mix(th.text, 0.035);
-        let dark = th.bg.mix(Color::BLACK, 0.18);
+        let rp = &th.rp;
+        let span = self.span().map(|(a, b)| (self.x_of(a).round(), self.x_of(b).round()));
         for (i, &p) in self.rows.iter().enumerate() {
             let y = self.row_y(i);
             let rh = self.row_h(i);
@@ -612,36 +612,33 @@ impl Ed {
             }
             let pc = p.rem_euclid(12);
             let in_scale = scale.is_none_or(|sc| sc.contains(p));
-            let bg = if !in_scale {
-                dark
-            } else if scale.is_none() && BLACK.contains(&pc) {
-                th.bg
+            // Les rangs de REAPER : touches blanches et noires (avec une
+            // gamme, ses notes sont les blanches) ; hors de l'item, les fonds
+            // exterieurs du theme.
+            let k = if scale.is_some() {
+                usize::from(!in_scale)
             } else {
-                lane
+                usize::from(BLACK.contains(&pc))
             };
-            cv.fill_rect(l.sx, y, l.sw, rh, bg);
-            // Le separateur ; un saut de hauteur (mode Notes) est plus epais,
-            // le Do aussi.
-            let jump = notes_mode && i > 0 && self.rows[i - 1] - p > 1;
-            let c_row = !notes_mode && pc == 11;
-            let (t, c) = if jump {
-                (2.0, th.seam)
-            } else if c_row {
-                (1.0, th.text_faint.fade(0.5))
-            } else {
-                (1.0, th.seam.mix(th.bg, 0.5))
-            };
-            cv.fill_rect(l.sx, y, l.sw, t, c);
-        }
-        // L'exterieur de l'item, assombri.
-        if let Some((a, b)) = self.span() {
-            let (xa, xb) = (self.x_of(a).round(), self.x_of(b).round());
-            let shade = Color::BLACK.with_alpha(70);
-            if xa > l.sx {
-                cv.fill_rect(l.sx, l.gy, xa - l.sx, l.gh, shade);
+            cv.fill_rect(l.sx, y, l.sw, rh, rp.m_bg[k]);
+            if let Some((xa, xb)) = span {
+                if xa > l.sx {
+                    cv.fill_rect(l.sx, y, xa - l.sx, rh, rp.m_outer[k]);
+                }
+                if xb < right {
+                    cv.fill_rect(xb, y, right - xb, rh, rp.m_outer[k]);
+                }
             }
-            if xb < right {
-                cv.fill_rect(xb, l.gy, right - xb, l.gh, shade);
+            // Un trait d'un pixel : l'octave (entre Si et Do), entre deux
+            // touches blanches voisines (Mi, Fa), et un saut de hauteur en
+            // mode Notes.
+            let jump = notes_mode && i > 0 && self.rows[i - 1] - p > 1;
+            if jump {
+                cv.fill_rect(l.sx, y, l.sw, 1.0, th.seam);
+            } else if !notes_mode && pc == 11 {
+                cv.fill_rect(l.sx, y + rh, l.sw, 1.0, rp.m_oct.fade(0.55));
+            } else if notes_mode || pc == 4 {
+                cv.fill_rect(l.sx, y, l.sw, 1.0, rp.m_bg[1]);
             }
         }
         // Les lignes de temps : mesures, temps, pas de grille.
@@ -668,11 +665,11 @@ impl Ed {
             let on_bar = ((q / bq).round() * bq - q).abs() < 1e-6;
             let on_beat = ((q / beat).round() * beat - q).abs() < 1e-6;
             let c = if on_bar {
-                th.text_faint.fade(0.85)
+                rp.m_grid_bar
             } else if on_beat {
-                th.seam.mix(th.text_faint, 0.35)
+                rp.m_grid_beat
             } else {
-                th.seam.mix(th.bg, 0.3)
+                rp.m_grid_sub
             };
             cv.fill_rect(x, l.gy, 1.0, l.gh, c);
             k += 1;
@@ -707,26 +704,23 @@ impl Ed {
                 if y + h < l.gy || y > l.gy + l.gh {
                     continue;
                 }
-                let inset = if h > 6.0 { 1.0 } else { 0.0 };
-                let (y, h) = (y + inset, (h - 2.0 * inset).max(1.0));
                 let mut c = self.note_color(n);
                 if n.mute {
-                    c = c.mix(th.bg, 0.6);
+                    c = th.rp.m_note_mute;
                 }
-                let r = s(2.5).min(h * 0.4);
-                cv.fill_round_rect(x, y, w, h, r, c);
-                if n.sel {
-                    cv.stroke_rect(x + 0.5, y + 0.5, w - 1.0, h - 1.0, s(1.5), Color::WHITE);
-                } else {
-                    cv.stroke_rect(
-                        x + 0.5,
-                        y + 0.5,
-                        w - 1.0,
-                        h - 1.0,
-                        1.0,
-                        Color::BLACK.with_alpha(80),
-                    );
-                }
+                cv.fill_rect(x, y, w, h, c);
+                cv.stroke_rect(
+                    x,
+                    y,
+                    w,
+                    h,
+                    1.0,
+                    if n.sel {
+                        th.rp.m_note_sel
+                    } else {
+                        th.rp.m_note_border
+                    },
+                );
                 // Les poignees au survol : 30 % de chaque cote.
                 if hover_id == Some(n.id) && w >= 5.0 * th.scale {
                     let hw = (w * 0.3).clamp(1.5 * th.scale, 6.0 * th.scale);
@@ -744,7 +738,7 @@ impl Ed {
                         w - s(6.0),
                         h,
                         &note_name(n.pitch),
-                        hex(0x161616),
+                        th.rp.m_note_text,
                         Align::Left,
                     );
                 }
@@ -824,21 +818,22 @@ impl Ed {
             let pc = p.rem_euclid(12);
             let black = BLACK.contains(&pc);
             let hov = self.hover == Hit::Key(p);
-            let (bg, ink) = if notes_mode {
-                (
-                    if black {
-                        th.panel.mix(Color::BLACK, 0.15)
-                    } else {
-                        th.panel.mix(th.text, 0.06)
-                    },
-                    th.text,
-                )
-            } else if black {
-                (hex(0x1e1e1e), th.text_dim)
+            let rp = &th.rp;
+            let (bg, ink) = if black {
+                (rp.m_key[1], rp.m_key[0])
             } else {
-                (hex(0xcfcfcf), hex(0x262626))
+                (rp.m_key[0], rp.m_key[1])
             };
-            let bg = if hov { bg.mix(th.accent, 0.3) } else { bg };
+            let bg = if notes_mode && black {
+                rp.m_key[1].mix(rp.m_key[0], 0.25)
+            } else {
+                bg
+            };
+            let bg = if hov || sel_pitches.contains(&p) {
+                rp.m_key_sel
+            } else {
+                bg
+            };
             cv.fill_rect(0.0, y, kw, rh, bg);
             cv.fill_rect(0.0, y, kw, 1.0, Color::BLACK.with_alpha(60));
             // Hors gamme : une marque a gauche.

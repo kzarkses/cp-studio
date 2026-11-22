@@ -218,6 +218,166 @@ impl Guide {
     }
 }
 
+/// Les couleurs de l'arrangement et de l'editeur MIDI de REAPER, lues dans
+/// le theme (ses cles et l'opacite de leurs modes de melange) : nos vues ont
+/// les memes fonds, grilles, items, notes et curseurs que REAPER. Les valeurs
+/// par defaut sont celles du theme de Cedric (Reapertips Green, 2026-11-22).
+#[derive(Clone, Copy, Debug)]
+pub struct ReaperLook {
+    // L'arrangement
+    pub arr_bg: Color,
+    pub tr_bg: [Color; 2],
+    pub tr_sel_bg: [Color; 2],
+    pub tr_div: Color,
+    pub grid_bar: Color,
+    pub grid_beat: Color,
+    pub grid_sub: Color,
+    pub item_bg: Color,
+    pub item_bg_sel: Color,
+    pub item_border: Color,
+    pub item_border_sel: Color,
+    pub item_label: Color,
+    pub item_label_sel: Color,
+    pub peaks: Color,
+    pub peaks_sel: Color,
+    pub fade_line: Color,
+    pub fade_zone: Color,
+    pub timesel: Color,
+    pub ruler_bg: Color,
+    pub ruler_fg: Color,
+    pub ruler_fg2: Color,
+    // L'editeur MIDI
+    pub m_bg: [Color; 2],
+    pub m_outer: [Color; 2],
+    pub m_oct: Color,
+    pub m_grid_bar: Color,
+    pub m_grid_beat: Color,
+    pub m_grid_sub: Color,
+    pub m_note_border: Color,
+    pub m_note_sel: Color,
+    pub m_note_mute: Color,
+    pub m_note_text: Color,
+    pub m_key: [Color; 2],
+    pub m_key_sel: Color,
+    pub m_left_bg: Color,
+    pub m_ruler_bg: Color,
+    pub m_ruler_fg: Color,
+    pub m_edit_cursor: Color,
+    pub m_selbg: Color,
+}
+
+impl Default for ReaperLook {
+    fn default() -> Self {
+        let a = |c: u32, k: f32| hex(c).with_alpha((k * 255.0).round() as u8);
+        ReaperLook {
+            arr_bg: hex(0x424242),
+            tr_bg: [hex(0x424242), hex(0x454545)],
+            tr_sel_bg: [hex(0x525252), hex(0x4F4F4F)],
+            tr_div: hex(0x333333),
+            grid_bar: a(0x000000, 0.55),
+            grid_beat: a(0x000000, 0.25),
+            grid_sub: a(0x000000, 0.15),
+            item_bg: hex(0x9E9E9E),
+            item_bg_sel: hex(0x949494),
+            item_border: a(0x000000, 0.8),
+            item_border_sel: a(0xFFFFFF, 0.8),
+            item_label: hex(0x1C1C1C),
+            item_label_sel: hex(0x2C2C2C),
+            peaks: hex(0x101010),
+            peaks_sel: hex(0x1F1F1F),
+            fade_line: hex(0x950018),
+            fade_zone: a(0x3F0001, 0.3),
+            timesel: a(0xFFFFFF, 0.3),
+            ruler_bg: hex(0x333333),
+            ruler_fg: hex(0x9A9A9A),
+            ruler_fg2: hex(0x585858),
+            m_bg: [hex(0x4C4C4C), hex(0x424242)],
+            m_outer: [hex(0x333333), hex(0x252525)],
+            m_oct: hex(0xA6A6A6),
+            m_grid_bar: a(0xFFFFFF, 0.25),
+            m_grid_beat: a(0x000000, 0.5),
+            m_grid_sub: a(0x000000, 0.2),
+            m_note_border: hex(0x101214),
+            m_note_sel: hex(0xFFFFFF),
+            m_note_mute: hex(0x353535),
+            m_note_text: hex(0x1F1F1F),
+            m_key: [hex(0xBABABA), hex(0x282828)],
+            m_key_sel: hex(0x8C8C8C),
+            m_left_bg: hex(0x323232),
+            m_ruler_bg: hex(0x333333),
+            m_ruler_fg: hex(0xC8C8C8),
+            m_edit_cursor: hex(0x339887),
+            m_selbg: a(0xFFFFFF, 0.06),
+        }
+    }
+}
+
+impl ReaperLook {
+    /// Lu dans le theme de REAPER : `color` rend une cle de couleur, `value`
+    /// la valeur brute d'une cle (un mode de melange : `mode = melange |
+    /// ((alpha * 256 + 512) << 8)`). Une cle absente garde sa valeur par
+    /// defaut.
+    pub fn read(color: &dyn Fn(&str) -> Option<Rgb>, value: &dyn Fn(&str) -> Option<i32>) -> Self {
+        let d = ReaperLook::default();
+        let c = |k: &str, def: Color| color(k).map_or(def, |(r, g, b)| rgb(r, g, b));
+        let alpha = |mode: &str, def: f32| {
+            value(mode).map_or(def, |m| {
+                ((((m >> 8) & 0x3FF) - 512) as f32 / 256.0).clamp(0.0, 1.0)
+            })
+        };
+        let ca = |k: &str, mode: &str, def: Color| {
+            let base = c(k, def);
+            base.with_alpha((alpha(mode, def.a as f32 / 255.0) * 255.0).round() as u8)
+        };
+        ReaperLook {
+            arr_bg: c("col_arrangebg", d.arr_bg),
+            tr_bg: [c("col_tr1_bg", d.tr_bg[0]), c("col_tr2_bg", d.tr_bg[1])],
+            tr_sel_bg: [
+                c("selcol_tr1_bg", d.tr_sel_bg[0]),
+                c("selcol_tr2_bg", d.tr_sel_bg[1]),
+            ],
+            tr_div: c("col_tr1_divline", d.tr_div),
+            grid_bar: ca("col_gridlines2", "col_gridlines2dm", d.grid_bar),
+            grid_beat: ca("col_gridlines3", "col_gridlines3dm", d.grid_beat),
+            grid_sub: ca("col_gridlines", "col_gridlines1dm", d.grid_sub),
+            item_bg: c("col_mi_bg", d.item_bg),
+            item_bg_sel: c("col_tr1_itembgsel", d.item_bg_sel),
+            item_border: d.item_border,
+            item_border_sel: d.item_border_sel,
+            item_label: c("col_mi_label", d.item_label),
+            item_label_sel: c("col_mi_label_sel", d.item_label_sel),
+            peaks: c("col_tr1_peaks", d.peaks),
+            peaks_sel: c("col_tr1_ps2", d.peaks_sel),
+            fade_line: c("col_mi_fades", d.fade_line),
+            fade_zone: ca("fadezone_color", "fadezone_drawmode", d.fade_zone),
+            timesel: ca("col_tl_bgsel", "timesel_drawmode", d.timesel),
+            ruler_bg: c("col_tl_bg", d.ruler_bg),
+            ruler_fg: c("col_tl_fg", d.ruler_fg),
+            ruler_fg2: c("col_tl_fg2", d.ruler_fg2),
+            m_bg: [c("midi_trackbg1", d.m_bg[0]), c("midi_trackbg2", d.m_bg[1])],
+            m_outer: [
+                c("midi_trackbg_outer1", d.m_outer[0]),
+                c("midi_trackbg_outer2", d.m_outer[1]),
+            ],
+            m_oct: c("midioct", d.m_oct),
+            m_grid_bar: ca("midi_grid2", "midi_griddm2", d.m_grid_bar),
+            m_grid_beat: ca("midi_grid3", "midi_griddm3", d.m_grid_beat),
+            m_grid_sub: ca("midi_grid1", "midi_griddm1", d.m_grid_sub),
+            m_note_border: c("midi_notebg", d.m_note_border),
+            m_note_sel: c("midi_notefg", d.m_note_sel),
+            m_note_mute: c("midi_notemute", d.m_note_mute),
+            m_note_text: c("midifont_col_dark_unsel", d.m_note_text),
+            m_key: [c("midi_pkey1", d.m_key[0]), c("midi_pkey2", d.m_key[1])],
+            m_key_sel: c("midi_pkey3", d.m_key_sel),
+            m_left_bg: c("midi_leftbg", d.m_left_bg),
+            m_ruler_bg: c("midi_rulerbg", d.m_ruler_bg),
+            m_ruler_fg: c("midi_rulerfg", d.m_ruler_fg),
+            m_edit_cursor: c("midi_editcurs", d.m_edit_cursor),
+            m_selbg: ca("midi_selbg", "midi_selbg_drawmode", d.m_selbg),
+        }
+    }
+}
+
 /// Couleurs, tailles, polices. `scale` = DPI / 96.
 #[derive(Clone, Debug)]
 pub struct Theme {
@@ -240,6 +400,8 @@ pub struct Theme {
     pub playhead: Color,
     /// Le curseur d'edition de l'arrangement (`col_cursor`).
     pub edit_cursor: Color,
+    /// Les couleurs de l'arrangement et de l'editeur MIDI de REAPER.
+    pub rp: ReaperLook,
     pub star: Color,
     pub field: Color,
     pub error: Color,
@@ -266,6 +428,7 @@ impl Theme {
             section: hex(0x3A3320),
             playhead: hex(0xFFFFFF),
             edit_cursor: hex(0xDCDDE2),
+            rp: ReaperLook::default(),
             star: hex(0xF2C444),
             field: hex(0x16171A),
             error: hex(0xE06A5A),
@@ -302,6 +465,7 @@ impl Theme {
             section: bg.mix(play, 0.14),
             playhead: play,
             edit_cursor: c("col_cursor", d.edit_cursor),
+            rp: ReaperLook::read(color, &|_| None),
             star: d.star,
             field: c("col_main_editbk", d.field),
             error: d.error,

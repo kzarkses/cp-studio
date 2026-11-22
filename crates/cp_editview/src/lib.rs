@@ -620,7 +620,7 @@ impl Ed {
             line(q, self.guide.color.unwrap_or(th.text_faint));
         }
         if let Some(q) = self.edit_cursor {
-            line(q, th.edit_cursor);
+            line(q, th.rp.m_edit_cursor);
         }
         if let (true, Some(q)) = (self.playing, self.playhead) {
             line(q, th.playhead);
