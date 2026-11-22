@@ -15,6 +15,7 @@
 #![allow(clippy::too_many_arguments)]
 
 pub mod color;
+pub mod layers;
 pub mod path;
 pub mod png;
 pub mod raster;
@@ -70,6 +71,52 @@ impl IRect {
     }
     pub fn contains(&self, x: i32, y: i32) -> bool {
         x >= self.x && y >= self.y && x < self.right() && y < self.bottom()
+    }
+}
+
+/// Une couverture (0..255) et sa place : le coin haut-gauche en pixels.
+/// Une forme qui revient cent fois (une tete de note) se rasterise une fois
+/// et se pose ensuite au pixel pres ([`Canvas::draw_mask`]).
+#[derive(Clone, Debug, Default)]
+pub struct Mask {
+    pub x: i32,
+    pub y: i32,
+    pub w: i32,
+    pub h: i32,
+    pub px: Vec<u8>,
+}
+
+impl Mask {
+    /// La couverture d'un chemin rempli, a ses propres coordonnees.
+    pub fn of_path(p: &Path) -> Mask {
+        let mut polys = Vec::new();
+        p.flatten(0.02, &mut polys);
+        let (mut x0, mut y0, mut x1, mut y1) = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
+        for q in polys.iter().flatten() {
+            x0 = x0.min(q.x);
+            y0 = y0.min(q.y);
+            x1 = x1.max(q.x);
+            y1 = y1.max(q.y);
+        }
+        if x0 > x1 {
+            return Mask::default();
+        }
+        let (bx, by) = (x0.floor() as i32, y0.floor() as i32);
+        let (w, h) = (x1.ceil() as i32 - bx + 1, y1.ceil() as i32 - by + 1);
+        let mut s = Surface::new(w, h);
+        let mut k = Scratch::default();
+        {
+            let mut cv = Canvas::new(&mut s, &mut k);
+            cv.push_origin(-bx as f32, -by as f32);
+            cv.fill_path(p, Color::WHITE);
+        }
+        Mask {
+            x: bx,
+            y: by,
+            w,
+            h,
+            px: s.px.iter().map(|&v| (v >> 24) as u8).collect(),
+        }
     }
 }
 
@@ -455,9 +502,107 @@ impl<'a> Canvas<'a> {
     }
 
     pub fn line(&mut self, x0: f32, y0: f32, x1: f32, y1: f32, w: f32, c: Color) {
+        // Hors du decoupage : rien a construire (un trait coute un chemin).
+        let m = w * 0.5 + 1.0;
+        let (ox, oy) = (self.ox, self.oy);
+        let bx0 = (x0.min(x1) - m + ox).floor() as i32;
+        let by0 = (y0.min(y1) - m + oy).floor() as i32;
+        let bx1 = (x0.max(x1) + m + ox).ceil() as i32;
+        let by1 = (y0.max(y1) + m + oy).ceil() as i32;
+        if self
+            .clip
+            .intersect(&IRect::new(bx0, by0, bx1 - bx0, by1 - by0))
+            .is_empty()
+        {
+            return;
+        }
+        // Droit (une hampe, un trait de grille) : un rectangle, sans chemin.
+        if x0 == x1 {
+            self.fill_rect(x0 - w * 0.5, y0.min(y1), w, (y1 - y0).abs().max(w), c);
+            return;
+        }
+        if y0 == y1 {
+            self.fill_rect(x0.min(x1), y0 - w * 0.5, (x1 - x0).abs().max(w), w, c);
+            return;
+        }
         let mut p = Path::new();
         p.move_to(x0, y0).line_to(x1, y1);
         self.stroke_path(&p, w, c);
+    }
+
+    /// Un pointille horizontal d'un pixel, de `x0` a `x1` sur la ligne `y` :
+    /// `on` pixels pleins, `off` vides, la phase partant de `x0`. Seule la
+    /// partie dans le decoupage est parcourue (un item de dix mille pixels ne
+    /// coute que ce qu'on en voit).
+    pub fn dash_h(&mut self, x0: f32, x1: f32, y: f32, on: f32, off: f32, c: Color) {
+        let period = on + off;
+        if period <= 0.0 || x1 <= x0 {
+            return;
+        }
+        let cl = self.clip;
+        let (lo, hi) = (cl.x as f32 - self.ox, cl.right() as f32 - self.ox);
+        let a = x0.max(lo);
+        let b = x1.min(hi);
+        if a >= b {
+            return;
+        }
+        let y = y.floor();
+        let mut k = ((a - x0) / period).floor().max(0.0);
+        loop {
+            let s = x0 + k * period;
+            if s >= b {
+                break;
+            }
+            let e = (s + on).min(x1);
+            if e > a {
+                self.fill_rect(s.max(a), y, e - s.max(a), 1.0, c);
+            }
+            k += 1.0;
+        }
+    }
+
+    /// Un pointille vertical d'un pixel (voir [`Canvas::dash_h`]).
+    pub fn dash_v(&mut self, x: f32, y0: f32, y1: f32, on: f32, off: f32, c: Color) {
+        let period = on + off;
+        if period <= 0.0 || y1 <= y0 {
+            return;
+        }
+        let cl = self.clip;
+        let (lo, hi) = (cl.y as f32 - self.oy, cl.bottom() as f32 - self.oy);
+        let xl = x.floor();
+        if xl + self.ox >= cl.right() as f32 || xl + 1.0 + self.ox <= cl.x as f32 {
+            return;
+        }
+        let a = y0.max(lo);
+        let b = y1.min(hi);
+        if a >= b {
+            return;
+        }
+        let mut k = ((a - y0) / period).floor().max(0.0);
+        loop {
+            let s = y0 + k * period;
+            if s >= b {
+                break;
+            }
+            let e = (s + on).min(y1);
+            if e > a {
+                self.fill_rect(xl, s.max(a), 1.0, e - s.max(a), c);
+            }
+            k += 1.0;
+        }
+    }
+
+    /// Un cadre pointille d'un pixel.
+    pub fn dash_rect(&mut self, x: f32, y: f32, w: f32, h: f32, on: f32, off: f32, c: Color) {
+        if w <= 0.0 || h <= 0.0 {
+            return;
+        }
+        let (x, y) = (x.floor(), y.floor());
+        let (w, h) = (w.round().max(1.0), h.round().max(1.0));
+        self.dash_h(x, x + w, y, on, off, c);
+        self.dash_h(x, x + w, y + h - 1.0, on, off, c);
+        self.dash_v(x, y + 1.0, y + h - 1.0, on, off, c);
+        self.dash_v(x + w - 1.0, y + 1.0, y + h - 1.0, on, off, c);
     }
 
     pub fn polyline(&mut self, pts: &[Pt], w: f32, c: Color) {
