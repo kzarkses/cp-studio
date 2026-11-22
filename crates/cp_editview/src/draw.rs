@@ -603,7 +603,9 @@ impl Ed {
             return;
         }
         let rp = &th.rp;
-        let span = self.span().map(|(a, b)| (self.x_of(a).round(), self.x_of(b).round()));
+        let span = self
+            .span()
+            .map(|(a, b)| (self.x_of(a).round(), self.x_of(b).round()));
         for (i, &p) in self.rows.iter().enumerate() {
             let y = self.row_y(i);
             let rh = self.row_h(i);

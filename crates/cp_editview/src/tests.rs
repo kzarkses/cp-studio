@@ -723,7 +723,12 @@ fn banc_image_editeur() {
     );
     // Un glisser : 40 mouvements, une image chacun (comme avant).
     let id = v.midi().unwrap().roll.notes[3].id;
-    let (x, y, _, _) = v.rect_of(Hit::Note { id, part: Part::Body }).unwrap();
+    let (x, y, _, _) = v
+        .rect_of(Hit::Note {
+            id,
+            part: Part::Body,
+        })
+        .unwrap();
     let (x, y) = (x + 4.0, y + 3.0);
     down(&mut v, x, y, Button::Left, m0());
     let t = std::time::Instant::now();
@@ -745,5 +750,8 @@ fn banc_image_editeur() {
 #[test]
 fn une_vue_neuve_se_dessine_entiere() {
     let mut v = riff();
-    assert_eq!(v.take_damage(640, 480), vec![cp_gfx::IRect::new(0, 0, 640, 480)]);
+    assert_eq!(
+        v.take_damage(640, 480),
+        vec![cp_gfx::IRect::new(0, 0, 640, 480)]
+    );
 }

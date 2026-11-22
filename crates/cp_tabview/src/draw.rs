@@ -660,7 +660,13 @@ impl Arr {
                 let (xa, xb) = (geo.x(a).max(l.sx).round(), geo.x(b).min(content_r).round());
                 if xb > xa {
                     let ts = th.rp.timesel;
-                    cv.fill_rect(xa, top, xb - xa, (y - top).max(0.0), ts.with_alpha(ts.a / 3));
+                    cv.fill_rect(
+                        xa,
+                        top,
+                        xb - xa,
+                        (y - top).max(0.0),
+                        ts.with_alpha(ts.a / 3),
+                    );
                 }
             }
             // Une prise qu'on glisse (elle se dessine a sa nouvelle place) :
@@ -2040,7 +2046,12 @@ fn draw_audio_item(
     // nom et sa forme d'onde aux couleurs du theme.
     let rp = &th.rp;
     let (bg, border, label, peak) = if sel {
-        (rp.item_bg_sel, rp.item_border_sel, rp.item_label_sel, rp.peaks_sel)
+        (
+            rp.item_bg_sel,
+            rp.item_border_sel,
+            rp.item_label_sel,
+            rp.peaks_sel,
+        )
     } else {
         (rp.item_bg, rp.item_border, rp.item_label, rp.peaks)
     };
@@ -2121,9 +2132,15 @@ fn draw_audio_item(
             }
             let mut zone = Path::new();
             if fin {
-                zone.move_to(x0, top).line_to(x1, top).line_to(x0, bot).close();
+                zone.move_to(x0, top)
+                    .line_to(x1, top)
+                    .line_to(x0, bot)
+                    .close();
             } else {
-                zone.move_to(x0, top).line_to(x1, top).line_to(x1, bot).close();
+                zone.move_to(x0, top)
+                    .line_to(x1, top)
+                    .line_to(x1, bot)
+                    .close();
             }
             cv.fill_path(&zone, rp.fade_zone);
             if fin {

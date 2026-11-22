@@ -774,12 +774,9 @@ impl Ed {
                 _ => P::NoteDraw,
             },
             Hit::Vel(_) | Hit::VelLane => P::NoteVel,
-            h @ (Hit::Wave
-            | Hit::EdgeL
-            | Hit::EdgeR
-            | Hit::FadeIn
-            | Hit::FadeOut
-            | Hit::Gain) => Self::audio_pointer(h),
+            h @ (Hit::Wave | Hit::EdgeL | Hit::EdgeR | Hit::FadeIn | Hit::FadeOut | Hit::Gain) => {
+                Self::audio_pointer(h)
+            }
             _ => P::Arrow,
         }
     }

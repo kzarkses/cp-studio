@@ -919,7 +919,10 @@ impl Arr {
             return;
         }
         let pad = (4.0 * self.scale).ceil();
-        for r in [self.rect_of(self.hover), self.rect_of(h)].into_iter().flatten() {
+        for r in [self.rect_of(self.hover), self.rect_of(h)]
+            .into_iter()
+            .flatten()
+        {
             self.damage.push(cp_gfx::IRect::new(
                 (r.0 - pad).floor() as i32,
                 (r.1 - pad).floor() as i32,
@@ -1125,7 +1128,11 @@ impl Arr {
                         let fi = self.x_of(it.qn0 + it.fade_in);
                         let fo = self.x_of(it.qn1 - it.fade_out);
                         if (x - fi).abs() <= e && x < mid {
-                            return Hit::ItemFade { t, i, fade_in: true };
+                            return Hit::ItemFade {
+                                t,
+                                i,
+                                fade_in: true,
+                            };
                         }
                         if (x - fo).abs() <= e && x >= mid {
                             return Hit::ItemFade {
@@ -1185,8 +1192,18 @@ impl Arr {
         let inside = q > q0 + 1e-6 && q < q1 - 1e-6;
         match e {
             H::Delete => Some(Act::DeleteItem { t, i }),
-            H::TrimLeft if inside => Some(Act::TrimItem { t, i, qn0: q, qn1: q1 }),
-            H::TrimRight if inside => Some(Act::TrimItem { t, i, qn0: q0, qn1: q }),
+            H::TrimLeft if inside => Some(Act::TrimItem {
+                t,
+                i,
+                qn0: q,
+                qn1: q1,
+            }),
+            H::TrimRight if inside => Some(Act::TrimItem {
+                t,
+                i,
+                qn0: q0,
+                qn1: q,
+            }),
             H::Split if inside => Some(Act::SplitItem { t, i, qn: q }),
             H::FadeIn if inside => Some(Act::FadeItem {
                 t,
@@ -1273,12 +1290,7 @@ impl Arr {
     /// Le fondu qu'on tire : sa longueur (le dessin la montre).
     pub(crate) fn fade_preview(&self) -> Option<(usize, usize, bool, f64)> {
         match self.drag {
-            Some(Drag::Fade {
-                t,
-                i,
-                fade_in,
-                len,
-            }) => Some((t, i, fade_in, len)),
+            Some(Drag::Fade { t, i, fade_in, len }) => Some((t, i, fade_in, len)),
             _ => None,
         }
     }
@@ -1587,12 +1599,7 @@ impl Arr {
                         let raw = self.qn_of(x);
                         let q = if mods.shift { raw } else { self.snap_item(raw) };
                         let len = if fade_in { q - lo } else { hi - q }.clamp(0.0, hi - lo);
-                        self.drag = Some(Drag::Fade {
-                            t,
-                            i,
-                            fade_in,
-                            len,
-                        });
+                        self.drag = Some(Drag::Fade { t, i, fade_in, len });
                         self.dirty = true;
                         return None;
                     }
@@ -1755,12 +1762,9 @@ impl Arr {
                         })
                     }
                     Some(Drag::Trim { qp, .. }) => Some(Act::Seek(qp)),
-                    Some(Drag::Fade {
-                        t,
-                        i,
-                        fade_in,
-                        len,
-                    }) => Some(Act::FadeItem { t, i, fade_in, len }),
+                    Some(Drag::Fade { t, i, fade_in, len }) => {
+                        Some(Act::FadeItem { t, i, fade_in, len })
+                    }
                     _ => None,
                 }
             }
@@ -1918,12 +1922,7 @@ impl Arr {
                 }));
                 let it = self.item(t, i)?;
                 let len = if fade_in { it.fade_in } else { it.fade_out };
-                self.drag = Some(Drag::Fade {
-                    t,
-                    i,
-                    fade_in,
-                    len,
-                });
+                self.drag = Some(Drag::Fade { t, i, fade_in, len });
                 None
             }
             Hit::Item { t, i, lane } => {

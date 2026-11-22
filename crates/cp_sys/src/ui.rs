@@ -569,7 +569,9 @@ pub fn set_pointer(ptr: cp_ui::Pointer) {
             h = match src {
                 // SAFETY: le module de reaper.exe (le processus) ; un numero de
                 // ressource passe en MAKEINTRESOURCE.
-                Src::Res(id) => unsafe { LoadCursorW(GetModuleHandleW(null_mut()), id as usize as *const u16) },
+                Src::Res(id) => unsafe {
+                    LoadCursorW(GetModuleHandleW(null_mut()), id as usize as *const u16)
+                },
                 Src::Idc(_) => null_mut(),
             };
         }

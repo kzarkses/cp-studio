@@ -851,7 +851,10 @@ fn banc_par_couche() {
     v.tracks[0].items = vec![long_item("L", 0.0, 283.0, 0, 69)];
     v.tracks[1].items = vec![long_item("M", 0.0, 283.0, 178, 69)];
     v.rec.clear();
-    v.zoom = std::env::var("BANC_ZOOM").ok().and_then(|z| z.parse().ok()).unwrap_or(30.0);
+    v.zoom = std::env::var("BANC_ZOOM")
+        .ok()
+        .and_then(|z| z.parse().ok())
+        .unwrap_or(30.0);
     v.scroll = 40.0;
     for (name, l) in [
         ("rien", [false, false, false, false]),
@@ -885,7 +888,10 @@ fn banc_par_prise() {
         v.rec.clear();
         v.zoom = 30.0;
         v.scroll = 40.0;
-        for (ln, l) in [("partition", [false, false, true, false]), ("tab", [false, false, false, true])] {
+        for (ln, l) in [
+            ("partition", [false, false, true, false]),
+            ("tab", [false, false, false, true]),
+        ] {
             v.tracks[0].head.lanes = Lanes(l);
             v.tracks[1].head.lanes = Lanes([false, false, false, false]);
             b.draw(&mut v);
@@ -929,7 +935,10 @@ fn la_lecture_ne_redessine_pas_la_scene() {
         sent += rects.iter().map(|r| r.w as i64 * r.h as i64).sum::<i64>();
     }
     let ms = t.elapsed().as_secs_f64() * 1000.0 / 60.0;
-    println!("une image de lecture : {ms:.3} ms, {} pixels envoyes", sent / 60);
+    println!(
+        "une image de lecture : {ms:.3} ms, {} pixels envoyes",
+        sent / 60
+    );
     // Deux colonnes d'un pixel au plus par image (la scene fait 2,8 Mpx).
     assert!(sent / 60 < 4 * 1310, "{}", sent / 60);
     // Un survol : seulement ses deux cibles.
@@ -967,7 +976,14 @@ fn rogner_fondre_et_editer_au_survol() {
         })
         .expect("la couche audio");
     let (xa, ym) = (v.x_of(q0) + 1.0, audio.1 + audio.3 * 0.6);
-    assert_eq!(v.hit(xa, ym), Hit::ItemEdge { t: 0, i: 0, left: true });
+    assert_eq!(
+        v.hit(xa, ym),
+        Hit::ItemEdge {
+            t: 0,
+            i: 0,
+            left: true
+        }
+    );
     assert_eq!(v.pointer(xa, ym, Mods::default()), P::TrimLeft);
     // Tirer le bord d'une mesure et demie : il tombe sur la mesure.
     v.event(&Ev::Down {
@@ -1069,7 +1085,10 @@ fn rogner_fondre_et_editer_au_survol() {
             len: qs - q0
         })
     );
-    assert_eq!(v.hover_edit(H::Delete), Some(Act::DeleteItem { t: 0, i: 0 }));
+    assert_eq!(
+        v.hover_edit(H::Delete),
+        Some(Act::DeleteItem { t: 0, i: 0 })
+    );
     // Ailleurs que sur une prise : rien.
     v.event(&Ev::Move {
         x: 5.0,
@@ -1078,12 +1097,24 @@ fn rogner_fondre_et_editer_au_survol() {
     });
     assert_eq!(v.hover_edit(H::Split), None);
     // Les noms des scripts de Cedric.
-    assert_eq!(H::of_name("Script: nvk_FOLDER_ITEMS - Trim left edge.lua"), Some(H::TrimLeft));
-    assert_eq!(H::of_name("nvk_FOLDER_ITEMS - Trim right edge.lua"), Some(H::TrimRight));
+    assert_eq!(
+        H::of_name("Script: nvk_FOLDER_ITEMS - Trim left edge.lua"),
+        Some(H::TrimLeft)
+    );
+    assert_eq!(
+        H::of_name("nvk_FOLDER_ITEMS - Trim right edge.lua"),
+        Some(H::TrimRight)
+    );
     assert_eq!(H::of_name("nvk_FOLDER_ITEMS - Split.lua"), Some(H::Split));
     assert_eq!(H::of_name("CP_DeleteUnderMouse.lua"), Some(H::Delete));
-    assert_eq!(H::of_name("LKC - HOVER EDIT D - Fadein.lua"), Some(H::FadeIn));
-    assert_eq!(H::of_name("LKC - HOVER EDIT G - Fadeout.lua"), Some(H::FadeOut));
+    assert_eq!(
+        H::of_name("LKC - HOVER EDIT D - Fadein.lua"),
+        Some(H::FadeIn)
+    );
+    assert_eq!(
+        H::of_name("LKC - HOVER EDIT G - Fadeout.lua"),
+        Some(H::FadeOut)
+    );
     assert_eq!(H::of_name("Item: Split items at time selection"), None);
 }
 
@@ -1093,7 +1124,10 @@ fn rogner_fondre_et_editer_au_survol() {
 #[test]
 fn une_vue_neuve_se_dessine_entiere() {
     let mut v = arranger();
-    assert_eq!(v.take_damage(800, 600), vec![cp_gfx::IRect::new(0, 0, 800, 600)]);
+    assert_eq!(
+        v.take_damage(800, 600),
+        vec![cp_gfx::IRect::new(0, 0, 800, 600)]
+    );
 }
 
 /// Le clic pose le curseur la ou la ligne a la souris le montre : calee par
