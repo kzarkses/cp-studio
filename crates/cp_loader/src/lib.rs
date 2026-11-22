@@ -296,6 +296,10 @@ impl Host for LoaderHost {
         audio(0.0, |a| a.core().srate())
     }
 
+    fn audio_stretch(&self, clip: u32, start: i64, end: i64, tempo: f64, shift: f64) -> u32 {
+        audio(0, |a| a.stretch(ClipH(clip), start, end, tempo, shift))
+    }
+
     fn audio_thumb(&self, path: &str, min: &mut [f32], max: &mut [f32]) -> i32 {
         match audio(cp_audio::Thumb::Failed, |a| a.thumb(path)) {
             cp_audio::Thumb::Pending => 0,

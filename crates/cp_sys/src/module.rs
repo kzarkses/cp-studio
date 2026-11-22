@@ -151,6 +151,12 @@ impl HostRef {
     pub fn audio_srate(&self) -> f64 {
         (self.0.audio.srate)()
     }
+    /// La region `[start, end)` d'un clip etiree par l'etireur de REAPER
+    /// (`tempo`, rapport de hauteur `shift`), cuite sur un fil de travail :
+    /// un ticket, lu par [`Self::audio_poll`] ; 0 si refuse.
+    pub fn audio_stretch(&self, clip: u32, start: i64, end: i64, tempo: f64, shift: f64) -> u32 {
+        (self.0.audio.stretch)(clip, start, end, tempo, shift)
+    }
     /// La vignette d'un fichier : 1 rendue, 0 en cours, -1 impossible.
     pub fn audio_thumb(&self, path: &str, min: &mut [f32], max: &mut [f32]) -> i32 {
         let n = min.len().min(max.len());

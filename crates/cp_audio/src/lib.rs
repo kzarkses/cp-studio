@@ -16,6 +16,7 @@ pub mod capture;
 pub mod decode;
 pub mod feed;
 pub mod peaks;
+pub mod stretch;
 pub mod testloop;
 
 use std::sync::{Arc, OnceLock};
@@ -393,6 +394,53 @@ impl AudioHost {
                 .tickets
                 .push((t, Ticket::Failed("REAPER cannot open this file".into()))),
         }
+        t
+    }
+
+    /// La region `[start, end)` du clip `h` (`end` = 0 : jusqu'au bout),
+    /// etiree par l'etireur de REAPER (`tempo`, rapport de hauteur `shift`)
+    /// et cuite sur le fil de travail : un ticket, comme un fichier. Le clip
+    /// cuit se joue a vitesse 1, a la duree exacte.
+    pub fn stretch(&mut self, h: ClipH, start: i64, end: i64, tempo: f64, shift: f64) -> u32 {
+        let sh = self
+            .reaper
+            .as_ref()
+            .and_then(|r| r.pitch_shift())
+            .map(|p| Box::new(p) as Box<dyn stretch::Shifter>);
+        match sh {
+            Some(s) => self.stretch_with(h, start, end, tempo, shift, s),
+            None => {
+                let t = self.new_ticket();
+                self.tickets
+                    .push((t, Ticket::Failed("no time-stretch engine".into())));
+                t
+            }
+        }
+    }
+
+    /// [`Self::stretch`] avec un etireur donne (les tests).
+    pub fn stretch_with(
+        &mut self,
+        h: ClipH,
+        start: i64,
+        end: i64,
+        tempo: f64,
+        shift: f64,
+        sh: Box<dyn stretch::Shifter>,
+    ) -> u32 {
+        let t = self.new_ticket();
+        let Some(clip) = self.clip(h).map(|c| c.0.clone()) else {
+            self.tickets
+                .push((t, Ticket::Failed("the clip is gone".into())));
+            return t;
+        };
+        if !self.clip_complete(h) {
+            self.tickets
+                .push((t, Ticket::Failed("the clip is still loading".into())));
+            return t;
+        }
+        let r = stretch::StretchReader::new(clip, start, end, tempo, shift, sh);
+        self.submit(t, Box::new(r));
         t
     }
 

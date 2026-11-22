@@ -13,7 +13,7 @@ use core::ffi::{c_char, c_void};
 
 /// Version du contrat. Un entier : jamais de mineure (le piege du double de
 /// l'ancien moteur, ou `1.10` valait `1.1`).
-pub const ABI: u32 = 7;
+pub const ABI: u32 = 8;
 
 /// Le symbole exporte par le module.
 pub const ENTRY_SYMBOL: &[u8] = b"cp_module_entry\0";
@@ -231,6 +231,12 @@ pub struct AudioApi {
     /// dans `min`/`max`), 0 (en cours) ou -1 (impossible). ABI 5.
     pub thumb:
         extern "C" fn(path: *const u8, len: usize, min: *mut f32, max: *mut f32, n: usize) -> i32,
+    /// La region `[start, end)` d'un clip (`end` = 0 : jusqu'au bout),
+    /// etiree par l'etireur de REAPER : `tempo` (1,5 = une fois et demie plus
+    /// vite), `shift` (rapport de hauteur). Cuite sur un fil de travail, a la
+    /// duree exacte ; rend un ticket (comme `load`, lu par `poll`), 0 si
+    /// refuse. ABI 8.
+    pub stretch: extern "C" fn(clip: u32, start: i64, end: i64, tempo: f64, shift: f64) -> u32,
 }
 
 /// Ce que le module offre au chargeur. Tous les appels se font sur le fil

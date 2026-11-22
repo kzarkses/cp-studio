@@ -34,6 +34,7 @@ pub mod image;
 pub mod items;
 pub mod module;
 pub mod pcm;
+pub mod pitch;
 pub mod project;
 pub mod reaper;
 pub mod rt;

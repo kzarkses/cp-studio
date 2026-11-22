@@ -34,6 +34,10 @@ pub struct SelfTest {
     voices: Vec<VoiceH>,
     loop_clip: Option<ClipH>,
     played_at: Option<Instant>,
+    /// Les cuissons en cours : (ticket, tempo, hauteur, frames source,
+    /// clics ?), et quand elles ont commence.
+    stretches: Vec<(u32, f64, f64, usize, bool)>,
+    stretch_at: Option<Instant>,
     ui_at: Option<Instant>,
     keys_step: u8,
     wheels: u32,
@@ -65,6 +69,8 @@ enum Phase {
     Wait,
     Decoding,
     Playing,
+    /// L'etireur de REAPER : durees exactes, clics a leur place, hauteur.
+    Stretch,
     /// La suite se passe hors du moteur audio : insertion, interface.
     Insert,
     OpenUi,
@@ -93,6 +99,8 @@ pub fn requested() -> Option<SelfTest> {
         voices: Vec::new(),
         loop_clip: None,
         played_at: None,
+        stretches: Vec::new(),
+        stretch_at: None,
         ui_at: None,
         keys_step: 0,
         wheels: 0,
@@ -153,7 +161,201 @@ fn wav(samples: &[f32], nch: usize, srate: u32, bits16: bool) -> Vec<u8> {
     b
 }
 
+/// Une cuisson dont le ticket est deja rendu : on garde son clip (marque par
+/// ce bit) jusqu'a ce qu'il soit complet.
+const STRETCH_CLIP: u32 = 1 << 31;
+
+/// Des attaques : une salve de 10 ms (2 kHz, fenetre de Hann) tous les
+/// 4800 echantillons, centree sur 2400 + k x 4800 ; stereo, `n` frames. (Un
+/// clic d'un seul echantillon dans le silence n'est pas de la musique :
+/// elastique le traite comme du bruit.)
+fn clicks(n: usize) -> Vec<f32> {
+    let mut v = vec![0f32; n * 2];
+    for c in (2400..n).step_by(4800) {
+        for j in 0..480usize {
+            let k = c - 240 + j;
+            if k >= n {
+                break;
+            }
+            let w = 0.5 - 0.5 * (std::f64::consts::TAU * j as f64 / 480.0).cos();
+            let x = (std::f64::consts::TAU * 2000.0 * j as f64 / 48000.0).sin() * w * 0.8;
+            v[k * 2] = x as f32;
+            v[k * 2 + 1] = x as f32;
+        }
+    }
+    v
+}
+
 impl SelfTest {
+    /// Lance les cuissons : des clics a 0,75 et 1,5 (la duree), un La a 440
+    /// Hz monte de trois demi-tons (la hauteur).
+    fn start_stretch(&mut self, a: &mut AudioHost) {
+        let sr = 48000.0;
+        let n = 96000usize;
+        if let Ok(c) = a.load_samples(clicks(n), 2, sr) {
+            for tempo in [0.75, 1.5] {
+                let t = a.stretch(c, 0, 0, tempo, 1.0);
+                self.stretches.push((t, tempo, 1.0, n, true));
+            }
+        }
+        let la: Vec<f32> = (0..n)
+            .flat_map(|i| {
+                let x = (std::f64::consts::TAU * 440.0 * i as f64 / sr).sin() as f32 * 0.5;
+                [x, x]
+            })
+            .collect();
+        if let Ok(c) = a.load_samples(la, 2, sr) {
+            let shift = 2f64.powf(3.0 / 12.0);
+            let t = a.stretch(c, 0, 0, 1.0, shift);
+            self.stretches.push((t, 1.0, shift, n, false));
+        }
+        self.stretch_at = Some(Instant::now());
+        self.stretch_probe();
+    }
+
+    /// Les essais de l'etireur de REAPER : une sinusoide de 2 s a 0,75, ses
+    /// niveaux par quart de seconde, selon la facon de le nourrir.
+    fn stretch_probe(&mut self) {
+        use cp_audio::stretch::{Shifter, run_with};
+        let Some(r) = crate::REAPER.get() else { return };
+        let mut modes = Vec::new();
+        for m in 0..32 {
+            match r.pitch_mode_name(m) {
+                Some(n) => modes.push(format!("{m}={n}")),
+                None => break,
+            }
+        }
+        crate::log(
+            cp_abi::LOG_INFO,
+            &format!("[selftest] modes d'etirement : {}", modes.join(", ")),
+        );
+        let sr = 48000.0;
+        let n = 96000usize;
+        let sine: Vec<f32> = (0..n)
+            .flat_map(|i| {
+                let x = (std::f64::consts::TAU * 440.0 * i as f64 / sr).sin() as f32 * 0.5;
+                [x, x]
+            })
+            .collect();
+        let Some(mut ps) = r.pitch_shift() else {
+            return;
+        };
+        ps.setup(sr, 2, 0.75, 1.0);
+        let out = run_with(&mut ps, &sine, 2, 48000, 1024, 8192);
+        let lv: Vec<f64> = out
+            .chunks(12000 * 2)
+            .map(|c| (c.iter().map(|x| x * x).sum::<f64>() / c.len().max(1) as f64).sqrt())
+            .collect();
+        // 2 s a 0,75 : 2,67 s de son, dix quarts de seconde pleins.
+        let full = lv.iter().take(10).all(|&v| (0.3..0.4).contains(&v));
+        self.say(
+            full,
+            format!(
+                "elastique x0.75 sur une sinusoide : {} frames, niveau par quart de seconde {}",
+                out.len() / 2,
+                lv.iter()
+                    .map(|v| format!("{v:.2}"))
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            ),
+        );
+    }
+
+    /// Les cuissons finies : rend vrai quand il n'en reste plus.
+    fn check_stretch(&mut self, a: &mut AudioHost) -> bool {
+        let mut left = Vec::new();
+        for (t, tempo, shift, n, is_clicks) in std::mem::take(&mut self.stretches) {
+            // Le ticket est pret des la premiere seconde (l'ecoute en flux) :
+            // on ne juge qu'un clip entierement cuit.
+            let st = if t & STRETCH_CLIP != 0 {
+                Load::Ready(ClipH(t & !STRETCH_CLIP))
+            } else {
+                a.ticket(t)
+            };
+            match st {
+                Load::Pending => left.push((t, tempo, shift, n, is_clicks)),
+                Load::Failed(e) => self.say(false, format!("etirement x{tempo} : {e}")),
+                Load::Ready(c) if !a.clip_complete(c) => {
+                    left.push((c.0 | STRETCH_CLIP, tempo, shift, n, is_clicks));
+                }
+                Load::Ready(c) => {
+                    let want = (n as f64 / tempo).round() as usize;
+                    let (frames, nch, _) = a.clip_info(c).unwrap_or((0, 0, 0.0));
+                    let s = a.clip_samples(c).unwrap_or(&[]);
+                    let mono = |k: usize| s.get(k * nch.max(1)).copied().unwrap_or(0.0);
+                    if is_clicks {
+                        // Chaque salve : son centre d'energie, a 10 ms pres de
+                        // sa place etiree.
+                        let mut worst = 0i64;
+                        let mut offs: Vec<i64> = Vec::new();
+                        for k in (2400..n).step_by(4800) {
+                            let at = (k as f64 / tempo).round() as i64;
+                            let (mut m0, mut m1) = (0f64, 0f64);
+                            for j in (at - 480).max(0)..(at + 480).min(frames) {
+                                let e = (mono(j as usize) as f64).powi(2);
+                                m0 += e;
+                                m1 += e * j as f64;
+                            }
+                            let c = if m0 > 0.0 {
+                                (m1 / m0).round() as i64
+                            } else {
+                                at + 480
+                            };
+                            worst = worst.max((c - at).abs());
+                            offs.push(c - at);
+                        }
+                        crate::log(
+                            cp_abi::LOG_INFO,
+                            &format!("[selftest] elastique x{tempo} : ecarts des salves {offs:?}"),
+                        );
+                        let ms = worst as f64 / 48.0;
+                        let mut abs: Vec<i64> = offs.iter().map(|o| o.abs()).collect();
+                        abs.sort_unstable();
+                        let med = abs.get(abs.len() / 2).copied().unwrap_or(0) as f64 / 48.0;
+                        // Elastique lisse un peu chaque attaque (comme sur un
+                        // item de REAPER) : 5 ms au pire, 1 ms en mediane.
+                        self.say(
+                            frames as usize == want && ms <= 5.0 && med <= 1.0,
+                            format!(
+                                "elastique x{tempo} : {frames} frames (attendu {want}), attaques a {med:.2} ms de leur place en mediane, {ms:.2} ms au pire"
+                            ),
+                        );
+                    } else {
+                        // La hauteur : les passages par zero montants au
+                        // milieu.
+                        let (a0, b0) = (frames as usize / 4, frames as usize * 3 / 4);
+                        let ups: Vec<usize> = (a0 + 1..b0)
+                            .filter(|&k| mono(k - 1) < 0.0 && mono(k) >= 0.0)
+                            .collect();
+                        let hz = if ups.len() > 2 {
+                            (ups.len() - 1) as f64 * 48000.0 / (ups[ups.len() - 1] - ups[0]) as f64
+                        } else {
+                            0.0
+                        };
+                        let want_hz = 440.0 * shift;
+                        self.say(
+                            frames as usize == want && (hz / want_hz - 1.0).abs() < 0.01,
+                            format!(
+                                "elastique +3 demi-tons : {frames} frames (attendu {want}), {hz:.1} Hz (attendu {want_hz:.1})"
+                            ),
+                        );
+                    }
+                    a.release(c);
+                }
+            }
+        }
+        self.stretches = left;
+        if !self.stretches.is_empty()
+            && self
+                .stretch_at
+                .is_some_and(|t| t.elapsed() > Duration::from_secs(20))
+        {
+            self.say(false, "etirement toujours en cours apres 20 s".into());
+            self.stretches.clear();
+        }
+        self.stretches.is_empty()
+    }
+
     fn say(&mut self, ok: bool, line: String) {
         if !ok {
             self.ok = false;
@@ -256,6 +458,12 @@ impl SelfTest {
                     .is_some_and(|t| t.elapsed() > Duration::from_secs(4))
                 {
                     self.audio_report(a);
+                    self.start_stretch(a);
+                    self.phase = Phase::Stretch;
+                }
+            }
+            Phase::Stretch => {
+                if self.check_stretch(a) {
                     self.phase = Phase::Insert;
                 }
             }
@@ -960,7 +1168,10 @@ impl SelfTest {
     }
 
     pub fn wants_audio(&self) -> bool {
-        matches!(self.phase, Phase::Wait | Phase::Decoding | Phase::Playing)
+        matches!(
+            self.phase,
+            Phase::Wait | Phase::Decoding | Phase::Playing | Phase::Stretch
+        )
     }
 
     fn start_playing(&mut self, a: &mut AudioHost) {

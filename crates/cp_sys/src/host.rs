@@ -73,6 +73,10 @@ pub trait Host: Send + Sync {
     fn audio_thumb(&self, _path: &str, _min: &mut [f32], _max: &mut [f32]) -> i32 {
         -1
     }
+    /// Un ticket de cuisson (0 : refuse).
+    fn audio_stretch(&self, _clip: u32, _start: i64, _end: i64, _tempo: f64, _shift: f64) -> u32 {
+        0
+    }
 
     // --- les vues (ABI 3)
     #[allow(clippy::too_many_arguments)]
@@ -140,6 +144,7 @@ static API: HostApi = HostApi {
         set: a_set,
         srate: a_srate,
         thumb: a_thumb,
+        stretch: a_stretch,
     },
     create_view: v_create,
     destroy_window: v_destroy,
@@ -362,6 +367,10 @@ extern "C" fn a_thumb(path: *const u8, len: usize, min: *mut f32, max: *mut f32,
         )
     };
     with(-1, |h| h.audio_thumb(&String::from_utf8_lossy(p), lo, hi))
+}
+
+extern "C" fn a_stretch(clip: u32, start: i64, end: i64, tempo: f64, shift: f64) -> u32 {
+    with(0, |h| h.audio_stretch(clip, start, end, tempo, shift))
 }
 
 extern "C" fn a_srate() -> f64 {
