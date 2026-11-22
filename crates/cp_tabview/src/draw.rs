@@ -71,43 +71,65 @@ fn head(cx: f32, cy: f32, rx: f32, ry: f32) -> Path {
     p
 }
 
-/// Un trait pointille.
-fn dashed(
-    cv: &mut Canvas<'_>,
-    x0: f32,
-    y0: f32,
-    x1: f32,
-    y1: f32,
-    on: f32,
-    off: f32,
-    w: f32,
-    c: Color,
-) {
-    let (dx, dy) = (x1 - x0, y1 - y0);
-    let len = (dx * dx + dy * dy).sqrt();
-    if len <= 0.0 {
-        return;
-    }
-    let mut t = 0.0;
-    while t < len {
-        let t1 = (t + on).min(len);
-        cv.line(
-            x0 + dx * t / len,
-            y0 + dy * t / len,
-            x0 + dx * t1 / len,
-            y0 + dy * t1 / len,
-            w,
-            c,
-        );
-        t += on + off;
-    }
+thread_local! {
+    /// Les formes deja rasterisees (tetes de note, fantomes), par sorte et
+    /// taille : une partition vue de loin en pose des centaines par image.
+    static SPRITES: std::cell::RefCell<std::collections::HashMap<(u8, u32, u32), cp_gfx::Mask>> =
+        std::cell::RefCell::new(std::collections::HashMap::new());
 }
 
+/// Une forme centree en (cx, cy), posee au pixel pres ; `build` la trace
+/// autour de (0, 0) la premiere fois.
+fn sprite_at(
+    cv: &mut Canvas<'_>,
+    key: (u8, f32, f32),
+    cx: f32,
+    cy: f32,
+    c: Color,
+    build: impl FnOnce() -> Path,
+) {
+    SPRITES.with(|h| {
+        let mut h = h.borrow_mut();
+        let m = h
+            .entry((key.0, key.1.to_bits(), key.2.to_bits()))
+            .or_insert_with(|| cp_gfx::Mask::of_path(&build()));
+        cv.draw_mask(
+            &m.px,
+            m.w,
+            m.h,
+            cx.round() as i32 + m.x,
+            cy.round() as i32 + m.y,
+            c,
+        );
+    });
+}
+
+/// Une tete de note centree en (cx, cy).
+fn head_at(cv: &mut Canvas<'_>, cx: f32, cy: f32, rx: f32, ry: f32, c: Color) {
+    sprite_at(cv, (0, rx, ry), cx, cy, c, || head(0.0, 0.0, rx, ry));
+}
+
+/// Une tete creuse en pointilles (un fantome).
+fn ghost_head_at(cv: &mut Canvas<'_>, cx: f32, cy: f32, rx: f32, ry: f32, c: Color) {
+    sprite_at(cv, (1, rx, ry), cx, cy, c, || {
+        let n = 14;
+        let mut dashes = Path::new();
+        for k in (0..n).step_by(2) {
+            let a0 = k as f32 / n as f32 * std::f32::consts::TAU;
+            let a1 = (k + 1) as f32 / n as f32 * std::f32::consts::TAU;
+            dashes
+                .move_to(rx * a0.cos(), ry * a0.sin())
+                .line_to(rx * a1.cos(), ry * a1.sin());
+        }
+        let mut out = Path::new();
+        dashes.stroke(1.1, &mut out);
+        out
+    });
+}
+
+/// Un cadre pointille d'un pixel, parcouru seulement dans le decoupage.
 fn dashed_rect(cv: &mut Canvas<'_>, x: f32, y: f32, w: f32, h: f32, c: Color) {
-    dashed(cv, x, y, x + w, y, 2.0, 1.6, 1.0, c);
-    dashed(cv, x, y + h, x + w, y + h, 2.0, 1.6, 1.0, c);
-    dashed(cv, x, y, x, y + h, 2.0, 1.6, 1.0, c);
-    dashed(cv, x + w, y, x + w, y + h, 2.0, 1.6, 1.0, c);
+    cv.dash_rect(x, y, w, h, 2.0, 2.0, c);
 }
 
 /// Un arc (liaison) d'un point a l'autre, bombe de `bulge` (negatif : vers le
@@ -631,13 +653,9 @@ impl Arr {
                 );
                 y += s(TRACK_SEP);
             }
-            // La tete de lecture, a travers toutes les pistes.
-            if let Some(p) = self.playhead {
-                let x = geo.x(p).round();
-                if x >= l.sx && x <= content_r {
-                    cv.fill_rect(x, top, s(1.5), (y - top).max(0.0), th.playhead);
-                }
-            }
+            // La tete de lecture et les curseurs sont des traits, poses
+            // par-dessus la scene (`strokes`).
+            self.tracks_bottom = y;
             // Le passage choisi, a travers toutes les pistes.
             if let Some((a, b)) = self.range {
                 let (xa, xb) = (geo.x(a).max(l.sx), geo.x(b).min(content_r));
@@ -661,19 +679,6 @@ impl Arr {
             }
         }
         cv.pop_clip();
-        // La tete de lecture dans la regle.
-        if let Some(p) = self.playhead {
-            let x = geo.x(p).round();
-            if x >= l.sx && x <= content_r {
-                cv.fill_rect(x, ry, s(1.5), l.ruler_h, th.playhead);
-                let mut tri = Path::new();
-                tri.move_to(x - s(5.0), ry + l.ruler_h - s(8.0))
-                    .line_to(x + s(6.5), ry + l.ruler_h - s(8.0))
-                    .line_to(x + s(0.75), ry + l.ruler_h - s(1.0))
-                    .close();
-                cv.fill_path(&tri, th.playhead);
-            }
-        }
         // La barre de defilement vertical.
         let view = (tb - top).max(1.0);
         if l.content_h > view {
@@ -2307,10 +2312,9 @@ fn draw_score(
             prev = Some(pos);
             let y = y_of(pos);
             let c = if sel_n == Some(n) { th.accent } else { ink };
-            let hp = head(x + dx, y, rx, ry);
-            cv.fill_path(&hp, c);
+            head_at(cv, x + dx, y, rx, ry, c);
             if hollow {
-                cv.fill_path(&head(x + dx, y, rx * 0.62, ry * 0.42), paper);
+                head_at(cv, x + dx, y, rx * 0.62, ry * 0.42, paper);
             }
             if sharp && !sg.tie_in {
                 let sw = text.measure(fsharp, &SHARP.to_string());
@@ -2457,19 +2461,7 @@ fn draw_score(
             };
             let (pos, _) = staff_pos(gn.pitch);
             let y = y_of(pos);
-            let n = 14;
-            for k in (0..n).step_by(2) {
-                let a0 = k as f32 / n as f32 * std::f32::consts::TAU;
-                let a1 = (k + 1) as f32 / n as f32 * std::f32::consts::TAU;
-                cv.line(
-                    x + rx * a0.cos(),
-                    y + ry * a0.sin(),
-                    x + rx * a1.cos(),
-                    y + ry * a1.sin(),
-                    1.1,
-                    c,
-                );
-            }
+            ghost_head_at(cv, x, y, rx, ry, c);
             push(
                 bx,
                 clip,

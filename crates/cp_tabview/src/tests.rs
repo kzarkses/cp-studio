@@ -719,3 +719,196 @@ fn glisser_comme_l_arrangement_et_transcrire_sur_demande() {
         other => panic!("{other:?}"),
     }
 }
+
+/// Une longue prise : `qn` noires, `n` notes doigtees (0 : pas transcrite),
+/// `g` fantomes, la forme d'onde de REAPER a 16000 colonnes.
+fn long_item(guid: &str, qn0: f64, qn: f64, n: usize, g: usize) -> Item {
+    let mut notes = Vec::new();
+    for k in 0..n {
+        let q = qn0 + k as f64 * qn / n.max(1) as f64;
+        notes.push(TabNote {
+            qn0: q + 0.01,
+            qn1: q + 0.5,
+            pitch: 40 + ((k * 7) % 30) as i32,
+            legato: false,
+            vel: 90,
+        });
+    }
+    let mut cands = Vec::new();
+    for k in 0..g {
+        let q = qn0 + 0.25 + k as f64 * qn / g.max(1) as f64;
+        cands.push(TabNote {
+            qn0: q,
+            qn1: q + 0.25,
+            pitch: 45 + ((k * 5) % 20) as i32,
+            legato: false,
+            vel: 60,
+        });
+    }
+    let detect = Detect::default();
+    let tuning = detect.tuning();
+    let (doc, dropped) = cp_tab::doc::finger(&notes, 4, 120.0, &tuning);
+    let ghosts = cp_tab::doc::ghosts(&cands, &doc, 4, &tuning);
+    let peaks: Vec<(f32, f32)> = (0..16000)
+        .map(|k| {
+            let a = 0.2 + 0.7 * ((k as f32 * 0.013).sin().abs());
+            (-a, a * 0.9)
+        })
+        .collect();
+    let mut it = Item {
+        guid: guid.into(),
+        take: format!("{guid}-take"),
+        name: "Long".into(),
+        qn0,
+        qn1: qn0 + qn,
+        origin_qn: qn0,
+        sig: (4, 4),
+        bpm: 120.0,
+        takes: vec![TakeInfo {
+            name: "take 1".into(),
+            done: n > 0,
+        }],
+        state: Some(if n > 0 { State::Ready } else { State::Idle }),
+        midi: n > 0,
+        peaks,
+        detect,
+        dropped,
+        ..Item::default()
+    };
+    it.ghosts = ghosts;
+    if n > 0 {
+        it.set_doc(doc);
+    }
+    it
+}
+
+/// Le cout d'une image, comme chez Cedric (2123 x 1310, une longue prise pas
+/// transcrite avec ses fantomes, une prise transcrite). `cargo test -p
+/// cp_tabview --release -- --ignored --nocapture banc`
+#[test]
+#[ignore]
+fn banc_image_longue_prise() {
+    let mut b = Bench::new(2123, 1310);
+    let mut v = arranger();
+    v.tracks[0].items = vec![long_item("L", 0.0, 283.0, 0, 69)];
+    v.tracks[1].items = vec![long_item("M", 0.0, 283.0, 178, 69)];
+    v.tracks[1].head.lanes = Lanes([true, true, true, true]);
+    v.rec.clear();
+    for (name, zoom) in [("loin", 6.0f32), ("moyen", 30.0), ("pres", 120.0)] {
+        v.zoom = zoom;
+        v.scroll = 40.0;
+        b.draw(&mut v);
+        let t = std::time::Instant::now();
+        let n = 10;
+        for k in 0..n {
+            v.playhead = Some(41.0 + k as f64 * 0.1);
+            v.mark();
+            b.draw(&mut v);
+        }
+        let ms = t.elapsed().as_secs_f64() * 1000.0 / n as f64;
+        println!("banc {name} (zoom {zoom}) : {ms:.2} ms par image");
+    }
+    b.shot(&mut v, "8_banc");
+}
+
+#[test]
+#[ignore]
+fn banc_par_couche() {
+    let mut b = Bench::new(2123, 1310);
+    let mut v = arranger();
+    v.tracks[0].items = vec![long_item("L", 0.0, 283.0, 0, 69)];
+    v.tracks[1].items = vec![long_item("M", 0.0, 283.0, 178, 69)];
+    v.rec.clear();
+    v.zoom = std::env::var("BANC_ZOOM").ok().and_then(|z| z.parse().ok()).unwrap_or(30.0);
+    v.scroll = 40.0;
+    for (name, l) in [
+        ("rien", [false, false, false, false]),
+        ("audio", [true, false, false, false]),
+        ("midi", [false, true, false, false]),
+        ("partition", [false, false, true, false]),
+        ("tab", [false, false, false, true]),
+    ] {
+        for t in &mut v.tracks {
+            t.head.lanes = Lanes(l);
+        }
+        b.draw(&mut v);
+        let t = std::time::Instant::now();
+        for _ in 0..10 {
+            v.mark();
+            b.draw(&mut v);
+        }
+        let ms = t.elapsed().as_secs_f64() * 100.0;
+        println!("banc {name} : {ms:.2} ms");
+    }
+}
+
+#[test]
+#[ignore]
+fn banc_par_prise() {
+    let mut b = Bench::new(2123, 1310);
+    for (name, n) in [("pas transcrite", 0usize), ("transcrite", 178)] {
+        let mut v = arranger();
+        v.tracks[0].items = vec![long_item("L", 0.0, 283.0, n, 69)];
+        v.tracks[1].items.clear();
+        v.rec.clear();
+        v.zoom = 30.0;
+        v.scroll = 40.0;
+        for (ln, l) in [("partition", [false, false, true, false]), ("tab", [false, false, false, true])] {
+            v.tracks[0].head.lanes = Lanes(l);
+            v.tracks[1].head.lanes = Lanes([false, false, false, false]);
+            b.draw(&mut v);
+            let t = std::time::Instant::now();
+            for _ in 0..10 {
+                v.mark();
+                b.draw(&mut v);
+            }
+            let ms = t.elapsed().as_secs_f64() * 100.0;
+            println!("banc {name} {ln} : {ms:.2} ms");
+        }
+    }
+}
+
+/// La lecture ne redessine pas la scene : la tete est un trait par-dessus,
+/// une image n'envoie que les colonnes qu'elle quitte et prend ; un survol
+/// ne redessine que sa cible.
+#[test]
+fn la_lecture_ne_redessine_pas_la_scene() {
+    use cp_gfx::layers::Layers;
+    let mut b = Bench::new(2123, 1310);
+    let mut v = arranger();
+    v.tracks[0].items = vec![long_item("L", 0.0, 283.0, 0, 69)];
+    v.rec.clear();
+    v.zoom = 30.0;
+    v.scroll = 40.0;
+    let mut l = Layers::default();
+    l.resize(2123, 1310);
+    b.draw(&mut v);
+    l.scene.px.copy_from_slice(&b.s.px);
+    let whole = v.take_damage();
+    assert_eq!(whole.len(), 1);
+    l.compose(&whole, &v.strokes(&b.th));
+    l.drawn();
+    let t = std::time::Instant::now();
+    let mut sent = 0i64;
+    for k in 0..60 {
+        v.set_playhead(Some(42.0 + k as f64 * 0.05), true);
+        assert!(!v.needs_draw(), "la tete de lecture salit la scene");
+        let rects = l.compose(&v.take_damage(), &v.strokes(&b.th));
+        sent += rects.iter().map(|r| r.w as i64 * r.h as i64).sum::<i64>();
+    }
+    let ms = t.elapsed().as_secs_f64() * 1000.0 / 60.0;
+    println!("une image de lecture : {ms:.3} ms, {} pixels envoyes", sent / 60);
+    // Deux colonnes d'un pixel au plus par image (la scene fait 2,8 Mpx).
+    assert!(sent / 60 < 4 * 1310, "{}", sent / 60);
+    // Un survol : seulement ses deux cibles.
+    let (x, y) = find(&v, |h| matches!(h, Hit::Transcribe { .. })).expect("la baguette");
+    v.event(&Ev::Move {
+        x,
+        y,
+        mods: Mods::default(),
+    });
+    let d = v.take_damage();
+    assert!(!d.is_empty());
+    let area: i64 = d.iter().map(|r| r.w as i64 * r.h as i64).sum();
+    assert!(area < 2123 * 1310 / 20, "le survol redessine {area} pixels");
+}

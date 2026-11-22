@@ -697,8 +697,15 @@ pub struct Arr {
     /// La hauteur des couches audio et MIDI (Ctrl + molette).
     pub vzoom: f32,
     pub follow: bool,
+    /// La tete de lecture (en lecture) ; sinon le curseur d'edition.
     pub playhead: Option<f64>,
     pub playing: bool,
+    /// Le curseur d'edition de REAPER (montre aussi pendant la lecture).
+    pub edit_cursor: Option<f64>,
+    /// La ligne verticale a la souris, comme REAPER (ses reglages : montree,
+    /// calee sur la grille) ; `guide_q` : ou elle est.
+    pub guide: Guide,
+    pub guide_q: Option<f64>,
     pub rec: Vec<Rec>,
     /// Transcrire les prises neuves d'elles-memes (sinon : sur demande).
     pub auto: bool,
@@ -721,6 +728,19 @@ pub struct Arr {
     /// la retrouver apres un rafraichissement des pistes.
     sel_key: Option<SelKey>,
     dirty: bool,
+    /// Les zones a redessiner quand tout ne l'est pas (un survol).
+    damage: Vec<cp_gfx::IRect>,
+    /// Le bas des pistes a l'ecran (les traits s'y arretent).
+    pub(crate) tracks_bottom: f32,
+}
+
+/// La ligne a la souris : les reglages de REAPER.
+#[derive(Clone, Copy, Debug, PartialEq, Default)]
+pub struct Guide {
+    pub on: bool,
+    /// Calee sur la grille quand le magnetisme est la.
+    pub snap: bool,
+    pub color: Option<cp_gfx::Color>,
 }
 
 impl Default for Arr {
@@ -759,15 +779,115 @@ impl Arr {
             digit: None,
             sel_key: None,
             dirty: true,
+            edit_cursor: None,
+            guide: Guide::default(),
+            guide_q: None,
+            damage: Vec::new(),
+            tracks_bottom: 0.0,
         }
     }
 
+    /// Tout est a redessiner.
     pub fn mark(&mut self) {
         self.dirty = true;
     }
 
     pub fn take_dirty(&mut self) -> bool {
+        self.damage.clear();
         std::mem::take(&mut self.dirty)
+    }
+
+    /// Quelque chose est a redessiner (tout, ou des zones).
+    pub fn needs_draw(&self) -> bool {
+        self.dirty || !self.damage.is_empty()
+    }
+
+    /// Les zones de la scene a redessiner : toute la fenetre, ou celles d'un
+    /// survol ; vide : rien.
+    pub fn take_damage(&mut self) -> Vec<cp_gfx::IRect> {
+        if std::mem::take(&mut self.dirty) {
+            self.damage.clear();
+            let l = self.lay;
+            return vec![cp_gfx::IRect::new(0, 0, l.w.ceil() as i32, l.h.ceil() as i32)];
+        }
+        let v = std::mem::take(&mut self.damage);
+        let v = cp_gfx::layers::merge(v);
+        if v.len() > 4 {
+            let u = v.iter().fold(cp_gfx::IRect::default(), |a, r| a.union(r));
+            return vec![u];
+        }
+        v
+    }
+
+    /// Le vumetre d'une piste : seule sa barre se redessine.
+    pub fn set_meter(&mut self, t: usize, m: f32) {
+        let Some(tr) = self.tracks.get_mut(t) else {
+            return;
+        };
+        if (tr.head.meter - m).abs() <= 0.004 {
+            return;
+        }
+        tr.head.meter = m;
+        // Il est sous le fader de la guitare (hors de l'ecran : rien).
+        if let Some(r) = self.rect_of(Hit::Fader { t, tab: false }) {
+            self.damage.push(cp_gfx::IRect::new(
+                r.0.floor() as i32,
+                (r.1 + r.3).floor() as i32 - 1,
+                r.2.ceil() as i32 + 1,
+                (6.0 * self.scale).ceil() as i32 + 2,
+            ));
+        }
+    }
+
+    /// La cible survolee change : seules ses deux places se redessinent.
+    fn set_hover(&mut self, h: Hit) {
+        if h == self.hover {
+            return;
+        }
+        let pad = (4.0 * self.scale).ceil();
+        for r in [self.rect_of(self.hover), self.rect_of(h)].into_iter().flatten() {
+            self.damage.push(cp_gfx::IRect::new(
+                (r.0 - pad).floor() as i32,
+                (r.1 - pad).floor() as i32,
+                (r.2 + 2.0 * pad).ceil() as i32 + 1,
+                (r.3 + 2.0 * pad).ceil() as i32 + 1,
+            ));
+        }
+        if self.hover != Hit::None && self.rect_of(self.hover).is_none() {
+            self.dirty = true;
+        }
+        self.hover = h;
+    }
+
+    /// Les traits qui bougent seuls par-dessus la scene : le curseur
+    /// d'edition, la tete de lecture, la ligne a la souris (un pixel, comme
+    /// REAPER).
+    pub fn strokes(&self, th: &cp_ui::Theme) -> Vec<cp_gfx::layers::Stroke> {
+        use cp_gfx::layers::Stroke;
+        let l = self.lay;
+        let top = l.top as i32;
+        let bot = self.tracks_bottom.min(l.bottom - l.hs_h).max(l.top) as i32;
+        let (x0, x1) = (l.sx, l.sx + l.sw);
+        let mut out = Vec::new();
+        let mut line = |q: f64, c: cp_gfx::Color| {
+            let x = self.x_of(q).round();
+            if x >= x0 && x < x1 && bot > top {
+                out.push(Stroke {
+                    r: cp_gfx::IRect::new(x as i32, top, 1, bot - top),
+                    c,
+                });
+            }
+        };
+        if let (true, Some(q)) = (self.guide.on, self.guide_q) {
+            line(q, self.guide.color.unwrap_or(th.text_faint));
+        }
+        if let Some(q) = self.edit_cursor {
+            line(q, th.edit_cursor);
+        }
+        if let (true, Some(q)) = (self.playing, self.playhead) {
+            line(q, th.playhead);
+        }
+        out
     }
 
     /// Les noires d'une mesure.
@@ -891,9 +1011,15 @@ impl Arr {
     /// Le battement : la tete de lecture suit, la page tourne.
     pub fn set_playhead(&mut self, qn: Option<f64>, playing: bool) {
         if qn != self.playhead || playing != self.playing {
+            // La tete est un trait par-dessus la scene : elle ne la salit que
+            // si une prise s'enregistre (elle grandit avec elle) ou si la fin
+            // du contenu recule.
+            let end = self.end_qn();
             self.playhead = qn;
             self.playing = playing;
-            self.dirty = true;
+            if !self.rec.is_empty() || (self.end_qn() - end).abs() > 1e-9 {
+                self.dirty = true;
+            }
         }
         if let (true, true, Some(p)) = (self.follow, playing, qn) {
             let v = self.view_qn();
@@ -1225,17 +1351,13 @@ impl Arr {
                     None => {}
                 }
                 let h = self.hit(x, y);
-                if h != self.hover {
-                    self.hover = h;
-                    self.dirty = true;
-                }
+                self.set_hover(h);
+                self.guide_at(x, y);
                 None
             }
             Ev::Leave => {
-                if self.hover != Hit::None {
-                    self.hover = Hit::None;
-                    self.dirty = true;
-                }
+                self.set_hover(Hit::None);
+                self.guide_q = None;
                 None
             }
             Ev::Down {
@@ -1360,6 +1482,19 @@ impl Arr {
             Some(f) => f(q),
             None => (q * 4.0).round() / 4.0,
         }
+    }
+
+    /// La ligne a la souris : sur le contenu (regle comprise), calee par le
+    /// magnetisme de REAPER si ses reglages le veulent.
+    fn guide_at(&mut self, x: f32, y: f32) {
+        let l = self.lay;
+        let over = x >= l.sx && x < l.sx + l.sw && y >= l.top && y < l.bottom - l.hs_h;
+        self.guide_q = if self.guide.on && over {
+            let q = self.qn_of(x);
+            Some(if self.guide.snap { self.snap_item(q) } else { q })
+        } else {
+            None
+        };
     }
 
     /// Une position calee sur la grille de l'item choisi (sinon la double
