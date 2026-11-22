@@ -417,6 +417,7 @@ impl App {
                 pitch: n.pitch,
                 // Sans attaque : l'astuce melodia, une note liee.
                 legato: n.peak == 0.0,
+                vel: (40.0 + n.amp.clamp(0.0, 1.0) * 87.0) as u8,
             })
             .collect();
         let set = self.gtab_settings();

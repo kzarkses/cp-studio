@@ -1,6 +1,11 @@
 //! Les lettres, par GDI : chaque caractere est demande une fois en niveaux de
 //! gris (`GGO_GRAY8_BITMAP`, avec l'alignement sur la grille de la police :
 //! net aux petites tailles), puis garde dans le cache de `cp_gfx`.
+//!
+//! Au-dela du plan de base (U+10000 et plus : la cle de sol U+1D11E, les
+//! silences) `GetGlyphOutlineW` ne prend pas le caractere : on cherche le
+//! glyphe dans la table `cmap` de la police (format 12), et on le demande par
+//! son numero (`GGO_GLYPH_INDEX`).
 
 use std::collections::HashMap;
 use std::ffi::c_void;
@@ -95,9 +100,46 @@ unsafe extern "system" {
         buf: *mut c_void,
         mat: *const Mat2,
     ) -> u32;
+    fn GetFontData(dc: Raw, table: u32, offset: u32, buf: *mut c_void, n: u32) -> u32;
 }
 
 const GGO_GRAY8_BITMAP: u32 = 6;
+const GGO_GLYPH_INDEX: u32 = 0x80;
+
+/// Les groupes (premier, dernier, premier glyphe) de la sous-table de format
+/// 12 d'une table `cmap` : la correspondance caractere -> glyphe au-dela du
+/// plan de base.
+fn cmap12(c: &[u8]) -> Vec<(u32, u32, u32)> {
+    let u16_at = |p: usize| {
+        c.get(p..p + 2)
+            .map(|b| u16::from_be_bytes([b[0], b[1]]) as u32)
+    };
+    let u32_at = |p: usize| {
+        c.get(p..p + 4)
+            .map(|b| u32::from_be_bytes([b[0], b[1], b[2], b[3]]))
+    };
+    let Some(n) = u16_at(2) else {
+        return Vec::new();
+    };
+    for i in 0..n as usize {
+        let Some(off) = u32_at(8 + 8 * i) else { break };
+        let off = off as usize;
+        if u16_at(off) != Some(12) {
+            continue;
+        }
+        let Some(ng) = u32_at(off + 12) else { break };
+        let mut out = Vec::with_capacity(ng.min(100_000) as usize);
+        for k in 0..ng as usize {
+            let p = off + 16 + 12 * k;
+            match (u32_at(p), u32_at(p + 4), u32_at(p + 8)) {
+                (Some(a), Some(b), Some(g)) => out.push((a, b, g)),
+                _ => break,
+            }
+        }
+        return out;
+    }
+    Vec::new()
+}
 const GDI_ERROR: u32 = 0xFFFF_FFFF;
 
 /// La source de glyphes de GDI. Une par fenetre de dessin (ou partagee sur le
@@ -109,6 +151,8 @@ pub struct GdiGlyphs {
     /// 0..64 (GDI) vers 0..255, un peu releve : le gris de GDI est lineaire et
     /// une lettre claire sur fond sombre parait sinon trop maigre.
     ramp: [u8; 65],
+    /// La table `cmap` (format 12) de chaque famille, lue au premier besoin.
+    cmaps: HashMap<u16, Vec<(u32, u32, u32)>>,
 }
 
 impl GdiGlyphs {
@@ -125,7 +169,34 @@ impl GdiGlyphs {
             families: families.iter().map(|f| wide(f)).collect(),
             fonts: HashMap::new(),
             ramp,
+            cmaps: HashMap::new(),
         }
+    }
+
+    /// Le glyphe d'un caractere hors du plan de base, dans la police choisie
+    /// (0 : absent).
+    fn glyph_index(&mut self, f: Font, code: u32) -> u32 {
+        let dc = self.dc;
+        let groups = self.cmaps.entry(f.family).or_insert_with(|| {
+            // 'cmap', octets dans l'ordre du fichier.
+            let tag = u32::from_le_bytes(*b"cmap");
+            // SAFETY: premier appel sans tampon : la taille de la table.
+            let n = unsafe { GetFontData(dc, tag, 0, null_mut(), 0) };
+            if n == GDI_ERROR || n == 0 || n > 16 << 20 {
+                return Vec::new();
+            }
+            let mut buf = vec![0u8; n as usize];
+            // SAFETY: tampon de la taille annoncee.
+            let r = unsafe { GetFontData(dc, tag, 0, buf.as_mut_ptr() as *mut c_void, n) };
+            if r == GDI_ERROR {
+                return Vec::new();
+            }
+            cmap12(&buf)
+        });
+        groups
+            .iter()
+            .find(|&&(a, b, _)| a <= code && code <= b)
+            .map_or(0, |&(a, _, g)| g + code - a)
     }
 
     fn select(&mut self, f: Font) -> bool {
@@ -189,9 +260,17 @@ impl GlyphSource for GdiGlyphs {
     }
 
     fn glyph(&mut self, f: Font, ch: char) -> Option<Glyph> {
-        let code = ch as u32;
-        if code > 0xFFFF || !self.select(f) {
+        let mut code = ch as u32;
+        if !self.select(f) {
             return None;
+        }
+        let mut format = GGO_GRAY8_BITMAP;
+        if code > 0xFFFF {
+            code = self.glyph_index(f, code);
+            if code == 0 {
+                return None;
+            }
+            format |= GGO_GLYPH_INDEX;
         }
         let mat = Mat2 {
             m11: Fixed { fract: 0, value: 1 },
@@ -201,17 +280,7 @@ impl GlyphSource for GdiGlyphs {
         };
         let mut gm = GlyphMetrics::default();
         // SAFETY: premier appel sans tampon : rend la taille necessaire.
-        let n = unsafe {
-            GetGlyphOutlineW(
-                self.dc,
-                code,
-                GGO_GRAY8_BITMAP,
-                &mut gm,
-                0,
-                null_mut(),
-                &mat,
-            )
-        };
+        let n = unsafe { GetGlyphOutlineW(self.dc, code, format, &mut gm, 0, null_mut(), &mat) };
         if n == GDI_ERROR {
             return None;
         }
@@ -228,7 +297,7 @@ impl GlyphSource for GdiGlyphs {
             GetGlyphOutlineW(
                 self.dc,
                 code,
-                GGO_GRAY8_BITMAP,
+                format,
                 &mut gm,
                 n,
                 buf.as_mut_ptr() as *mut c_void,

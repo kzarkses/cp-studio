@@ -241,30 +241,35 @@ fn la_partition_tient_dans_ses_mesures() {
             qn1: 9.0,
             pitch: 52,
             legato: false,
+            vel: 90,
         },
         TabNote {
             qn0: 9.02,
             qn1: 9.74,
             pitch: 55,
             legato: false,
+            vel: 90,
         },
         TabNote {
             qn0: 11.0,
             qn1: 13.5,
             pitch: 45,
             legato: false,
+            vel: 90,
         },
         TabNote {
             qn0: 11.0,
             qn1: 13.5,
             pitch: 52,
             legato: false,
+            vel: 90,
         },
         TabNote {
             qn0: 13.5,
             qn1: 14.0,
             pitch: 28,
             legato: false,
+            vel: 90,
         },
     ];
     let (xml, st) = musicxml(&notes, &spec);
@@ -306,6 +311,7 @@ fn un_marteau_et_un_tire_s_ecrivent_sur_la_meme_corde() {
         qn1: q + 0.5,
         pitch: p,
         legato,
+        vel: 90,
     };
     let notes = vec![
         n(0.0, 55, false),
@@ -319,4 +325,167 @@ fn un_marteau_et_un_tire_s_ecrivent_sur_la_meme_corde() {
     assert!(xml.contains("<hammer-on number=\"1\" type=\"stop\"/>"));
     assert!(xml.contains("<pull-off number=\"1\" type=\"start\">P</pull-off>"));
     assert_eq!(xml.matches("<slur type=\"start\"").count(), 2 * 2);
+}
+
+// ---------------------------------------------------------------------------
+// La tablature editable
+// ---------------------------------------------------------------------------
+
+use crate::cache::Analysis;
+use crate::doc::{self, MidiQn, Sidecar, TNote, Tech};
+use crate::engrave::engrave;
+
+fn tn(q: f64, len: f64, p: i32, legato: bool) -> TabNote {
+    TabNote {
+        qn0: q,
+        qn1: q + len,
+        pitch: p,
+        legato,
+        vel: 90,
+    }
+}
+
+#[test]
+fn la_tablature_se_met_en_mesures() {
+    let t = Tuning::standard();
+    let notes = vec![
+        tn(0.0, 1.0, 52, false),
+        tn(1.02, 0.7, 55, false),
+        tn(3.0, 2.5, 45, false),
+        tn(3.0, 2.5, 52, false),
+        tn(5.5, 0.25, 57, false),
+        tn(5.75, 0.25, 59, true),
+    ];
+    let (tab, dropped) = doc::finger(&notes, 4, 112.0, &t);
+    assert_eq!(dropped, 0);
+    assert_eq!(tab.len(), 6);
+    let e = engrave(&tab, 0.0, (4, 4), 4);
+    assert_eq!(e.measures, 2);
+    assert_eq!(e.chords, 5);
+    // Chaque mesure est pleine, exactement.
+    for m in 0..e.measures {
+        let sum: i64 = e
+            .signs
+            .iter()
+            .filter(|s| s.measure == m)
+            .map(|s| s.dur)
+            .sum();
+        assert_eq!(sum, e.mlen, "mesure {m}");
+    }
+    // L'accord qui deborde est coupe a la barre et lie.
+    assert!(e.signs.iter().any(|s| s.tie_out) && e.signs.iter().any(|s| s.tie_in));
+    // Chaque note garde son temps reel (pas la grille).
+    assert!((tab[1].qn0 - 1.02).abs() < 1e-9);
+}
+
+#[test]
+fn les_fantomes_ne_doublent_pas_la_tablature() {
+    let t = Tuning::standard();
+    let (tab, _) = doc::finger(
+        &[tn(0.0, 0.5, 57, false), tn(1.0, 0.5, 60, false)],
+        4,
+        100.0,
+        &t,
+    );
+    // Le decodage sensible retrouve les deux notes, plus une double croche
+    // entre elles.
+    let cands = vec![
+        tn(0.01, 0.5, 57, false),
+        tn(0.5, 0.25, 59, false),
+        tn(1.0, 0.5, 60, false),
+    ];
+    let g = doc::ghosts(&cands, &tab, 4, &t);
+    assert_eq!(g.len(), 1);
+    assert_eq!(g[0].pitch, 59);
+    assert_eq!(t.strings[g[0].string] + g[0].fret, 59);
+}
+
+#[test]
+fn l_aller_retour_avec_le_midi_garde_cordes_liaisons_et_notes_tenues() {
+    let t = Tuning::standard();
+    let (mut tab, _) = doc::finger(
+        &[
+            tn(0.0, 0.5, 55, false),
+            tn(0.5, 0.5, 57, true),
+            tn(1.0, 1.0, 64, false),
+        ],
+        4,
+        100.0,
+        &t,
+    );
+    assert_eq!(tab[1].tech, Tech::Hammer);
+    tab[2].locked = true;
+    let midi = doc::to_midi(&tab, &t);
+    // La corde la plus aigue est le canal 1 (0).
+    assert!(
+        midi.iter()
+            .any(|m| m.pitch == 64 && (m.chan == 0 || m.chan == 1))
+    );
+    let side = Sidecar::from_text(&Sidecar::of(&tab, &Default::default()).to_text());
+    let back = doc::from_midi(&midi, &t, &side);
+    assert_eq!(back, tab);
+    // Une note ecrite dans REAPER sur un canal hors des cordes : replacee.
+    let odd = vec![MidiQn {
+        qn0: 2.0,
+        qn1: 2.5,
+        pitch: 41,
+        chan: 9,
+        vel: 100,
+    }];
+    let n = doc::from_midi(&odd, &t, &Sidecar::default());
+    assert_eq!((n[0].string, n[0].fret), (0, 1));
+}
+
+#[test]
+fn un_nouveau_decodage_respecte_les_corrections() {
+    let note = |q: f64, p: i32, s: usize, f: i32, locked: bool| TNote {
+        qn0: q,
+        qn1: q + 0.5,
+        pitch: p,
+        string: s,
+        fret: f,
+        vel: 90,
+        tech: Tech::Plain,
+        locked,
+    };
+    let old = vec![
+        note(0.0, 57, 3, 2, true),
+        note(1.0, 59, 4, 0, false),
+        note(4.0, 64, 5, 0, false),
+    ];
+    let fresh = vec![
+        note(0.0, 57, 2, 7, false),
+        note(2.0, 62, 4, 3, false),
+        note(3.0, 60, 4, 1, false),
+    ];
+    let mut sup = std::collections::HashSet::new();
+    sup.insert(fresh[2].key());
+    let out = doc::merge(&old, fresh, &sup, Some((0.0, 3.5)));
+    let keys: Vec<(f64, i32, bool)> = out.iter().map(|t| (t.qn0, t.pitch, t.locked)).collect();
+    // La note tenue reste (pas son double detecte) ; la non tenue du passage
+    // part ; l'effacee ne revient pas ; hors du passage, rien ne bouge.
+    assert_eq!(
+        keys,
+        vec![(0.0, 57, true), (2.0, 62, false), (4.0, 64, false)]
+    );
+}
+
+#[test]
+fn l_analyse_se_relit_du_cache() {
+    let p = crate::analyze::Posteriors {
+        frames: 3,
+        note: (0..3 * 88).map(|i| (i % 7) as f32 / 7.0).collect(),
+        onset: (0..3 * 88).map(|i| (i % 5) as f32 / 5.0).collect(),
+        contour: Vec::new(),
+    };
+    let audio: Vec<f32> = (0..800).map(|i| ((i as f32) * 0.01).sin() * 0.5).collect();
+    let a = Analysis::new(&p, &audio);
+    let b = Analysis::from_bytes(&a.to_bytes()).unwrap();
+    assert_eq!(a, b);
+    assert!(Analysis::from_bytes(b"CPGA").is_none());
+    let back = b.posteriors();
+    assert!((back.note[6] - 6.0 / 7.0).abs() < 0.003);
+    assert_eq!(b.onset_curve().len(), 3);
+    // Sans contour, le decodage marche (sans bends).
+    let _ = crate::make_notes(&back, &crate::NoteParams::default());
 }

@@ -135,6 +135,10 @@ fn bends_for(p: &Posteriors, n: &mut Note) {
     let gs = (TOL - fi).max(0);
     let shift = TOL - (TOL - fi).max(0);
     n.bends.clear();
+    // Une analyse relue du cache n'a pas de contour : pas de bends.
+    if p.contour.len() < n.end * CONTOUR {
+        return;
+    }
     for t in n.start..n.end {
         let row = &p.contour[t * CONTOUR..(t + 1) * CONTOUR];
         let (mut best, mut bv) = (0i32, -1f64);

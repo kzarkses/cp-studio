@@ -21,6 +21,9 @@
 //! `src/bp_weights.bin` (voir NOTICE).
 
 pub mod analyze;
+pub mod cache;
+pub mod doc;
+pub mod engrave;
 pub mod fret;
 pub mod model;
 pub mod notes;
@@ -31,4 +34,6 @@ pub mod score;
 mod tests;
 
 pub use analyze::{Posteriors, Progress, analyze};
+pub use cache::Analysis;
+pub use doc::{TNote, Tech};
 pub use notes::{Note, NoteParams, make_notes};
