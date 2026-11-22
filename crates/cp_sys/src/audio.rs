@@ -13,6 +13,7 @@
 use std::ffi::{CString, c_void};
 use std::ptr::null_mut;
 use std::sync::OnceLock;
+use std::sync::atomic::{AtomicI32, Ordering};
 
 use crate::guard;
 use crate::pcm::{CppSource, PortSource};
@@ -79,6 +80,10 @@ type HookFn = fn(is_post: bool, frames: i32, srate: f64);
 type RegHookFn = unsafe extern "C" fn(bool, *mut AudioHookRegister) -> i32;
 
 static HOOK_FN: OnceLock<HookFn> = OnceLock::new();
+/// Les entrees de la carte (`GetNumAudioInputs`), posees par le fil principal.
+/// REAPER annonce 0 entree au crochet (`input_nch`, mesure sur une Fireface en
+/// ASIO le 2026-10-10) : c'est cette borne qui compte.
+static HW_INPUTS: AtomicI32 = AtomicI32::new(0);
 /// L'adresse de la structure enregistree (vit toute la vie du processus).
 static HOOK_REG: OnceLock<usize> = OnceLock::new();
 
@@ -127,7 +132,8 @@ impl AudioHook {
         let &addr = HOOK_REG.get()?;
         // SAFETY: la structure enregistree vit toute la vie du processus.
         let reg = unsafe { &*(addr as *const AudioHookRegister) };
-        if ch < 0 || ch >= reg.input_nch || frames <= 0 {
+        let n = reg.input_nch.max(HW_INPUTS.load(Ordering::Relaxed));
+        if ch < 0 || ch >= n || frames <= 0 {
             return None;
         }
         let gb = reg.get_buffer?;
@@ -139,6 +145,35 @@ impl AudioHook {
         }
         // SAFETY: `frames` doubles du tampon d'entree de ce bloc.
         Some(unsafe { std::slice::from_raw_parts(p, frames as usize) })
+    }
+
+    /// Relit le nombre d'entrees de la carte (fil principal).
+    pub fn refresh_inputs(r: &Reaper) -> i32 {
+        type Num = unsafe extern "C" fn() -> i32;
+        // SAFETY: int GetNumAudioInputs().
+        let n = unsafe { r.api::<Num>(c"GetNumAudioInputs") }
+            // SAFETY: sans argument, sur le fil principal.
+            .map(|f| unsafe { f() })
+            .unwrap_or(0)
+            .max(0);
+        HW_INPUTS.store(n, Ordering::Relaxed);
+        n
+    }
+
+    /// Ce que REAPER a pose dans la structure du crochet : entrees et sorties
+    /// annoncees, et si `GetBuffer` est la (pour le journal).
+    pub fn announced() -> Option<(i32, i32, bool)> {
+        let &addr = HOOK_REG.get()?;
+        let reg = addr as *const AudioHookRegister;
+        // SAFETY: la structure enregistree vit toute la vie du processus ;
+        // lecture volatile, REAPER l'ecrit depuis le fil audio.
+        unsafe {
+            Some((
+                std::ptr::read_volatile(&raw const (*reg).input_nch),
+                std::ptr::read_volatile(&raw const (*reg).output_nch),
+                std::ptr::read_volatile(&raw const (*reg).get_buffer).is_some(),
+            ))
+        }
     }
 
     /// Retire le crochet (a la fermeture de REAPER).

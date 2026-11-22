@@ -16,6 +16,10 @@ static WPOS: AtomicUsize = AtomicUsize::new(0);
 /// Les entrees capturees (-1 : rien).
 static CH0: AtomicI32 = AtomicI32::new(-1);
 static CH1: AtomicI32 = AtomicI32::new(-1);
+/// Pour le journal : les blocs lus, les blocs sans entree, la crete.
+static BLOCKS_OK: AtomicU32 = AtomicU32::new(0);
+static BLOCKS_NONE: AtomicU32 = AtomicU32::new(0);
+static PEAK: AtomicU32 = AtomicU32::new(0);
 
 /// Dans le crochet (passage « pre ») : copie l'entree demandee.
 pub(crate) fn on_block(frames: i32) {
@@ -24,8 +28,11 @@ pub(crate) fn on_block(frames: i32) {
         return;
     }
     let Some(a) = AudioHook::input(c0, frames) else {
+        BLOCKS_NONE.fetch_add(1, Ordering::Relaxed);
         return;
     };
+    BLOCKS_OK.fetch_add(1, Ordering::Relaxed);
+    let mut peak = f32::from_bits(PEAK.load(Ordering::Relaxed));
     let b = AudioHook::input(CH1.load(Ordering::Relaxed), frames);
     let mut w = WPOS.load(Ordering::Relaxed);
     for (k, &x) in a.iter().enumerate() {
@@ -33,10 +40,22 @@ pub(crate) fn on_block(frames: i32) {
             Some(b) => (x + b[k]) * 0.5,
             None => x,
         } as f32;
+        peak = peak.max(v.abs());
         RING[w % N].store(v.to_bits(), Ordering::Relaxed);
         w = w.wrapping_add(1);
     }
     WPOS.store(w, Ordering::Release);
+    PEAK.store(peak.to_bits(), Ordering::Relaxed);
+}
+
+/// Pour le journal : (blocs lus, blocs sans entree, crete) depuis le dernier
+/// appel, remis a zero.
+pub fn take_stats() -> (u32, u32, f32) {
+    (
+        BLOCKS_OK.swap(0, Ordering::Relaxed),
+        BLOCKS_NONE.swap(0, Ordering::Relaxed),
+        f32::from_bits(PEAK.swap(0, Ordering::Relaxed)),
+    )
 }
 
 /// Choisit l'entree (`ch0` < 0 : arrete) et rend ses derniers echantillons

@@ -34,6 +34,7 @@ use cp_abi::{
 use cp_audio::{AudioHost, ClipH, Load};
 use cp_engine::VoiceH;
 use cp_hot::{Hot, Report};
+use cp_sys::audio::AudioHook;
 use cp_sys::host::{self, AudioLoad, Host};
 use cp_sys::reaper::Reaper;
 use cp_sys::win::{self, Hwnd, Paint, WinMsg, rgb};
@@ -424,8 +425,54 @@ impl Host for LoaderHost {
     }
 
     fn audio_input(&self, ch0: i32, ch1: i32, out: &mut [f32]) -> usize {
+        capture_watch(ch0, ch1);
         cp_audio::capture::read(ch0, ch1, out)
     }
+}
+
+/// L'entree suivie par l'accordeur, depuis quand, et si le journal l'a dite.
+static CAPTURE: Mutex<Option<(i32, i32, Instant, bool)>> = Mutex::new(None);
+
+/// A chaque lecture de l'entree : relit les entrees de la carte quand l'entree
+/// change, et dit au journal, deux secondes apres, ce que le crochet en recoit.
+fn capture_watch(ch0: i32, ch1: i32) {
+    let Some(r) = REAPER.get() else { return };
+    let mut g = lock(&CAPTURE);
+    let same = g.as_ref().is_some_and(|c| c.0 == ch0 && c.1 == ch1);
+    if !same {
+        *g = Some((ch0, ch1, Instant::now(), ch0 < 0));
+        if ch0 >= 0 {
+            AudioHook::refresh_inputs(r);
+            cp_audio::capture::take_stats();
+        }
+        return;
+    }
+    let Some(c) = g.as_mut() else { return };
+    if c.3 || c.2.elapsed() < Duration::from_secs(2) {
+        return;
+    }
+    c.3 = true;
+    let card = AudioHook::refresh_inputs(r);
+    let (ok, none, peak) = cp_audio::capture::take_stats();
+    let (inn, outn, gb) = AudioHook::announced().unwrap_or((-1, -1, false));
+    let db = if peak > 0.0 {
+        format!("{:.0} dB", 20.0 * peak.log10())
+    } else {
+        "silence".into()
+    };
+    log(
+        if ok == 0 { LOG_WARN } else { LOG_INFO },
+        &format!(
+            "accordeur : entree {}{} ; la carte a {card} entrees, le crochet en annonce {inn}              (sorties {outn}, GetBuffer {}) ; {ok} blocs lus, {none} sans entree ; crete {db}",
+            ch0 + 1,
+            if ch1 >= 0 {
+                format!("/{}", ch1 + 1)
+            } else {
+                String::new()
+            },
+            if gb { "oui" } else { "NON" },
+        ),
+    );
 }
 
 /// Une touche du crochet clavier, demandee au module. Rend le code du crochet.
