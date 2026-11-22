@@ -1187,3 +1187,64 @@ fn le_clic_suit_la_ligne_a_la_souris() {
         }
     }
 }
+
+/// Les boutons des couches dans l'en-tete, et une guitare glissee par son
+/// en-tete a la place d'une autre (comme les pistes de REAPER).
+#[test]
+fn couches_et_ordre_des_guitares() {
+    let mut b = Bench::new(1600, 900);
+    let mut v = arranger();
+    v.rec.clear();
+    b.draw(&mut v);
+    // Les quatre boutons de la premiere guitare.
+    for lane in Lane::ALL {
+        assert!(
+            v.rect_of(Hit::LaneToggle { t: 0, lane }).is_some(),
+            "{lane:?}"
+        );
+    }
+    let was = v.tracks[0].head.lanes.on(Lane::Midi);
+    let (x, y) = center(
+        v.rect_of(Hit::LaneToggle {
+            t: 0,
+            lane: Lane::Midi,
+        })
+        .unwrap(),
+    );
+    assert_eq!(click(&mut v, x, y), Some(Act::Lanes { t: 0 }));
+    assert_eq!(v.tracks[0].head.lanes.on(Lane::Midi), !was);
+    b.shot(&mut v, "11_couches");
+    // Glisser l'en-tete de la premiere guitare sur la seconde.
+    b.draw(&mut v);
+    let h0 = v.rect_of(Hit::Header(0)).unwrap();
+    let h1 = v.rect_of(Hit::Header(1)).unwrap();
+    let (x0, y0) = (h0.0 + 20.0, h0.1 + 6.0);
+    let y1 = h1.1 + h1.3 * 0.5;
+    v.event(&Ev::Down {
+        x: x0,
+        y: y0,
+        b: Button::Left,
+        dbl: false,
+        mods: Mods::default(),
+    });
+    v.event(&Ev::Move {
+        x: x0,
+        y: y1,
+        mods: Mods::default(),
+    });
+    assert_eq!(v.track_at(y1), Some(1));
+    assert_eq!(
+        v.pointer(x0, y1, Mods::default()),
+        cp_ui::Pointer::TrackDrag
+    );
+    b.shot(&mut v, "12_glisser_guitare");
+    let a = v.event(&Ev::Up {
+        x: x0,
+        y: y1,
+        b: Button::Left,
+        mods: Mods::default(),
+    });
+    assert_eq!(a, Some(Act::MoveTrack { t: 0, to: 1 }));
+    // Un simple clic sur l'en-tete : rien ne bouge.
+    assert_eq!(click(&mut v, x0, y0), None);
+}

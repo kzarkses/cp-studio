@@ -143,6 +143,8 @@ pub enum Pointer {
     NoteChord,
     NoteArp,
     TouchSelect,
+    /// Une piste qu'on glisse (son en-tete).
+    TrackDrag,
     // Les poignees d'interface
     ResizeNS,
     ResizeWE,

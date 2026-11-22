@@ -2207,6 +2207,57 @@ impl App {
                     self.ed.pending = Some(g);
                 }
             }
+            GAct::MoveTrack { t, to } => {
+                // Une guitare est un dossier (son bus) et ses enfants (audio,
+                // tab) : le bloc entier change de place, comme un glisser dans
+                // les en-tetes de REAPER, en un pas d'annulation.
+                let all = r.snapshot_tracks(&TKEYS, &[], &|_| false);
+                let block = |k: usize| -> Option<(Vec<String>, i32, i32)> {
+                    let hd = &self.gt.arr.tracks.get(k)?.head;
+                    let audio = all.iter().find(|x| x.guid == hd.guid)?;
+                    let bus = audio.ext[K_BUS]
+                        .as_deref()
+                        .and_then(|g| all.iter().find(|x| x.guid == g));
+                    let first = bus.unwrap_or(audio).index;
+                    // Le dossier et tout ce qu'il contient.
+                    let mut level = 0;
+                    let mut out = Vec::new();
+                    let mut last = first;
+                    for x in all.iter().filter(|x| x.index >= first) {
+                        out.push(x.guid.clone());
+                        last = x.index;
+                        level += x.depth;
+                        if level <= 0 {
+                            break;
+                        }
+                    }
+                    // Sans dossier : l'audio et sa tab.
+                    if bus.is_none() {
+                        if let Some(tg) = &hd.tab_guid {
+                            if !out.contains(tg) {
+                                out.push(tg.clone());
+                            }
+                        }
+                    }
+                    Some((out, first, last))
+                };
+                let (Some((moving, _, _)), Some((_, a, b))) = (block(t), block(to)) else {
+                    return;
+                };
+                let before = if to < t { a } else { b + 1 };
+                r.undo_begin();
+                let ok = r.reorder_tracks(&moving, before);
+                r.undo_end("CP Guitar Tab: move guitar", 1);
+                if ok {
+                    self.gt.arr.select(Some(Sel {
+                        t: to,
+                        i: None,
+                        n: None,
+                    }));
+                }
+                r.refresh_arrange();
+                self.gtab_sync();
+            }
             GAct::SplitItem { t, i, qn } => {
                 // La prise et son MIDI coupes au meme endroit ; la partie
                 // droite garde ses notes (son MIDI est la moitie droite).

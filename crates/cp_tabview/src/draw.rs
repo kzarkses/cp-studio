@@ -172,8 +172,8 @@ pub fn lane_hz(l: Lane, vz: f32) -> f32 {
 }
 
 /// La hauteur que demande l'en-tete d'une piste (a 96 DPI).
-const HEAD_MIN_H: f32 = 116.0;
-const TRACK_SEP: f32 = 1.0;
+const HEAD_MIN_H: f32 = 142.0;
+pub(crate) const TRACK_SEP: f32 = 1.0;
 /// Les curseurs de l'inspecteur : ou commence la glissiere, et la place
 /// laissee a droite pour la valeur (a 96 DPI).
 pub(crate) const SLIDER_X: f32 = 80.0;
@@ -637,8 +637,10 @@ impl Arr {
             },
             vis.3,
         ) {
+            let mut tops: Vec<(f32, f32)> = Vec::new();
             for t in 0..self.tracks.len() {
                 let h = track_h(&self.tracks[t], th.scale, vz);
+                tops.push((y, y + h));
                 if y + h >= top && y <= tb {
                     self.draw_header(cv, text, icons, th, bx, t, y, h, vis);
                     self.draw_lanes(cv, text, icons, th, bx, t, y, h, geo, vis);
@@ -646,6 +648,13 @@ impl Arr {
                 y += h;
                 cv.fill_rect(0.0, y, l.panel_x, s(TRACK_SEP), th.rp.tr_div);
                 y += s(TRACK_SEP);
+            }
+            // La guitare qu'on glisse : la ligne ou elle tombera.
+            if let Some((mt, to)) = self.track_move() {
+                if let Some(&(a, b)) = tops.get(to) {
+                    let yy = if to < mt { a } else { b };
+                    cv.fill_rect(0.0, (yy - 1.0).round(), l.panel_x, 2.0, th.accent);
+                }
             }
             // Le vide sous les pistes : celui de l'arrangement.
             if y < tb {
@@ -1007,6 +1016,48 @@ impl Arr {
                 }
             }
         }
+        // Les couches montrees : audio, MIDI, partition, tab (un bouton
+        // chacune ; il en reste toujours une).
+        let by = y + s(116.0);
+        let bw = s(24.0);
+        let bh = s(20.0);
+        let mut bxx = s(12.0);
+        for (lane, icon) in [
+            (Lane::Audio, Icon::AudioLines),
+            (Lane::Midi, Icon::Piano),
+            (Lane::Score, Icon::Music),
+            (Lane::Tab, Icon::Guitar),
+        ] {
+            let on = hd.lanes.on(lane);
+            let hit = Hit::LaneToggle { t, lane };
+            let hov = self.hover == hit;
+            cv.fill_round_rect(
+                bxx,
+                by,
+                bw,
+                bh,
+                s(3.0),
+                if on {
+                    th.accent.with_alpha(if hov { 70 } else { 45 })
+                } else if hov {
+                    th.hover
+                } else {
+                    th.field
+                },
+            );
+            let isz = s(13.0) as u16;
+            icons.draw(
+                cv,
+                icon,
+                (bxx + (bw - isz as f32) * 0.5).round(),
+                (by + (bh - isz as f32) * 0.5).round(),
+                isz,
+                if on { th.accent } else { th.text_faint },
+                false,
+            );
+            push(bx, vis, bxx, by, bw, bh, hit);
+            bxx += bw + s(4.0);
+        }
     }
 
     fn draw_lanes(
@@ -1087,7 +1138,7 @@ impl Arr {
             // L'audio et le MIDI : une icone, pas de mot.
             let icon = match lane {
                 Lane::Audio => Some(Icon::AudioLines),
-                Lane::Midi => Some(Icon::Music),
+                Lane::Midi => Some(Icon::Piano),
                 _ => None,
             };
             if let Some(ic) = icon {

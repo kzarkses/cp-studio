@@ -515,6 +515,7 @@ fn pointer_src(p: cp_ui::Pointer) -> (&'static str, Src) {
         P::NoteChord => ("midi_chord", Res(503)),
         P::NoteArp => ("midi_arp", Res(502)),
         P::TouchSelect => ("midi_touch_select", Res(515)),
+        P::TrackDrag => ("vertical_drag", Res(613)),
         P::ResizeNS => ("tcp_resize", Idc(SIZENS)),
         P::ResizeWE => ("tcppane_resize", Idc(SIZEWE)),
     }

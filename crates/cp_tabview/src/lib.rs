@@ -432,6 +432,11 @@ pub enum Hit {
         i: usize,
         lane: Lane,
     },
+    /// Montrer ou cacher une couche d'une guitare (les boutons de l'en-tete).
+    LaneToggle {
+        t: usize,
+        lane: Lane,
+    },
     /// Le bord d'une prise (le rognage, comme dans l'arrangement).
     ItemEdge {
         t: usize,
@@ -618,6 +623,11 @@ pub enum Act {
         fade_in: bool,
         len: f64,
     },
+    /// Une guitare glissee par son en-tete a la place de la guitare `to`.
+    MoveTrack {
+        t: usize,
+        to: usize,
+    },
     /// Retranscrire en repartant de zero (Maj) : les notes retouchees et
     /// effacees sont oubliees.
     TranscribeFresh {
@@ -688,6 +698,14 @@ enum Drag {
         qn0: f64,
         to: usize,
         copy: bool,
+    },
+    /// Une guitare qu'on glisse par son en-tete (comme les pistes de
+    /// REAPER) : ou elle irait.
+    TrackMove {
+        t: usize,
+        y0: f32,
+        to: usize,
+        moved: bool,
     },
     /// Le bord d'une prise qu'on tire : `q0` le bord d'origine, `q` ou il
     /// irait (cale par le magnetisme de REAPER, Maj : sans).
@@ -1239,6 +1257,7 @@ impl Arr {
                 return if fade_in { P::FadeIn } else { P::FadeOut };
             }
             Some(Drag::Hand { .. }) => return P::HandScroll,
+            Some(Drag::TrackMove { moved: true, .. }) => return P::TrackDrag,
             Some(Drag::Range { .. }) => return P::TimeSelEdge,
             Some(_) => return P::Arrow,
             None => {}
@@ -1269,6 +1288,16 @@ impl Arr {
                 }
             }
             _ => P::Arrow,
+        }
+    }
+
+    /// La guitare qu'on glisse et ou elle irait (le dessin le montre).
+    pub(crate) fn track_move(&self) -> Option<(usize, usize)> {
+        match self.drag {
+            Some(Drag::TrackMove {
+                t, to, moved: true, ..
+            }) => Some((t, to)),
+            _ => None,
         }
     }
 
@@ -1603,6 +1632,23 @@ impl Arr {
                         self.dirty = true;
                         return None;
                     }
+                    Some(Drag::TrackMove { t, y0, moved, .. }) => {
+                        let moved = moved || (y - y0).abs() > 4.0 * self.scale;
+                        if !moved {
+                            return None;
+                        }
+                        let last = self.tracks.len().saturating_sub(1);
+                        let to =
+                            self.track_at(y)
+                                .unwrap_or(if y < self.lay.top + self.lay.ruler_h {
+                                    0
+                                } else {
+                                    last
+                                });
+                        self.drag = Some(Drag::TrackMove { t, y0, to, moved });
+                        self.dirty = true;
+                        return None;
+                    }
                     Some(Drag::Slider(k)) => return self.set_slider(k, x),
                     Some(Drag::SynthSlider(k)) => return self.set_synth_slider(k, x),
                     Some(Drag::Fader { t, tab }) => return self.set_fader(t, tab, x),
@@ -1762,6 +1808,9 @@ impl Arr {
                         })
                     }
                     Some(Drag::Trim { qp, .. }) => Some(Act::Seek(qp)),
+                    Some(Drag::TrackMove {
+                        t, to, moved: true, ..
+                    }) if to != t => Some(Act::MoveTrack { t, to }),
                     Some(Drag::Fade { t, i, fade_in, len }) => {
                         Some(Act::FadeItem { t, i, fade_in, len })
                     }
@@ -1974,8 +2023,16 @@ impl Arr {
                     i: None,
                     n: None,
                 }));
+                // L'en-tete se glisse : la guitare change de place.
+                self.drag = Some(Drag::TrackMove {
+                    t,
+                    y0: y,
+                    to: t,
+                    moved: false,
+                });
                 None
             }
+            Hit::LaneToggle { t, lane } => self.toggle_lane(t, lane),
             Hit::Arm(t) => Some(Act::Arm { t }),
             Hit::Input(t) => Some(Act::InputMenu { t, x, y }),
             Hit::Monitor(t) => Some(Act::Monitor { t }),
@@ -2128,8 +2185,8 @@ impl Arr {
         let l = self.lay;
         let mut yy = l.top + l.ruler_h + 1.0 - self.vscroll;
         for t in 0..self.tracks.len() {
-            let h =
-                draw::track_h(&self.tracks[t], self.scale, self.vzoom) + (3.0 * self.scale).round();
+            let h = draw::track_h(&self.tracks[t], self.scale, self.vzoom)
+                + (draw::TRACK_SEP * self.scale).round();
             if y >= yy && y < yy + h {
                 return Some(t);
             }
@@ -2252,7 +2309,18 @@ impl Arr {
             }
             Hit::SoundPick { s, .. } => format!("Tab sound: {}", s.name()),
             Hit::Tuning(_) => "Tuning (click: next)".into(),
-            Hit::Header(_) => "Right-click: lanes, rename, delete".into(),
+            Hit::Header(_) => {
+                "Drag: move the guitar \u{00b7} right-click: lanes, rename, delete".into()
+            }
+            Hit::LaneToggle { lane, .. } => format!(
+                "{} lane",
+                match lane {
+                    Lane::Audio => "Audio",
+                    Lane::Midi => "MIDI",
+                    Lane::Score => "Score",
+                    Lane::Tab => "Tab",
+                }
+            ),
             Hit::Listen(Listen::Original) => "Hear the recording".into(),
             Hit::Listen(Listen::Tab) => "Hear the tab".into(),
             Hit::Listen(Listen::Both) => "Hear both".into(),

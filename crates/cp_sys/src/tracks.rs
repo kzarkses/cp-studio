@@ -666,6 +666,35 @@ impl Reaper {
         unsafe { m(it, tr) }
     }
 
+    /// Deplace ces pistes (par GUID) juste avant la piste d'indice `before`
+    /// (0 = la premiere ; le nombre de pistes = a la fin), comme un glisser
+    /// dans les en-tetes de REAPER. Elles restent choisies.
+    pub fn reorder_tracks(&self, guids: &[String], before: i32) -> bool {
+        type Sel = unsafe extern "C" fn(P, bool);
+        type Cmd = unsafe extern "C" fn(i32, i32);
+        type Reorder = unsafe extern "C" fn(i32, i32) -> bool;
+        let (Some(sel), Some(cmd), Some(re)) = (
+            self.tf::<Sel>(c"SetTrackSelected"),
+            self.tf::<Cmd>(c"Main_OnCommand"),
+            self.tf::<Reorder>(c"ReorderSelectedTracks"),
+        ) else {
+            return false;
+        };
+        let tracks: Vec<P> = guids.iter().filter_map(|g| self.track_of(g)).collect();
+        if tracks.is_empty() {
+            return false;
+        }
+        // SAFETY: fil principal ; 40297 = Piste : deselectionner toutes les
+        // pistes ; pistes vivantes ; bool ReorderSelectedTracks(int, int).
+        unsafe {
+            cmd(40297, 0);
+            for &t in &tracks {
+                sel(t, true);
+            }
+            re(before.max(0), 0)
+        }
+    }
+
     /// Coupe un item a `t` (s, temps du projet). Rend le GUID de la partie
     /// droite (l'item d'origine garde la gauche).
     pub fn split_item(&self, guid: &str, t: f64) -> Option<String> {
