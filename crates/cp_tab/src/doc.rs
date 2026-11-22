@@ -63,6 +63,9 @@ pub fn sort(notes: &mut [TNote]) {
     });
 }
 
+/// Une note d'accord : (hauteur repliee, debut, fin, sans attaque, velocite).
+type Member = (i32, f64, f64, bool, u8);
+
 /// Des notes detectees a la tablature. Les notes qui commencent sur la meme
 /// case de la grille (`grid` par noire) forment un accord ; le doigte se
 /// choisit sur toute la phrase ([`fret::assign`]) ; une note sans attaque
@@ -71,7 +74,7 @@ pub fn sort(notes: &mut [TNote]) {
 pub fn finger(notes: &[TabNote], grid: u32, bpm: f64, tuning: &Tuning) -> (Vec<TNote>, usize) {
     let g = grid.max(1) as f64;
     // Les accords : (hauteur repliee, debut, fin, sans attaque, velocite).
-    let mut groups: BTreeMap<i64, Vec<(i32, f64, f64, bool, u8)>> = BTreeMap::new();
+    let mut groups: BTreeMap<i64, Vec<Member>> = BTreeMap::new();
     for n in notes {
         let s = (n.qn0 * g).round() as i64;
         let p = fret::fold(n.pitch, tuning);
