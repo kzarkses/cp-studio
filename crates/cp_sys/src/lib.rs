@@ -41,6 +41,7 @@ pub mod rui;
 pub mod shell;
 pub mod tab;
 pub mod theme;
+pub mod tracks;
 pub mod transport;
 pub mod ui;
 pub mod win;
