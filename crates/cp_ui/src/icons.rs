@@ -44,6 +44,11 @@ pub enum Icon {
     Metronome,
     Plus,
     Guitar,
+    Trash,
+    Download,
+    Headphones,
+    Locate,
+    Help,
 }
 
 impl Icon {
@@ -122,6 +127,21 @@ impl Icon {
             Icon::Plus => r#"<path d="M5 12h14" /><path d="M12 5v14" />"#,
             Icon::Guitar => {
                 r#"<path d="m11.9 12.1 4.514-4.514" /><path d="M20.1 2.3a1 1 0 0 0-1.4 0l-1.114 1.114A2 2 0 0 0 17 4.828v1.344a2 2 0 0 1-.586 1.414A2 2 0 0 1 17.828 7h1.344a2 2 0 0 0 1.414-.586L21.7 5.3a1 1 0 0 0 0-1.4z" /><path d="m6 16 2 2" /><path d="M8.23 9.85A3 3 0 0 1 11 8a5 5 0 0 1 5 5 3 3 0 0 1-1.85 2.77l-.92.38A2 2 0 0 0 12 18a4 4 0 0 1-4 4 6 6 0 0 1-6-6 4 4 0 0 1 4-4 2 2 0 0 0 1.85-1.23z" />"#
+            }
+            Icon::Trash => {
+                r#"<path d="M10 11v6" /><path d="M14 11v6" /><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6" /><path d="M3 6h18" /><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />"#
+            }
+            Icon::Download => {
+                r#"<path d="M12 15V3" /><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><path d="m7 10 5 5 5-5" />"#
+            }
+            Icon::Headphones => {
+                r#"<path d="M3 14h3a2 2 0 0 1 2 2v3a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-7a9 9 0 0 1 18 0v7a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3" />"#
+            }
+            Icon::Locate => {
+                r#"<line x1="2" x2="5" y1="12" y2="12" /><line x1="19" x2="22" y1="12" y2="12" /><line x1="12" x2="12" y1="2" y2="5" /><line x1="12" x2="12" y1="19" y2="22" /><circle cx="12" cy="12" r="7" /><circle cx="12" cy="12" r="3" />"#
+            }
+            Icon::Help => {
+                r#"<circle cx="12" cy="12" r="10" /><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3" /><path d="M12 17h.01" />"#
             }
         }
     }
@@ -232,6 +252,11 @@ mod tests {
             Icon::Metronome,
             Icon::Plus,
             Icon::Guitar,
+            Icon::Trash,
+            Icon::Download,
+            Icon::Headphones,
+            Icon::Locate,
+            Icon::Help,
         ];
         for i in all {
             let (n, m) = c.mask(i, 24, false);
