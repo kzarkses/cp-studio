@@ -529,3 +529,36 @@ fn la_tab_d_une_prise_suit_son_item() {
     assert!(s2.contains(&((13.25f64 * 960.0).round() as i64, 50)));
     assert!(tab_from_text("autre chose", 0.0).is_none());
 }
+
+/// Le MIDI modifie par Cedric : une note effacee ne revient ni en fantome ni
+/// par un decodage ; une note ajoutee est tenue.
+#[test]
+fn le_midi_modifie_fait_foi() {
+    let t = Tuning::standard();
+    let (tab, _) = doc::finger(
+        &[tn(0.0, 1.0, 64, false), tn(1.0, 1.0, 67, false)],
+        4,
+        120.0,
+        &t,
+    );
+    // Dans l'editeur : la seconde note effacee, une autre ajoutee.
+    let mut now: Vec<TNote> = vec![tab[0].clone()];
+    let mut added = tab[0].clone();
+    added.qn0 = 2.0;
+    added.qn1 = 3.0;
+    added.pitch = 69;
+    now.push(added);
+    let mut sup = std::collections::HashSet::new();
+    doc::reconcile(&tab, &mut now, &mut sup);
+    assert!(sup.contains(&tab[1].key()));
+    assert!(now[1].locked && !now[0].locked);
+    // Le fantome de la note effacee (le meme son, detecte un peu plus tard).
+    let mut g = doc::ghosts(&[tn(1.01, 1.0, 67, false)], &now, 4, &t);
+    assert_eq!(g.len(), 1);
+    doc::drop_suppressed(&mut g, &sup, 4);
+    assert!(g.is_empty());
+    // Un nouveau decodage ne la ramene pas, et garde l'ajoutee.
+    let merged = doc::merge(&now, tab.clone(), &sup, None);
+    assert!(merged.iter().all(|n| n.pitch != 67));
+    assert!(merged.iter().any(|n| n.pitch == 69));
+}

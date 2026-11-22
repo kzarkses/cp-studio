@@ -362,6 +362,36 @@ pub fn from_midi(notes: &[MidiQn], tuning: &Tuning, side: &Sidecar) -> Vec<TNote
     out
 }
 
+/// Le MIDI a ete modifie par Cedric (dans l'editeur, dans REAPER) : ce qui a
+/// disparu de la tablature d'avant est EFFACE (ni un decodage ni un fantome
+/// ne le ramene), ce qui est apparu est TENU (un decodage le respecte). Le
+/// MIDI s'eloigne de l'audio, et c'est voulu.
+pub fn reconcile(prev: &[TNote], now: &mut [TNote], suppressed: &mut HashSet<(i64, i32)>) {
+    let before: HashSet<(i64, i32)> = prev.iter().map(TNote::key).collect();
+    let after: HashSet<(i64, i32)> = now.iter().map(TNote::key).collect();
+    for k in before.difference(&after) {
+        suppressed.insert(*k);
+    }
+    for n in now.iter_mut() {
+        if !before.contains(&n.key()) {
+            n.locked = true;
+            suppressed.remove(&n.key());
+        }
+    }
+}
+
+/// Retire les fantomes d'une note effacee (meme hauteur, a une case de
+/// grille pres).
+pub fn drop_suppressed(ghosts: &mut Vec<TNote>, suppressed: &HashSet<(i64, i32)>, grid: u32) {
+    let cell = (960 / grid.max(1)) as i64;
+    ghosts.retain(|g| {
+        let (q, p) = g.key();
+        !suppressed
+            .iter()
+            .any(|&(sq, sp)| sp == p && (sq - q).abs() <= cell)
+    });
+}
+
 /// Un nouveau decodage applique a une tablature deja corrigee : les notes
 /// tenues restent ; les notes detectees qui les recouvrent (meme corde ou
 /// meme hauteur, au meme moment) et celles que Cedric a effacees ne
