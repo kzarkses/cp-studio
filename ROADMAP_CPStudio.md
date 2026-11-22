@@ -550,13 +550,32 @@ chaque note, et un test le tient.
 4. La partie audio de l'éditeur vient avec A4 et A5 (vitesse, hauteur,
    étirement).
 
+**Construit le 2026-11-22 (v1).** Cedric : « l'éditeur est vraiment un
+éditeur à part de Guitar Tab ; ça fait du MIDI ou du clip ».
+- `cp_roll` : le modèle, testé (le canal tenu).
+- `cp_editview` : la vue de la maquette, piano roll et clip audio, testée en
+  PNG et par les gestes.
+- `cp_module/src/editor.rs` : l'app, avec son action, son onglet et son
+  icône dans CP Transport, et trois places. Elle suit la sélection, écrit en
+  un pas d'annulation, relit un item modifié ailleurs, fait entendre une note
+  par sa piste. Le double-clic sur le MIDI de Guitar Tab l'ouvre.
+- L'auto-test du vrai REAPER passe : transposition écrite, canaux gardés,
+  annulation.
+- Reste :
+  - les couches CC et pitchbend (l'ancien éditeur n'en avait pas, décidé) ;
+  - la probabilité (cases de la Session, à venir) ;
+  - les enveloppes ADSR/ENV et l'établi d'un son ;
+  - les transients du clip ;
+  - accords et arpèges du menu ;
+  - le pas à pas.
+
 **Fini quand :** Cedric ouvre ses items MIDI dans notre éditeur plutôt que dans
 celui de REAPER.
 
 | application | ce qu'elle fait | où est sa spécification |
 |---|---|---|
 | Navigateur de fichiers (Media Explorer) | parcourir, écouter, glisser dans REAPER, à la FL Studio | mémoire `project-media-explorer`, `reference-reaper-browser-scripts` |
-| Éditeur de clips | audio et MIDI, piano roll, enveloppes, établi d'un son | **à réintégrer** (section ci-dessus) ; ancien `ROADMAP_Editeur.md`, mémoires `project-midi-command-layer`, `project-keymap`, `project-editor-sound-workbench` |
+| Éditeur de clips | audio et MIDI, piano roll, enveloppes, établi d'un son | **v1 construite le 2026-11-22** (section ci-dessus) ; ancien `ROADMAP_Editeur.md`, mémoires `project-midi-command-layer`, `project-keymap`, `project-editor-sound-workbench` |
 | Session | lanceur de clips, prises, vers l'arrangeur, sortie MIDI par colonne | mémoires `project-session-*`, `ROADMAP_Chantiers.md` (ancien dépôt) |
 | Sampler | kits de pads, un effet par kit | mémoires `project-kit-sampler-jsfx`, `project-sampler` |
 | Transport | le transport à la place de celui de REAPER, clock externe | **construit le 2026-11-22** (`cp_transport`) ; reste la clock externe : mémoire `project-ext-clock` |
