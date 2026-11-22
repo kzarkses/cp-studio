@@ -466,6 +466,24 @@ impl SelfTest {
                         }
                         .into(),
                     );
+                    // Ce que le docker garde autour de la vue (sa bande
+                    // d'onglets) : a 0, la vue va jusqu'au bord.
+                    if let Some(h) = crate::first_view().filter(|&h| r.dock_of(h).is_some()) {
+                        let (v, p) = (
+                            cp_sys::ui::window_rect(h),
+                            cp_sys::ui::window_rect(cp_sys::ui::parent(h)),
+                        );
+                        crate::log(
+                            cp_abi::LOG_INFO,
+                            &format!(
+                                "selftest : marges du docker autour du navigateur : gauche {}, droite {}, haut {}, bas {}",
+                                v.left - p.left,
+                                p.right - v.right,
+                                v.top - p.top,
+                                p.bottom - v.bottom
+                            ),
+                        );
+                    }
                     // Puis le clavier, par le vrai chemin des touches.
                     if let Some(h) = crate::first_view() {
                         const WM_KEYDOWN: u32 = 0x100;

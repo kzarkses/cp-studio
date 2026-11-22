@@ -72,6 +72,9 @@ static LAST_RELOAD: Mutex<Option<String>> = Mutex::new(None);
 /// lancee depuis l'une de ses fenetres, une macro qui la contient) : rejouees
 /// au battement suivant au lieu d'etre perdues.
 static PENDING: Mutex<Vec<i32>> = Mutex::new(Vec::new());
+/// Les fenetres a repeindre entieres : un WM_PAINT est arrive pendant que le
+/// module etait occupe.
+static REPAINT: Mutex<Vec<Hwnd>> = Mutex::new(Vec::new());
 /// Battements du chargeur depuis le demarrage.
 static TICKS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 /// Le moteur audio. Fil principal seulement ; pris en `try_lock` par ce que le
@@ -565,6 +568,11 @@ fn on_timer() {
     selftest_tick();
     if let Some(hot) = HOT.get() {
         // Les actions reportees, hors de tout message du module.
+        // Les fenetres qu'un module occupe n'a pas pu peindre.
+        let repaint: Vec<Hwnd> = std::mem::take(&mut *lock(&REPAINT));
+        for h in repaint.into_iter().filter(|&h| win::is_window(h)) {
+            win::invalidate(h);
+        }
         let pending: Vec<i32> = std::mem::take(&mut *lock(&PENDING));
         for cmd in pending {
             let sane = hot.fault().is_none();
@@ -874,6 +882,17 @@ fn wnd_proc(m: &WinMsg) -> isize {
         match r {
             Some(1) => return out,
             Some(FAULT) => check_fault(sane, "fenetre"),
+            Some(BUSY) if m.msg == win::WM_PAINT => {
+                // Le module est occupe (un menu, une boite modale) : rien ne
+                // se peint par-dessus son image, qui ne redessine ensuite que
+                // ce qui change chez lui. On valide la zone et il la repeint
+                // entiere au prochain battement.
+                let mut v = lock(&REPAINT);
+                if !v.contains(&m.hwnd) {
+                    v.push(m.hwnd);
+                }
+                return win::def_window_proc(m);
+            }
             _ => {}
         }
     }
