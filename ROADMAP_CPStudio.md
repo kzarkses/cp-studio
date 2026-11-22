@@ -65,6 +65,7 @@ Ce que ces mots veulent dire, en critères :
 | ✅ CP Transport : transport, compteur, tempo (glisser, molette, saisie), signature, Tap, métronome, vitesse, icônes d'actions (ajouter par la liste des actions de REAPER, retirer, déplacer), sélecteur de vues avec la place de chaque vue | 2026-11-22 | 6 tests et planches PNG ; démarre seul avec REAPER |
 | ✅ CP Guitar Tab en Rust : l'item choisi devient une piste MIDI (pour comparer à l'oreille) et une partition MusicXML (portée et tablature, rythme calé sur le tempo du projet, marteaux et tirés), ouverte dans MuseScore ; réglages (seuils, note la plus courte, grille, accordage) ; icône dans CP Transport | 2026-11-22 | réseau à 3,8e-5 d'onnxruntime ; vrai REAPER : un riff de 8 noires retrouvé note pour note en 0,5 s |
 | ✅ Le mode sombre de CP Studio, la part sûre : barres de titre (DWM) et menus (mode d'application de Windows), jamais le contenu des boîtes ; éteint par défaut, action « CP Studio: Dark title bars and menus » | 2026-11-22 | vrai REAPER : la boîte de fichiers « Load Script » ouverte 5 s mode sombre allumé, sombre et sans plantage (l'extension « Reaper Dark Mode » y faisait planter SHELL32 depuis la mise à jour de Windows du 21) |
+| ✅ La nuit du 22 au 23 novembre (autonomie complète, 23 commits) : le moteur audio complété (A4, A5 cuit et temps réel, A7, A8, A9, A10, fondu de boucle), Guitar Tab complété (triolets, deux voix, armure, techniques de jeu, noms d'accords, rythme sous la tab), l'éditeur (bends qui suivent leur note, accords, arpèges, euclides), les onglets des dockers cachés dès le démarrage | 2026-11-23 | `cargo xtask reaper-test` PASS dans le vrai REAPER après chaque morceau ; détails dans chaque section ci-dessous |
 | ▶ **Maintenant : le jalon 1 à l'usage.** Cedric s'en sert au quotidien ; on corrige et on polit à partir de ses retours. Ensuite, le choix de l'application suivante | | |
 
 **Le but immédiat est le jalon 1** (voir plus bas) : un navigateur de fichiers
@@ -141,6 +142,9 @@ faire un vrai retour.
   boucles. Pour écouter un long fichier (navigateur), il faut une **lecture en
   flux** : un fil lit le disque en avance, la voix lit un anneau.
 - Le budget mémoire, le retrait et le ramassage, comptés.
+- Reste (2026-11-23) : le vrai flux disque au-delà de 1,5 Go (23 min en
+  stéréo à 48 kHz) n'est pas fait : il toucherait au cœur de la lecture du
+  navigateur ; à faire avec une raison (un enregistrement long à écouter).
 - **Les pics pour l'affichage** des formes d'onde, calculés sur un fil de
   travail, à plusieurs résolutions (le zoom ne recalcule rien).
 - **Fini quand :** un fichier de 2 h s'écoute sans attente ni coupure, et sa
@@ -182,6 +186,14 @@ C'est l'exigence 5. Le moteur s'y écarte exprès de l'ancien C++.
 - **Fini quand :** à vitesse 0,5, 1,5 et 2, la différence avec un rendu de
   référence (sinc long, hors temps réel) est sous un seuil mesuré. Et la
   lecture à l'envers est exacte à l'échantillon.
+- ✅ **Fait le 2026-11-23** (`cp_engine::sinc`, `Param::Interp` / `Reverse`) :
+  sinc à fenêtre de Kaiser (16 passages par zéro, le noyau s'élargit au-delà
+  de la vitesse 1) ; un 18 kHz joué à 2 : −113 dB (Hermite : 0 dB, tout se
+  repliait) ; un 12 kHz à 0,75 : erreur −109 dB (Hermite −21 dB) ; à
+  l'envers, N échantillons rendus au bit près, N = 1 compris ; dix minutes
+  à 1,37 : 1,7e-5 échantillon d'écart ; 1,6 % d'un cœur par voix stéréo.
+  Hermite reste le défaut (l'oracle compare toujours au bit près). Le
+  navigateur écoute en sinc dès que sa vitesse change.
 
 ### A5. L'étirement
 
@@ -199,6 +211,23 @@ et 85 à 139 ms d'amorçage. D'où deux chemins.
 - **Fini quand :** une boucle à 90 BPM jouée à 120 BPM dure exactement sa passe
   et sonne comme le même item étiré par REAPER. Et une hauteur qu'on tourne en
   jouant suit sans clic.
+- ✅ **Cuit, fait le 2026-11-23** (`cp_sys::pitch`, `cp_audio::stretch`, ABI 8) :
+  l'étireur de REAPER lui-même (`IReaperPitchShift`, élastique 3.3.3 Pro chez
+  Cedric), appelé par sa table virtuelle vérifiée contre le vrai compilateur.
+  Durée exacte à l'échantillon ; le retard de l'étireur est mesuré, puis
+  retiré. Vrai REAPER : 2 s à 0,75 → 128 000 frames exactement, attaques à
+  0,33 ms de leur place en médiane (3,3 ms au pire, le lissage d'élastique) ;
+  +3 demi-tons → 522,5 Hz pour 523,3. Le navigateur cale au tempo SANS
+  changer la hauteur (vitesse le temps de la cuisson, puis la version étirée
+  au même endroit).
+- ✅ **En temps réel, fait le 2026-11-23** (`cp_engine::shift`, `Param::Tempo` /
+  `Shift`) : une voix emprunte un étireur à son premier tempo ou à sa
+  première hauteur, et le rend en finissant. Le fil audio n'attend jamais
+  (`try_lock`) et ne libère jamais rien : le vivier du fil principal (16 au
+  plus) reste le dernier détenteur. Vrai REAPER : tempo 0,8 et +4 demi-tons
+  sur une voix qui joue dans une piste, sans aucun rendu refusé.
+- Reste : l'entendre (Cedric) ; la compensation d'amorçage quand un départ
+  est daté dans le futur.
 
 ### A6. Les boucles MIDI (les lanes)
 
@@ -215,12 +244,30 @@ et 85 à 139 ms d'amorçage. D'où deux chemins.
   - sortie MIDI par colonne.
 - **Fini quand :** l'oracle passe sur les lanes, et une boucle MIDI tourne dix
   minutes sans une note décalée.
+- ⚠ **Constaté le 2026-11-23** : la fin de `cp_lanes.cpp` (au-delà de la ligne
+  1249 : la fin de `run_gate` et tout `Lanes::tick`, la boucle qui fait
+  tourner les lanes) n'est ni dans les copies, ni dans l'historique de
+  fichiers de Claude, ni dans les transcriptions (cherché). Le port ne peut
+  donc pas être comparé à l'ancien : les lanes seront à repenser avec la
+  Session, avec Cedric.
 
 ### A7. La clock MIDI externe
 
 - Son code de référence a été retrouvé en entier et prouvé identique
   (`cp_extclock`). On le porte, puis on le compare à l'ancien.
 - **Fini quand :** l'oracle passe, et CP Studio se cale sur une machine externe.
+- ✅ **Le calcul, fait le 2026-11-23** (`cp_engine::extclock`) : identique au bit
+  à l'ancien, sur des scénarios (tempo bruité, 124 → 128, impulsions perdues,
+  140 → 70, Start / Stop / Continue / SPP, doublons, changement de taux) et
+  300 graines au hasard.
+- ✅ **Le branchement, fait le 2026-11-23** (ABI 10) : l'entrée MIDI lue dans le
+  crochet audio (`cp_sys::midi_in`, tables vérifiées contre le compilateur) ;
+  CP Transport, clic droit, « External MIDI clock: <entrée> » : le tempo du
+  projet suit le maître au centième, REAPER part à sa première impulsion et
+  s'arrête à son Stop. Vrai REAPER : la vraie entrée MIDI 0 lue dans le
+  crochet sans incident.
+- Reste : l'essai avec une vraie machine, et la phase (rattraper une fraction
+  de temps par la vitesse de lecture).
 
 ### A8. L'enregistrement
 
@@ -229,6 +276,13 @@ et 85 à 139 ms d'amorçage. D'où deux chemins.
 - **La prise MIDI dans une lane.**
 - **Fini quand :** une prise tombe à sa place à l'échantillon, mesurée contre une
   boucle de retour.
+- ✅ **La prise audio, faite le 2026-11-23** (`cp_audio::record`) : l'entrée de
+  la carte copiée dans un anneau par le crochet, chaque bloc daté ; une prise
+  commence et finit à des temps du moteur, la latence d'entrée + de sortie
+  retirée (elle tombe là où elle a été jouée). Vrai REAPER : une
+  demi-seconde → 24 000 frames exactement, latence 147 + 171 retirée.
+- Reste : la mesure contre une boucle de retour (un câble), la prise MIDI,
+  le branchement dans une application (la Session).
 
 ### A9. La robustesse
 
@@ -242,6 +296,12 @@ C'est le travail du socle d'octobre, à refaire dans le nouveau moteur.
   visée.
 - **Fini quand :** la session longue passe, et la charge audio est connue et
   affichée.
+- ✅ **La session longue, faite le 2026-11-23** : huit heures de son tirées comme
+  REAPER, avec lancements, arrêts, réglages et clips chargés puis libérés au
+  hasard : aucune perte comptée, aucune fuite, aucune dérive (0,73 % d'un
+  cœur par voix). Une minute très chargée (40 voix) tourne dans la suite des
+  tests. Elle a trouvé un vrai défaut (un faux départ de l'horloge au
+  démarrage, corrigé).
 
 ### A10. Les sorties
 
@@ -250,6 +310,12 @@ C'est le travail du socle d'octobre, à refaire dans le nouveau moteur.
 - **Les niveaux de chaque colonne** sont publiés pour les vumètres.
 - **Fini quand :** chaque colonne sort dans sa piste, et ses niveaux
   s'affichent sans retard visible.
+- ✅ **Fait le 2026-11-23** (ABI 9) : un port joue DANS une piste
+  (`PlayTrackPreview2Ex`) ; une piste effacée en pleine lecture le renvoie à
+  la sortie matérielle sans que REAPER tombe ; les crêtes de chaque port sont
+  publiées à chaque bloc. Vrai REAPER : crête de la piste = crête du port.
+- En plus : le **fondu enchaîné au point de boucle** (`Param::LoopXfade`) : une
+  boucle qui ne se raccorde pas ne claque plus (saut de 0,836 → 0,066).
 
 ---
 
@@ -501,6 +567,25 @@ Ce que Cedric a tranché le 2026-11-22 après-midi (construit le même jour) :
   REAPER, Ctrl copie.
 - **Des fichiers audio se déposent dans Guitar Tab** depuis le navigateur.
 
+**Complété dans la nuit du 22 au 23 novembre** (demande de Cedric : « complète
+Guitar Tab pour le rendre complet ») :
+- **les triolets** : chaque temps choisit entre la grille droite et trois
+  croches par noire, selon les attaques jouées ; le 3 et son crochet, en
+  MusicXML aussi ;
+- **deux voix** : une basse tenue sous une mélodie n'est plus raccourcie (hampes
+  en bas) ; des accords qui résonnent restent une voix ;
+- **l'armure** : la tonalité devinée sur toute la guitare, les notes nommées
+  dedans (Si bémol en Fa), les altérations jusqu'à la barre ;
+- **les techniques de jeu** : le vibrato détecté dans la hauteur fine ; la
+  palette pose P.M., note morte, harmonique, let ring, vibrato ; dessinés,
+  gardés, écrits en MusicXML ;
+- **les noms d'accords** au-dessus de la portée, à chaque changement ;
+- **le rythme sous la tablature** quand la partition est cachée (comme Guitar
+  Pro), dans la fenêtre et le PDF.
+Reste : l'oreille et l'œil de Cedric sur ses vraies prises (les seuils
+viennent de tests synthétiques) ; les changements de tempo et de mesure dans
+un morceau ; les reprises.
+
 ### L'éditeur de clips revient (demande de Cedric, 2026-11-22)
 
 **Ce qu'on avait.** CP_Editor (Lua) était complet, très fonctionnel, et Cedric
@@ -602,12 +687,18 @@ chaque note, et un test le tient.
     souris (avec ses fichiers `Cursors`), la ligne à la souris et ses
     réglages, les couleurs de son thème, des traits d'un pixel ; le clic
     sur une note pose le curseur au clic.
+- Nuit du 22 au 23 novembre :
+  - les bends (et la pédale legato) suivent leur note quand elle bouge, se
+    copie, se coupe ou s'efface, comme « Move CC events with notes », et se
+    dessinent en courbe sur la note ;
+  - le menu des notes porte les générateurs de l'ancien `Roll` : accords
+    (dont la triade diatonique), arpèges (montant, descendant, aller-retour,
+    hasard, deux octaves), rythmes euclidiens ; le canal (la corde) gardé.
 - Reste :
   - les couches CC et pitchbend (l'ancien éditeur n'en avait pas, décidé) ;
   - la probabilité (cases de la Session, à venir) ;
   - les enveloppes ADSR/ENV et l'établi d'un son ;
   - les transients du clip ;
-  - accords et arpèges du menu ;
   - le pas à pas.
 
 **Fini quand :** Cedric ouvre ses items MIDI dans notre éditeur plutôt que dans
