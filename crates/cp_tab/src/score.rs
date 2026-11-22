@@ -89,6 +89,31 @@ fn pitch_xml(p: i32, fifths: i32) -> String {
     }
 }
 
+/// Un nom d'accord en MusicXML (`<harmony>`).
+fn harmony_xml(c: &crate::chord::Chord, fifths: i32) -> String {
+    let step_alter = |pc: i32| {
+        let s = crate::key::spell(pc + 60, fifths);
+        (crate::key::STEPS[s.step as usize], s.alter)
+    };
+    let (kind, text) = c.kind();
+    let (rs, ra) = step_alter(c.root);
+    let mut x = format!("      <harmony><root><root-step>{rs}</root-step>");
+    if ra != 0 {
+        let _ = write!(x, "<root-alter>{ra}</root-alter>");
+    }
+    let _ = write!(x, "</root><kind text=\"{text}\">{kind}</kind>");
+    if c.bass != c.root {
+        let (bs, ba) = step_alter(c.bass);
+        let _ = write!(x, "<bass><bass-step>{bs}</bass-step>");
+        if ba != 0 {
+            let _ = write!(x, "<bass-alter>{ba}</bass-alter>");
+        }
+        x += "</bass>";
+    }
+    x += "</harmony>\n";
+    x
+}
+
 fn esc(s: &str) -> String {
     s.replace('&', "&amp;")
         .replace('<', "&lt;")
@@ -194,6 +219,12 @@ pub fn write_musicxml(notes: &[TNote], spec: &ScoreSpec, dropped: usize) -> (Str
             for sg in eng.signs.iter().filter(|s| s.measure == m && s.voice == v) {
                 let ev = &eng.events[sg.ev];
                 let d = sg.dur;
+                // Le nom de l'accord, avant sa premiere note.
+                if staff == 1 && v == 1 && sg.first {
+                    if let Some((_, c)) = eng.harmony.iter().find(|h| h.0 == sg.start) {
+                        x += &harmony_xml(c, eng.key.fifths);
+                    }
+                }
                 // « P.M. » et « let ring » : un mot au debut de chaque
                 // passage (sur la portee, voix 1).
                 if staff == 1 && v == 1 && sg.first && !ev.notes.is_empty() {

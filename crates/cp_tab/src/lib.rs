@@ -22,6 +22,7 @@
 
 pub mod analyze;
 pub mod cache;
+pub mod chord;
 pub mod doc;
 pub mod engrave;
 pub mod fret;

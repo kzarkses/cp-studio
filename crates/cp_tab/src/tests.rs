@@ -930,3 +930,38 @@ fn les_techniques_de_jeu_se_gardent_et_s_ecrivent() {
     assert_eq!(x.matches("<harmonic><natural/></harmonic>").count(), 1);
     assert_eq!(x.matches("<wavy-line type=\"start\"").count(), 1);
 }
+
+#[test]
+fn les_noms_d_accords_suivent_les_changements() {
+    // Em Em C G D (une blanche chacun, des accords ouverts) : quatre noms,
+    // le deuxieme Em ne se repete pas.
+    let shapes: [&[(usize, i32)]; 5] = [
+        &[(0, 0), (1, 2), (2, 2), (3, 0), (4, 0), (5, 0)],
+        &[(0, 0), (1, 2), (2, 2), (3, 0), (4, 0), (5, 0)],
+        &[(1, 3), (2, 2), (3, 0), (4, 1), (5, 0)],
+        &[(0, 3), (1, 2), (2, 0), (3, 0), (4, 0), (5, 3)],
+        &[(2, 0), (3, 2), (4, 3), (5, 2)],
+    ];
+    let mut tab = Vec::new();
+    for (k, sh) in shapes.iter().enumerate() {
+        for &(s, f) in sh.iter() {
+            tab.push(on_string(k as f64 * 2.0, 2.0, s, f));
+        }
+    }
+    doc::sort(&mut tab);
+    let e = engrave(&tab, 0.0, (4, 4), 4);
+    let names: Vec<String> = e.harmony.iter().map(|h| h.1.text(e.key.fifths)).collect();
+    assert_eq!(names, vec!["Em", "C", "G", "D"]);
+    assert_eq!(e.harmony[1].0, 4 * 4);
+    let spec = ScoreSpec {
+        title: "t".into(),
+        origin_qn: 0.0,
+        sig: (4, 4),
+        bpm: 100.0,
+        grid: 4,
+        tuning: Tuning::standard(),
+    };
+    let (x, _) = crate::score::write_musicxml(&tab, &spec, 0);
+    assert_eq!(x.matches("<harmony>").count(), 4);
+    assert!(x.contains("<root-step>E</root-step></root><kind text=\"m\">minor</kind>"));
+}

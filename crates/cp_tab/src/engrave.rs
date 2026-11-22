@@ -92,6 +92,8 @@ pub struct Engraved {
     pub two_voices: BTreeSet<i64>,
     /// La tonalite devinee : l'armure, et le nom des notes.
     pub key: Key,
+    /// Les noms d'accords, a chaque changement : (case, accord).
+    pub harmony: Vec<(i64, crate::chord::Chord)>,
 }
 
 impl Engraved {
@@ -268,6 +270,7 @@ pub fn engrave_in(notes: &[TNote], origin_qn: f64, sig: (i32, i32), grid: u32, k
         let (a, b) = (e.start / mlen, (e.start + e.dur - 1) / mlen);
         eng.two_voices.extend(a..=b);
     }
+    eng.harmony = harmony(notes, &ev1, &ev2);
     eng.events = ev1;
     eng.events.extend(ev2);
     eng.measures = nmeas;
@@ -349,6 +352,27 @@ pub fn engrave_in(notes: &[TNote], origin_qn: f64, sig: (i32, i32), grid: u32, k
         }
     }
     eng
+}
+
+/// Les accords nommes : a chaque accord de la voix 1 (avec la basse de la
+/// voix 2 qui sonne), seulement quand le nom change.
+fn harmony(notes: &[TNote], v1: &[Event], v2: &[Event]) -> Vec<(i64, crate::chord::Chord)> {
+    let mut out: Vec<(i64, crate::chord::Chord)> = Vec::new();
+    for e in v1.iter().filter(|e| !e.notes.is_empty()) {
+        let mut p: Vec<i32> = e.notes.iter().map(|&i| notes[i].pitch).collect();
+        for b in v2
+            .iter()
+            .filter(|b| b.start <= e.start && e.start < b.start + b.dur)
+        {
+            p.extend(b.notes.iter().map(|&i| notes[i].pitch));
+        }
+        if let Some(c) = crate::chord::name(&p) {
+            if out.last().is_none_or(|l| l.1 != c) {
+                out.push((e.start, c));
+            }
+        }
+    }
+    out
 }
 
 /// Les notes d'une voix par case de debut : (rang, fin en cases).

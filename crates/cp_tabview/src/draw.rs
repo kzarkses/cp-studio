@@ -3126,6 +3126,16 @@ pub(crate) fn draw_score(
             }
         }
     }
+    // Les noms d'accords, au-dessus de la portee, a chaque changement.
+    let fch = Font::new(0, (gap * 1.5) as u16, 700);
+    for (cell, ch) in &eng.harmony {
+        let x = hx(*cell);
+        if !geo.visible(x) && !geo.visible(x + s(30.0)) {
+            continue;
+        }
+        let lab = ch.text(eng.key.fifths);
+        text.draw(cv, fch, x - rx, score_y - gap * 2.7, &lab, ink);
+    }
     // Les triolets : le 3 du cote des hampes, et un crochet quand le temps
     // n'est pas une seule ligature.
     let f3 = Font::new(0, (gap * 1.45) as u16, 700);
