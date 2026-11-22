@@ -12,7 +12,7 @@ use cp_sys::transport::{fmt, play};
 use cp_sys::ui::{self, MenuItem};
 use cp_sys::win::{self, Hwnd, WinMsg};
 use cp_theme::{Frames, ThemeFiles};
-use cp_transport::{Act, Glyph, Item, Skin, Status, ViewTab, fmt_bpm, initials};
+use cp_transport::{Act, Glyph, Item, RecMode, Skin, Status, ViewTab, fmt_bpm, initials};
 use cp_ui::{Button, Ev, Theme};
 
 use crate::items::{self, ItemCfg};
@@ -34,6 +34,10 @@ pub(crate) mod cmd {
     pub const TAP: i32 = 1134;
     pub const PROJECT_SETTINGS: i32 = 40021;
     pub const SHOW_TRANSPORT: i32 = 40259;
+    /// Les modes d'enregistrement (le menu du bouton Rec de REAPER).
+    pub const REC_NORMAL: i32 = 40252;
+    pub const REC_TIMESEL: i32 = 40076;
+    pub const REC_ITEMS: i32 = 40253;
 }
 
 const M_RUN: u32 = 1;
@@ -51,6 +55,9 @@ const M_TUNER_OFF: u32 = 20;
 const M_TUNER_CLOCK: u32 = 21;
 const M_TUNER_SLOT: u32 = 22;
 const M_TUNER_A4: u32 = 23;
+const M_REC_NORMAL: u32 = 30;
+const M_REC_TIMESEL: u32 = 31;
+const M_REC_ITEMS: u32 = 32;
 
 /// La fenetre du transport.
 pub(crate) struct TView {
@@ -321,6 +328,13 @@ impl App {
             rate: r.play_rate(),
             repeat: r.repeat(),
             metronome: r.toggle_state(cmd::METRONOME) == 1,
+            rec_mode: if r.toggle_state(cmd::REC_TIMESEL) == 1 {
+                RecMode::TimeSel
+            } else if r.toggle_state(cmd::REC_ITEMS) == 1 {
+                RecMode::Items
+            } else {
+                RecMode::Normal
+            },
         }
     }
 
@@ -701,6 +715,7 @@ impl App {
             Act::ItemMenu { i, x, y } => self.item_menu(i, x, y),
             Act::AddItem => self.add_item(),
             Act::BarMenu { x, y } => self.bar_menu(x, y),
+            Act::RecordMenu { x, y } => self.record_menu(x, y),
             // Les vues changent au battement, jamais pendant un message.
             Act::View(i) => self.queue(match i {
                 0 => crate::WinOp::ViewArrange,
@@ -827,6 +842,40 @@ impl App {
             M_ADD => self.add_item(),
             _ => {}
         }
+    }
+
+    /// Le mode d'enregistrement, comme le menu du bouton Rec de REAPER.
+    fn record_menu(&mut self, x: f32, y: f32) {
+        let m = self.tp.t.st.rec_mode;
+        // Une action absente (une autre version de REAPER) reste grisee.
+        let has = |c: i32| !self.r.command_text(c).is_empty();
+        let items = [
+            Some(MenuItem {
+                id: M_REC_NORMAL,
+                text: "Record mode: normal",
+                checked: m == RecMode::Normal,
+                enabled: has(cmd::REC_NORMAL),
+            }),
+            Some(MenuItem {
+                id: M_REC_TIMESEL,
+                text: "Record mode: time selection auto-punch",
+                checked: m == RecMode::TimeSel,
+                enabled: has(cmd::REC_TIMESEL),
+            }),
+            Some(MenuItem {
+                id: M_REC_ITEMS,
+                text: "Record mode: auto-punch selected items",
+                checked: m == RecMode::Items,
+                enabled: has(cmd::REC_ITEMS),
+            }),
+        ];
+        let c = match self.menu_at(x, y, &items) {
+            M_REC_NORMAL => cmd::REC_NORMAL,
+            M_REC_TIMESEL => cmd::REC_TIMESEL,
+            M_REC_ITEMS => cmd::REC_ITEMS,
+            _ => return,
+        };
+        self.r.main_on_command(c);
     }
 
     fn bar_menu(&mut self, x: f32, y: f32) {

@@ -12,7 +12,7 @@ use cp_gfx::{Canvas, Color, Surface, hex, rgb};
 use cp_theme::{Frames, Nine, ThemeFiles};
 use cp_ui::{Icon, IconCache, Theme};
 
-use crate::{Glyph, Hit, PAUSED, PLAYING, RECORDING, Transport, fmt_bpm};
+use crate::{Glyph, Hit, PAUSED, PLAYING, RECORDING, RecMode, Transport, fmt_bpm, rec_mode_mark};
 
 /// Une couleur (r, g, b).
 pub type Rgb = (u8, u8, u8);
@@ -47,6 +47,11 @@ pub struct Skin {
     pub pause_on: Option<Frames>,
     pub rec_off: Option<Frames>,
     pub rec_on: Option<Frames>,
+    /// Rec en auto-punch : sur la selection de temps (`loop`), sur les items.
+    pub rec_loop_off: Option<Frames>,
+    pub rec_loop_on: Option<Frames>,
+    pub rec_item_off: Option<Frames>,
+    pub rec_item_on: Option<Frames>,
     pub repeat_off: Option<Frames>,
     pub repeat_on: Option<Frames>,
     pub metro_off: Option<Frames>,
@@ -117,6 +122,10 @@ impl Skin {
             pause_on,
             rec_off: tb("transport_record"),
             rec_on,
+            rec_loop_off: tb("transport_record_loop"),
+            rec_loop_on: tb("transport_record_loop_on"),
+            rec_item_off: tb("transport_record_item"),
+            rec_item_on: tb("transport_record_item_on"),
             repeat_off: tb("transport_repeat_off"),
             repeat_on: tb("transport_repeat_on"),
             metro_off: tool("toolbar_metro_off"),
@@ -296,7 +305,17 @@ impl Transport {
             ),
             (
                 Hit::Record,
-                pick(rec, &sk.rec_on, &sk.rec_off),
+                // Le bouton du mode, comme celui de REAPER ; le bouton normal
+                // si le theme n'en a pas (la marque vectorielle le dit).
+                match self.st.rec_mode {
+                    RecMode::TimeSel if sk.rec_loop_off.is_some() => {
+                        pick(rec, &sk.rec_loop_on, &sk.rec_loop_off)
+                    }
+                    RecMode::Items if sk.rec_item_off.is_some() => {
+                        pick(rec, &sk.rec_item_on, &sk.rec_item_off)
+                    }
+                    _ => pick(rec, &sk.rec_on, &sk.rec_off),
+                },
                 Icon::Circle,
                 Some(if rec { sk.rec } else { sk.rec.fade(0.7) }),
             ),
@@ -307,8 +326,18 @@ impl Transport {
                 self.st.repeat.then_some(sk.on),
             ),
         ];
+        let mode = self.st.rec_mode;
+        let mode_img = match mode {
+            RecMode::Normal => true,
+            RecMode::TimeSel => sk.rec_loop_off.is_some(),
+            RecMode::Items => sk.rec_item_off.is_some(),
+        };
         for (hit, frames, icon, lit) in buttons {
             let bw = self.tbutton(cv, icons, th, sk, hit, frames.as_ref(), icon, lit, x, h, bh);
+            if hit == Hit::Record && !mode_img {
+                let c = if rec { sk.rec } else { sk.rec.fade(0.7) };
+                rec_mode_mark(cv, th, mode, x, by, bw, bh, c);
+            }
             x += bw + gap;
         }
         x += th.s(8.0);

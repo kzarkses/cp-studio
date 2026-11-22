@@ -771,6 +771,9 @@ impl SelfTest {
                         (1134, "tap"),
                         (40021, "project settings"),
                         (40259, "transport"),
+                        (40252, "record mode to normal"),
+                        (40076, "time selection auto-punch"),
+                        (40253, "selected item auto-punch"),
                     ];
                     let mut bad = Vec::new();
                     for (c, k) in want {

@@ -39,6 +39,17 @@ pub const PLAYING: i32 = 1;
 pub const PAUSED: i32 = 2;
 pub const RECORDING: i32 = 4;
 
+/// Le mode d'enregistrement de REAPER (le menu du bouton Rec).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum RecMode {
+    #[default]
+    Normal,
+    /// Auto-punch sur la selection de temps.
+    TimeSel,
+    /// Auto-punch sur les items choisis.
+    Items,
+}
+
 /// Ce qu'on lit de REAPER a chaque battement (ou chaque image en lecture).
 #[derive(Clone, Debug, PartialEq)]
 pub struct Status {
@@ -52,6 +63,7 @@ pub struct Status {
     pub rate: f64,
     pub repeat: bool,
     pub metronome: bool,
+    pub rec_mode: RecMode,
 }
 
 impl Default for Status {
@@ -65,6 +77,7 @@ impl Default for Status {
             rate: 1.0,
             repeat: false,
             metronome: false,
+            rec_mode: RecMode::Normal,
         }
     }
 }
@@ -162,6 +175,11 @@ pub enum Act {
     },
     /// Ajouter une action (la liste des actions de REAPER).
     AddItem,
+    /// Clic droit sur Rec : le mode d'enregistrement.
+    RecordMenu {
+        x: f32,
+        y: f32,
+    },
     /// Clic droit ailleurs sur la barre.
     BarMenu {
         x: f32,
@@ -216,6 +234,35 @@ pub struct Transport {
 impl Default for Transport {
     fn default() -> Self {
         Transport::new()
+    }
+}
+
+/// La marque du mode d'enregistrement sous le bouton Rec, faute d'image du
+/// theme : deux crochets (la selection de temps) ou un cadre (les items).
+pub(crate) fn rec_mode_mark(
+    cv: &mut Canvas<'_>,
+    th: &Theme,
+    m: RecMode,
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
+    c: Color,
+) {
+    let s = |v: f32| th.s(v);
+    let (mw, mh) = (s(12.0).round(), s(3.0).round());
+    let mx = (x + (w - mw) * 0.5).round();
+    let my = (y + h - s(4.0) - mh).round();
+    match m {
+        RecMode::Normal => {}
+        RecMode::TimeSel => {
+            cv.fill_rect(mx, my, 1.0, mh, c);
+            cv.fill_rect(mx + mw - 1.0, my, 1.0, mh, c);
+            cv.fill_rect(mx, my + mh - 1.0, mw, 1.0, c);
+        }
+        RecMode::Items => {
+            cv.stroke_rect(mx + 0.5, my + 0.5, mw - 1.0, mh - 1.0, 1.0, c);
+        }
     }
 }
 
@@ -372,7 +419,15 @@ impl Transport {
             Hit::Stop => "Stop".into(),
             Hit::Play => "Play".into(),
             Hit::Pause => "Pause".into(),
-            Hit::Record => "Record".into(),
+            Hit::Record => match self.st.rec_mode {
+                RecMode::Normal => "Record  (right-click: record mode)".into(),
+                RecMode::TimeSel => {
+                    "Record: time selection auto-punch  (right-click: record mode)".into()
+                }
+                RecMode::Items => {
+                    "Record: auto-punch selected items  (right-click: record mode)".into()
+                }
+            },
             Hit::Repeat => "Repeat (loop playback)".into(),
             Hit::Bpm => "Tempo: drag or wheel (Shift: fine), double-click to type".into(),
             Hit::Sig => "Time signature (project settings)".into(),
@@ -449,6 +504,7 @@ impl Transport {
                     Button::Right => match h {
                         Hit::Item(i) => Some(Act::ItemMenu { i, x, y }),
                         Hit::View(i) => Some(Act::ViewMenu { i, x, y }),
+                        Hit::Record => Some(Act::RecordMenu { x, y }),
                         _ => Some(Act::BarMenu { x, y }),
                     },
                     Button::Middle => None,
@@ -671,6 +727,9 @@ impl Transport {
             let ix = x + ((bw - isz as f32) * 0.5).round();
             let iy = by + ((bh - isz as f32) * 0.5).round();
             icons.draw(cv, icon, ix, iy, isz, color, filled);
+            if hit == Hit::Record {
+                rec_mode_mark(cv, th, self.st.rec_mode, x, by, bw, bh, color);
+            }
             self.push(hit, x, by, bw, bh);
             x += bw + th.s(2.0);
         }

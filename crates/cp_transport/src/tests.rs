@@ -75,6 +75,7 @@ fn sample() -> Transport {
         rate: 1.0,
         repeat: true,
         metronome: true,
+        rec_mode: RecMode::Normal,
     };
     let mut img = Surface::new(90, 30);
     for y in 4..26 {
@@ -191,6 +192,16 @@ fn le_transport_part_a_l_appui_les_icones_au_relachement() {
         t.event(&down(x, y, Button::Right, false)),
         Some(Act::ItemMenu { i: 0, x, y })
     );
+    // Rec : le clic enregistre, le clic droit choisit le mode.
+    let (x, y) = center(&t, Hit::Record);
+    assert_eq!(t.event(&down(x, y, Button::Left, false)), Some(Act::Record));
+    t.event(&up(x, y));
+    assert_eq!(
+        t.event(&down(x, y, Button::Right, false)),
+        Some(Act::RecordMenu { x, y })
+    );
+    t.st.rec_mode = RecMode::TimeSel;
+    assert!(t.label(Hit::Record).unwrap().contains("time selection"));
     let (x, y) = center(&t, Hit::Add);
     t.event(&down(x, y, Button::Left, false));
     assert_eq!(t.event(&up(x, y)), Some(Act::AddItem));
@@ -417,6 +428,7 @@ fn habille_du_vrai_theme() {
                 2 => {
                     st.play = RECORDING | PLAYING | PAUSED;
                     st.rate = 1.25;
+                    st.rec_mode = RecMode::TimeSel;
                     t.items[1].on = true;
                 }
                 _ => {}
