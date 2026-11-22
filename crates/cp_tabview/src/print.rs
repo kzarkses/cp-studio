@@ -50,6 +50,8 @@ const MIN_BAR: f32 = 125.0;
 const HEAD: f32 = 34.0;
 const HEAD_SIG: f32 = 18.0;
 const GAP: f32 = 8.0;
+/// L'ecart entre deux alterations de l'armure.
+const KEY_STEP: f32 = 6.0;
 const TAB_GAP: f32 = 11.0;
 
 /// Un systeme : les mesures `m0..m1` sur une ligne, chacune sur sa
@@ -69,9 +71,19 @@ impl System {
 
 /// La largeur des mesures : celle du premier systeme (la mesure en plus dans
 /// son en-tete), puis celle des suivants.
-pub(crate) fn avail() -> (f32, f32) {
+pub(crate) fn avail(kw: f32) -> (f32, f32) {
     let cw = PAGE_W as f32 - 2.0 * mm(MARGIN_X);
-    (cw - s(HEAD + HEAD_SIG), cw - s(HEAD))
+    (cw - s(HEAD + HEAD_SIG) - kw, cw - s(HEAD) - kw)
+}
+
+/// La place de l'armure en tete de chaque systeme (rien sans portee).
+fn key_w(fifths: i32, staff: bool) -> f32 {
+    let n = fifths.unsigned_abs().min(7);
+    if n == 0 || !staff {
+        0.0
+    } else {
+        n as f32 * s(KEY_STEP) + s(GAP) * 0.6
+    }
 }
 
 /// La place que demande chaque mesure, en pixels par noire : ses notes les
@@ -275,7 +287,7 @@ pub(crate) fn render(
     let x0 = mm(MARGIN_X);
     let cw = PAGE_W as f32 - 2.0 * x0;
     let need = need_ppq(&eng);
-    let (first_w, w) = avail();
+    let (first_w, w) = avail(key_w(eng.key.fifths, r.staff.is_some()));
     let sys = systems(&need, bq, first_w, w);
     let bottom = PAGE_H as f32 - mm(MARGIN_BOTTOM);
 
@@ -440,7 +452,8 @@ fn draw_system(
     let ink = th.text;
     let line = s(0.5);
     let bar_w = s(0.6);
-    let head = s(HEAD) + if first { s(HEAD_SIG) } else { 0.0 };
+    let kw = key_w(eng.key.fifths, r.staff.is_some());
+    let head = s(HEAD) + kw + if first { s(HEAD_SIG) } else { 0.0 };
     let sx = x0 + head;
     let width = sy.width();
     let xr = sx + width;
@@ -497,12 +510,23 @@ fn draw_system(
             "8",
             ink,
         );
+        // L'armure, sur chaque systeme.
+        draw::key_sig(
+            cv,
+            text,
+            x0 + s(HEAD) - s(6.0),
+            top,
+            gap,
+            s(KEY_STEP),
+            eng.key.fifths,
+            ink,
+        );
         if first {
             time_sig(
                 cv,
                 text,
                 ink,
-                x0 + s(HEAD) - s(2.0),
+                x0 + s(HEAD) + kw - s(2.0),
                 top,
                 2.0 * gap,
                 sig_n,

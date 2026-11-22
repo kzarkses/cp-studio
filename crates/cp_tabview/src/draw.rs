@@ -11,12 +11,24 @@ use cp_gfx::text::{Align, Font, TextCache};
 use cp_gfx::{Canvas, Color, Path};
 use cp_tab::doc::Tech;
 use cp_tab::engrave::Engraved;
+use cp_tab::key;
 use cp_ui::{Icon, IconCache, Theme};
 
 use crate::{Arr, HBox, Hit, Item, Lane, Lay, Listen, Sound, State, TUNINGS};
 
 pub(crate) const CLEF: char = '\u{1D11E}';
 const SHARP: char = '\u{266F}';
+const FLAT: char = '\u{266D}';
+const NATURAL: char = '\u{266E}';
+
+/// Le signe d'une alteration (1 diese, -1 bemol, 0 becarre).
+pub(crate) fn acc_char(a: i32) -> char {
+    match a {
+        1 => SHARP,
+        -1 => FLAT,
+        _ => NATURAL,
+    }
+}
 
 fn rest_char(ty: &str) -> char {
     match ty {
@@ -50,6 +62,42 @@ pub fn staff_pos(pitch: i32) -> (i32, bool) {
     let pc = w.rem_euclid(12) as usize;
     let oct = w.div_euclid(12) - 1;
     (oct * 7 + STEP[pc] - (4 * 7 + 2), SHARP[pc])
+}
+
+/// L'armure : ses dieses (ou bemols) a leurs places de la cle de sol, a
+/// partir de `x`, espaces de `step` ; `top` est la ligne du haut. Rend la
+/// largeur prise.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn key_sig(
+    cv: &mut Canvas<'_>,
+    text: &mut TextCache,
+    x: f32,
+    top: f32,
+    gap: f32,
+    step: f32,
+    fifths: i32,
+    c: Color,
+) -> f32 {
+    // Fa Do Sol Re La Mi Si (dieses), Si Mi La Re Sol Do Fa (bemols) : leur
+    // place (Mi 4 = 0, la ligne du bas).
+    const SHARP_POS: [i32; 7] = [8, 5, 9, 6, 3, 7, 4];
+    const FLAT_POS: [i32; 7] = [4, 7, 3, 6, 2, 5, 1];
+    let n = fifths.unsigned_abs().min(7) as usize;
+    if n == 0 {
+        return 0.0;
+    }
+    let f = Font::new(3, (gap * 2.6) as u16, 400);
+    let (ch, pos) = if fifths > 0 {
+        (SHARP, &SHARP_POS)
+    } else {
+        (FLAT, &FLAT_POS)
+    };
+    let s = ch.to_string();
+    for (k, &p) in pos.iter().take(n).enumerate() {
+        let y = top + 4.0 * gap - p as f32 * gap * 0.5;
+        text.draw(cv, f, x + k as f32 * step, y + gap * 0.9, &s, c);
+    }
+    n as f32 * step + gap * 0.6
 }
 
 /// Une tete de note : une ellipse inclinee.
@@ -514,6 +562,7 @@ impl Arr {
         // Chaque decoupage pose est retire : sinon la suite de l'image
         // sortirait de la zone a redessiner (voir `Canvas::restore_clips`).
         let (depth, clip) = (cv.clip_depth(), cv.clip());
+        self.sync_keys();
         self.draw_scene(cv, text, icons, th, w, h);
         let ok = cv.restore_clips(depth, clip);
         if cfg!(test) {
@@ -1481,6 +1530,18 @@ impl Arr {
                         l.label_x + s(15.0),
                         sy + 4.0 * gap + s(19.0),
                         "8",
+                        th.text,
+                    );
+                    // L'armure de la guitare, serree apres la cle.
+                    let fifths = self.tracks[t].key().fifths;
+                    key_sig(
+                        cv,
+                        text,
+                        l.label_x + s(29.0),
+                        sy,
+                        gap,
+                        s(5.0),
+                        fifths,
                         th.text,
                     );
                     if cv.push_clip(l.sx, ly, l.sw, lh) {
@@ -2658,6 +2719,9 @@ pub(crate) fn draw_score(
     let hx = |cell: i64| geo.x(eng.qn(cell)) + pad;
     let (rx, ry) = (gap * 0.62, gap * 0.46);
     let y_of = |pos: i32| score_y + 4.0 * gap - pos as f32 * gap * 0.5;
+    // La place d'une hauteur sur la portee, nommee dans la tonalite (la
+    // guitare s'ecrit une octave au-dessus de ce qu'elle sonne).
+    let spos = |p: i32| key::spell(p + 12, eng.key.fifths).staff_pos();
     // Les groupes de ligature : signes brefs consecutifs d'un meme temps.
     let mut beam_group: Vec<Option<usize>> = vec![None; eng.signs.len()];
     let mut groups: Vec<Vec<usize>> = Vec::new();
@@ -2685,7 +2749,7 @@ pub(crate) fn draw_score(
         eng.events[eng.signs[si].ev]
             .notes
             .iter()
-            .map(|&n| staff_pos(it.doc[n].pitch).0)
+            .map(|&n| spos(it.doc[n].pitch))
             .collect()
     };
     // Deux voix dans la mesure : la 1 hampes en haut, la 2 en bas.
@@ -2711,6 +2775,34 @@ pub(crate) fn draw_score(
     }
     let fm = Font::new(3, (gap * 4.0) as u16, 400);
     let fsharp = Font::new(3, (gap * 2.6) as u16, 400);
+    // Les alterations a ecrire : une par note, dans l'ordre de la mesure
+    // (une alteration vaut jusqu'a la barre ; une note liee n'en porte pas).
+    let fifths = eng.key.fifths;
+    let mut acc = key::Accidentals::new(fifths);
+    let mut acc_m = -1;
+    let accs: Vec<Vec<Option<i32>>> = eng
+        .signs
+        .iter()
+        .map(|sg| {
+            if sg.measure != acc_m {
+                acc.bar();
+                acc_m = sg.measure;
+            }
+            eng.events[sg.ev]
+                .notes
+                .iter()
+                .map(|&n| {
+                    let sp = key::spell(it.doc[n].pitch + 12, fifths);
+                    if sg.tie_in {
+                        acc.hold(sp);
+                        None
+                    } else {
+                        acc.take(sp)
+                    }
+                })
+                .collect()
+        })
+        .collect();
     for (si, sg) in eng.signs.iter().enumerate() {
         let x = hx(sg.start);
         if !geo.visible(x) {
@@ -2734,13 +2826,11 @@ pub(crate) fn draw_score(
             text.draw(cv, fm, x - rw * 0.5, base, &c.to_string(), th.text_dim);
             continue;
         }
-        let ps: Vec<(i32, bool, usize)> = ev
+        let ps: Vec<(i32, Option<i32>, usize)> = ev
             .notes
             .iter()
-            .map(|&n| {
-                let (p, sh) = staff_pos(it.doc[n].pitch);
-                (p, sh, n)
-            })
+            .enumerate()
+            .map(|(k, &n)| (spos(it.doc[n].pitch), accs[si].get(k).copied().flatten(), n))
             .collect();
         let (up, end) = stem[si].unwrap_or_else(|| {
             let up = forced(si)
@@ -2766,7 +2856,7 @@ pub(crate) fn draw_score(
         }
         let hollow = sg.ty == "half" || sg.ty == "whole";
         let mut prev: Option<i32> = None;
-        for &(pos, sharp, n) in &ps {
+        for &(pos, accd, n) in &ps {
             let dx = if prev.is_some_and(|q| pos - q == 1) {
                 if up { 2.0 * rx } else { -2.0 * rx }
             } else {
@@ -2783,23 +2873,23 @@ pub(crate) fn draw_score(
             // tete, avant son diese.
             let k = it.doc[n].slide_in();
             if k != 0 && sg.first && !sg.tie_in {
-                let sw = if sharp {
-                    text.measure(fsharp, &SHARP.to_string()) + s(2.0)
-                } else {
-                    0.0
+                let sw = match accd {
+                    Some(a) => text.measure(fsharp, &acc_char(a).to_string()) + s(2.0),
+                    None => 0.0,
                 };
                 let x1 = x + dx - rx - s(3.0) - sw;
                 let d = if k < 0 { gap } else { -gap };
                 cv.line(x1 - s(10.0), y + d, x1, y, s(1.1), th.text_dim);
             }
-            if sharp && !sg.tie_in {
-                let sw = text.measure(fsharp, &SHARP.to_string());
+            if let Some(a) = accd {
+                let c = acc_char(a).to_string();
+                let sw = text.measure(fsharp, &c);
                 text.draw(
                     cv,
                     fsharp,
                     x + dx - rx - s(3.0) - sw,
                     y + gap * 0.9,
-                    &SHARP.to_string(),
+                    &c,
                     ink,
                 );
             }
@@ -2875,8 +2965,8 @@ pub(crate) fn draw_score(
                 match (ev.lig_in, prev_n, ev.notes.first()) {
                     // Une glisse : un trait d'une tete a l'autre.
                     (Tech::Slide, Some(pn), Some(&cn)) => {
-                        let ya = y_of(staff_pos(it.doc[pn].pitch).0);
-                        let yb = y_of(staff_pos(it.doc[cn].pitch).0);
+                        let ya = y_of(spos(it.doc[pn].pitch));
+                        let yb = y_of(spos(it.doc[cn].pitch));
                         cv.line(
                             px + rx + s(2.0),
                             ya,
@@ -2996,7 +3086,7 @@ pub(crate) fn draw_score(
             } else {
                 th.text_faint
             };
-            let (pos, _) = staff_pos(gn.pitch);
+            let pos = spos(gn.pitch);
             let y = y_of(pos);
             ghost_head_at(cv, x, y, rx, ry, c);
             push(

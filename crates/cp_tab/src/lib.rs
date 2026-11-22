@@ -26,6 +26,7 @@ pub mod doc;
 pub mod engrave;
 pub mod fret;
 pub mod glide;
+pub mod key;
 pub mod model;
 pub mod notes;
 pub mod resample;

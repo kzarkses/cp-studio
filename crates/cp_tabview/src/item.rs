@@ -3,7 +3,7 @@
 //! Toute note touchee devient TENUE : un nouveau decodage la respecte.
 
 use cp_tab::doc::{self, TNote, Tech};
-use cp_tab::engrave::{Engraved, engrave};
+use cp_tab::engrave::{Engraved, engrave, engrave_in};
 
 use crate::Item;
 
@@ -32,7 +32,10 @@ impl Item {
     /// La partition (refaite si la tablature a change).
     pub fn engraved(&mut self) -> &Engraved {
         if !self.eng_ok {
-            self.eng = engrave(&self.doc, self.origin_qn, self.sig, self.detect.grid);
+            self.eng = match self.key {
+                Some(k) => engrave_in(&self.doc, self.origin_qn, self.sig, self.detect.grid, k),
+                None => engrave(&self.doc, self.origin_qn, self.sig, self.detect.grid),
+            };
             self.eng_ok = true;
         }
         &self.eng

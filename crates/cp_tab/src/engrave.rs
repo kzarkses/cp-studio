@@ -23,6 +23,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::doc::{TNote, Tech};
+use crate::key::{self, Key};
 
 /// Un evenement de la voix : un accord, ou un silence (`notes` vide).
 #[derive(Clone, Debug, PartialEq)]
@@ -89,6 +90,8 @@ pub struct Engraved {
     pub triplets: BTreeSet<i64>,
     /// Les mesures a deux voix (hampes en haut pour la 1, en bas pour la 2).
     pub two_voices: BTreeSet<i64>,
+    /// La tonalite devinee : l'armure, et le nom des notes.
+    pub key: Key,
 }
 
 impl Engraved {
@@ -196,8 +199,15 @@ pub fn triplet_beats(notes: &[TNote], origin_qn: f64, g: i64) -> BTreeSet<i64> {
     out
 }
 
-/// Met la tablature en partition. Les notes avant `origin_qn` sont ignorees.
+/// Met la tablature en partition, dans la tonalite que ses notes donnent.
+/// Les notes avant `origin_qn` sont ignorees.
 pub fn engrave(notes: &[TNote], origin_qn: f64, sig: (i32, i32), grid: u32) -> Engraved {
+    engrave_in(notes, origin_qn, sig, grid, key::detect(notes))
+}
+
+/// Met la tablature en partition dans la tonalite `k` (celle de toute la
+/// guitare : ses prises bout a bout ont la meme armure).
+pub fn engrave_in(notes: &[TNote], origin_qn: f64, sig: (i32, i32), grid: u32, k: Key) -> Engraved {
     let g0 = grid.max(1) as i64;
     let trip = triplet_beats(notes, origin_qn, g0);
     // La grille fine : la droite, et les triolets s'il y en a.
@@ -230,6 +240,7 @@ pub fn engrave(notes: &[TNote], origin_qn: f64, sig: (i32, i32), grid: u32) -> E
         origin_qn,
         sig,
         triplets: trip.clone(),
+        key: k,
         ..Engraved::default()
     };
     // 2. Les deux voix, puis les evenements de chacune.

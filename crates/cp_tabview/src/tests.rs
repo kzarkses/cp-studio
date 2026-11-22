@@ -1826,7 +1826,7 @@ fn la_tablature_s_imprime() {
     let eng = it.engraved().clone();
     let need = print::need_ppq(&eng);
     assert!(need[2] > need[0] * 2.0, "{need:?}");
-    let (first_w, w) = print::avail();
+    let (first_w, w) = print::avail(0.0);
     let sys = print::systems(&need, 4.0, first_w, w);
     assert_eq!(sys.len(), systems);
     assert_eq!(sys.last().map(|s| s.m1), Some(bars as i64));
@@ -2083,4 +2083,49 @@ fn deux_voix_se_dessinent() {
     b.shot(&mut v, "15_deux_voix");
     let eng = v.tracks[0].items[0].engraved().clone();
     assert!(eng.two_voices.contains(&0));
+}
+
+/// Une melodie en Si bemol majeur : l'armure (deux bemols) apres la cle,
+/// les notes nommees en bemols, le Mi naturel avec son becarre ; et la meme
+/// armure sur chaque ligne du PDF.
+#[test]
+fn l_armure_et_les_bemols() {
+    use cp_tab::doc::TNote;
+    let mut b = Bench::new(1600, 900);
+    let mut v = arranger();
+    v.rec.clear();
+    let q0 = v.tracks[0].items[0].qn0;
+    let note = |q: f64, len: f64, pitch: i32| TNote {
+        qn0: q0 + q,
+        qn1: q0 + q + len,
+        pitch,
+        string: 3,
+        fret: pitch - 55,
+        vel: 96,
+        ..Default::default()
+    };
+    // Si b, Do, Re, Mib, Fa, Sol, La, Si b ; puis l'arpege, puis un Mi
+    // naturel et le Mi b qui revient.
+    let mut d = Vec::new();
+    let mut q = 0.0;
+    for p in [58, 60, 62, 63, 65, 67, 69, 70] {
+        d.push(note(q, 0.5, p));
+        q += 0.5;
+    }
+    for p in [58, 62, 65, 70, 65, 58] {
+        d.push(note(q, 1.0, p));
+        q += 1.0;
+    }
+    d.push(note(q, 0.5, 64));
+    d.push(note(q + 0.5, 0.5, 63));
+    cp_tab::doc::sort(&mut d);
+    v.tracks[0].items[0].set_doc(d);
+    v.tracks[0].items[0].ghosts.clear();
+    v.tracks[0].items.truncate(1);
+    b.shot(&mut v, "16_armure");
+    let eng = v.tracks[0].items[0].engraved().clone();
+    assert_eq!(eng.key.fifths, -2, "{:?}", eng.key);
+    let it = v.tracks[0].items[0].clone();
+    let p = print::pdf(&it, v.tracks[0].head.lanes, &mut b.t);
+    assert!(p.pages >= 1);
 }

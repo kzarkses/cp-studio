@@ -357,6 +357,31 @@ pub struct Item {
     pub(crate) eng: Engraved,
     /// La partition est a jour (faux : a refaire au prochain dessin).
     pub(crate) eng_ok: bool,
+    /// La tonalite de toute la guitare (rien : celle de l'item seul).
+    pub key: Option<cp_tab::key::Key>,
+}
+
+impl Track {
+    /// La tonalite de la guitare : toutes ses prises transcrites ensemble.
+    pub fn key(&self) -> cp_tab::key::Key {
+        cp_tab::key::detect_iter(self.items.iter().flat_map(|it| it.doc.iter()))
+    }
+}
+
+impl Arr {
+    /// Chaque item s'ecrit dans la tonalite de sa guitare (sa partition se
+    /// refait si elle change).
+    pub(crate) fn sync_keys(&mut self) {
+        for tr in &mut self.tracks {
+            let k = tr.key();
+            for it in &mut tr.items {
+                if it.key != Some(k) {
+                    it.key = Some(k);
+                    it.touch();
+                }
+            }
+        }
+    }
 }
 
 /// Une piste de guitare : son en-tete et ses items (dans l'ordre du temps).

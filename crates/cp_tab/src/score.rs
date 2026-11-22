@@ -72,11 +72,16 @@ const NAMES: [(&str, i32); 12] = [
     ("B", 0),
 ];
 
-fn pitch_xml(p: i32) -> String {
-    let (step, alter) = NAMES[p.rem_euclid(12) as usize];
-    let oct = p.div_euclid(12) - 1;
-    if alter != 0 {
-        format!("<pitch><step>{step}</step><alter>{alter}</alter><octave>{oct}</octave></pitch>")
+/// Une hauteur nommee dans la tonalite (`fifths` : l'armure).
+fn pitch_xml(p: i32, fifths: i32) -> String {
+    let s = crate::key::spell(p, fifths);
+    let step = crate::key::STEPS[s.step as usize];
+    let oct = s.octave;
+    if s.alter != 0 {
+        format!(
+            "<pitch><step>{step}</step><alter>{}</alter><octave>{oct}</octave></pitch>",
+            s.alter
+        )
     } else {
         format!("<pitch><step>{step}</step><octave>{oct}</octave></pitch>")
     }
@@ -127,7 +132,12 @@ pub fn write_musicxml(notes: &[TNote], spec: &ScoreSpec, dropped: usize) -> (Str
         if m == 0 {
             x += "      <attributes>\n";
             let _ = writeln!(x, "        <divisions>{g}</divisions>");
-            x += "        <key><fifths>0</fifths></key>\n";
+            let _ = writeln!(
+                x,
+                "        <key><fifths>{}</fifths><mode>{}</mode></key>",
+                eng.key.fifths,
+                if eng.key.minor { "minor" } else { "major" }
+            );
             let _ = writeln!(
                 x,
                 "        <time><beats>{}</beats><beat-type>{}</beat-type></time>",
@@ -222,7 +232,7 @@ pub fn write_musicxml(notes: &[TNote], spec: &ScoreSpec, dropped: usize) -> (Str
                     if ci > 0 {
                         x += "<chord/>";
                     }
-                    x += &pitch_xml(n.pitch);
+                    x += &pitch_xml(n.pitch, eng.key.fifths);
                     let _ = write!(x, "<duration>{d}</duration>");
                     if sg.tie_in {
                         x += "<tie type=\"stop\"/>";
