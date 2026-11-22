@@ -1005,3 +1005,30 @@ fn le_flux_tient_le_temps_reel() {
     assert!(jumps >= 5);
     assert_eq!(p.misses(), 0, "{jumps} sauts en temps reel");
 }
+
+#[test]
+fn une_prise_midi_par_l_hote() {
+    // Le crochet imite : il date les messages et publie sa progression.
+    let mut h = AudioHost::new(None, 48000.0);
+    block(&mut h, 0, 64);
+    let t0 = h.core().clock_now();
+    let id = h.midi_rec_start_lat(-1, Some(t0 + 1000), 171);
+    h.midi_rec_stop(id, Some(t0 + 10_000));
+    let ring = MIDI_RING.get().expect("anneau").clone();
+    assert!(ring.inputs() > 0, "le crochet ecoute");
+    ring.push(t0 + 1171 + 300, 0, &[0x90, 60, 100]);
+    ring.push(t0 + 1171 + 4800, 0, &[0x80, 60, 0]);
+    ring.advance(t0 + 5000);
+    h.poll();
+    assert!(h.midi_rec_take(id).is_none(), "pas finie");
+    assert_eq!(h.midi_rec_count(id).0, Some(2));
+    ring.advance(t0 + 10_200);
+    h.poll();
+    let ev = h.midi_rec_take(id).expect("finie");
+    assert_eq!(
+        ev.iter().map(|e| (e.frame, e.msg)).collect::<Vec<_>>(),
+        vec![(300, [0x90, 60, 100]), (4800, [0x80, 60, 0])]
+    );
+    assert_eq!(ring.inputs(), 0, "plus de prise : le crochet n'ecoute plus");
+    assert!(h.midi_rec_take(id).is_none(), "donnee une fois");
+}

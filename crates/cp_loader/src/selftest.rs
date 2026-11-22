@@ -46,6 +46,8 @@ pub struct SelfTest {
     rec: Option<(u32, i64, i64, Instant)>,
     /// Le long fichier de l'essai du flux.
     stream: Option<StreamT>,
+    /// La prise MIDI de l'essai : son numero, sa fin, son heure.
+    mrec: Option<(u32, i64, Instant)>,
     /// La sonde du tempo : etape, heure, tempo et vitesse d'avant, et les
     /// mesures (heure, position en secondes, en noires).
     probe: Probe,
@@ -156,6 +158,8 @@ enum Phase {
     /// crochet) avec le vrai elastique : attaques a leur place, depart date
     /// a l'heure, hauteur, duree.
     RtStretch,
+    /// Une prise MIDI de toutes les entrees : finie a l'heure, rien de perdu.
+    MidiRec,
     /// La suite se passe hors du moteur audio : insertion, interface.
     Insert,
     OpenUi,
@@ -190,6 +194,7 @@ pub fn requested() -> Option<SelfTest> {
         rt_pos0: 0.0,
         rec: None,
         stream: None,
+        mrec: None,
         probe: (0, None, 0.0, 1.0, Vec::new()),
         ui_at: None,
         keys_step: 0,
@@ -1248,7 +1253,38 @@ impl SelfTest {
             }
             Phase::RtStretch => {
                 self.rt_stretch_offline();
-                self.phase = Phase::Insert;
+                // Une prise MIDI de 0,3 s sur toutes les entrees, dans 0,1 s.
+                let s0 = a.core().clock_now() + 4800;
+                let id = a.midi_rec_start(-1, Some(s0));
+                a.midi_rec_stop(id, Some(s0 + 14400));
+                self.mrec = Some((id, s0 + 14400, Instant::now()));
+                self.phase = Phase::MidiRec;
+            }
+            Phase::MidiRec => {
+                let Some((id, _, t)) = self.mrec else {
+                    self.phase = Phase::Insert;
+                    return false;
+                };
+                a.poll();
+                if let Some(ev) = a.midi_rec_take(id) {
+                    let lost = a.midi_rec_count(id).1;
+                    self.say(
+                        lost == 0,
+                        format!(
+                            "prise MIDI de toutes les entrees : finie en {:.0} ms, {} message(s), {lost} perdu(s)",
+                            t.elapsed().as_secs_f64() * 1000.0,
+                            ev.len()
+                        ),
+                    );
+                    self.phase = Phase::Insert;
+                } else if t.elapsed() > Duration::from_secs(3) {
+                    let blocks = a.stats().blocks;
+                    self.say(
+                        blocks == 0,
+                        format!("prise MIDI : toujours en cours apres 3 s ({blocks} blocs audio)"),
+                    );
+                    self.phase = Phase::Insert;
+                }
             }
             Phase::Insert
             | Phase::OpenUi
@@ -1962,6 +1998,7 @@ impl SelfTest {
                 | Phase::Stream
                 | Phase::TempoProbe
                 | Phase::RtStretch
+                | Phase::MidiRec
         )
     }
 

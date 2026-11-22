@@ -15,6 +15,7 @@
 pub mod capture;
 pub mod decode;
 pub mod feed;
+pub mod midirec;
 pub mod peaks;
 pub mod record;
 pub mod stream;
@@ -183,6 +184,27 @@ fn notes_block(m: &cp_sys::midi_in::MidiInputs, n: i32) {
 /// prise).
 static REC_RING: OnceLock<Arc<record::RecRing>> = OnceLock::new();
 
+/// L'anneau de la prise MIDI, rempli par le crochet (pose a la premiere
+/// prise).
+static MIDI_RING: OnceLock<Arc<midirec::MidiRing>> = OnceLock::new();
+
+/// Fil audio : les messages courts des `n` premieres entrees MIDI, dates au
+/// frame du moteur.
+fn midirec_block(
+    m: &cp_sys::midi_in::MidiInputs,
+    ring: &midirec::MidiRing,
+    n: i32,
+    base: i64,
+    srate: f64,
+) {
+    for dev in 0..n.min(64) {
+        m.for_each(dev, |off, msg| {
+            let f = base + (off as f64 * srate / 1_024_000.0).round() as i64;
+            ring.push(f, dev as u8, msg);
+        });
+    }
+}
+
 /// Sa publication, lue par le fil principal sans jamais prendre le verrou
 /// du fil audio.
 static CLOCK_PUB: OnceLock<Arc<cp_engine::extclock::Published>> = OnceLock::new();
@@ -204,6 +226,15 @@ fn on_audio(is_post: bool, frames: i32, srate: f64) {
                     ring.push_block(core.clock_now(), l, AudioHook::input(c1, frames));
                 }
             }
+        }
+        if let Some(mr) = MIDI_RING.get() {
+            let n = mr.inputs();
+            if n > 0 {
+                if let Some(m) = MIDI_IN.get() {
+                    midirec_block(m, mr, n, core.clock_now(), srate);
+                }
+            }
+            mr.advance(core.clock_now() + frames as i64);
         }
         let nin = NOTES_N.load(std::sync::atomic::Ordering::Relaxed);
         if nin > 0 {
@@ -286,6 +317,9 @@ pub struct AudioHost {
     rec_done: Vec<(u32, Result<ClipH, String>)>,
     /// Les notes MIDI deja lues.
     notes_r: usize,
+    /// La prise MIDI (creee a la premiere), et les prises finies.
+    mrec: Option<midirec::MidiRecorder>,
+    mrec_done: Vec<(u32, Vec<midirec::MidiEv>)>,
 }
 
 /// Ou en est une prise.
@@ -353,6 +387,8 @@ impl AudioHost {
             rec: None,
             rec_done: Vec::new(),
             notes_r: 0,
+            mrec: None,
+            mrec_done: Vec::new(),
         }
     }
 
@@ -482,6 +518,64 @@ impl AudioHost {
         ring.set_inputs(ch0, ch1);
         let at = start.unwrap_or_else(|| self.ctl.core().clock_now());
         Some(rec.start(at, lat))
+    }
+
+    /// Une prise MIDI sur l'entree `dev` (-1 : toutes), qui commence au
+    /// frame `start` du moteur (rien : maintenant) ; la latence de sortie est
+    /// retiree (on joue ce qu'on entend).
+    pub fn midi_rec_start(&mut self, dev: i32, start: Option<i64>) -> u32 {
+        let lat = self
+            .reaper
+            .map_or(0, |r| AudioHook::io_latency(&r).1 as i64);
+        self.midi_rec_start_lat(dev, start, lat)
+    }
+
+    /// [`Self::midi_rec_start`] avec une latence donnee (les tests).
+    pub fn midi_rec_start_lat(&mut self, dev: i32, start: Option<i64>, lat: i64) -> u32 {
+        let n = self.reaper.map_or(1, |r| {
+            r.midi_inputs().iter().map(|x| x.0 + 1).max().unwrap_or(0)
+        });
+        let rec = self.mrec.get_or_insert_with(|| {
+            midirec::MidiRecorder::new(MIDI_RING.get_or_init(midirec::MidiRing::new).clone())
+        });
+        rec.ring().set_inputs(n.max(1));
+        let at = start.unwrap_or_else(|| self.ctl.core().clock_now());
+        rec.start(at, lat, dev)
+    }
+
+    /// La prise MIDI s'arrete au temps `at` du moteur (rien : maintenant).
+    pub fn midi_rec_stop(&mut self, id: u32, at: Option<i64>) {
+        let at = at.unwrap_or_else(|| self.ctl.core().clock_now());
+        if let Some(r) = self.mrec.as_mut() {
+            r.stop(id, at);
+        }
+    }
+
+    /// Les messages d'une prise MIDI finie (donnes une fois), dates depuis
+    /// son debut ; `None` tant qu'elle court.
+    pub fn midi_rec_take(&mut self, id: u32) -> Option<Vec<midirec::MidiEv>> {
+        let i = self.mrec_done.iter().position(|(k, _)| *k == id)?;
+        Some(self.mrec_done.swap_remove(i).1)
+    }
+
+    /// Les messages deja pris d'une prise MIDI en cours, et les messages
+    /// perdus depuis le depart (anneau deborde).
+    pub fn midi_rec_count(&self, id: u32) -> (Option<usize>, usize) {
+        self.mrec
+            .as_ref()
+            .map_or((None, 0), |r| (r.count(id), r.lost))
+    }
+
+    /// Le battement de la prise MIDI : l'anneau vide dans les prises ; plus
+    /// aucune prise, le crochet cesse d'ecouter.
+    fn midi_rec_poll(&mut self) {
+        if let Some(r) = self.mrec.as_mut() {
+            let done = r.drain();
+            self.mrec_done.extend(done);
+            if r.active() == 0 {
+                r.ring().set_inputs(0);
+            }
+        }
     }
 
     /// La prise s'arrete au temps `at` du moteur (rien : maintenant).
@@ -1051,6 +1145,7 @@ impl AudioHost {
     pub fn poll(&mut self) {
         self.check_routes();
         self.rec_poll();
+        self.midi_rec_poll();
         self.stream_poll();
         while let Some(m) = self.decoder.try_msg() {
             match m {
