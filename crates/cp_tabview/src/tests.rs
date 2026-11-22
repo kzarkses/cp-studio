@@ -1276,3 +1276,88 @@ fn le_magnetisme_suit_la_grille_a_notre_zoom() {
     v.grid = Some(SnapGrid { on: false, ..g });
     assert!((v.cursor_q(x, Mods::default()) - v.qn_of(x)).abs() < 1e-9);
 }
+
+/// Une image faite de zones redessinees et de traits deplaces est celle
+/// qu'aurait donnee un dessin entier : la souris qui passe sur une selection
+/// de temps, avec sa ligne translucide, ne laisse aucune trainee. Deux
+/// causes, le 2026-11-22 : un decoupage retire une fois de trop (la suite de
+/// l'image sortait de la zone redessinee) et un trait translucide pose deux
+/// fois la ou deux zones se recouvraient.
+#[test]
+fn le_survol_ne_laisse_pas_de_trainee() {
+    use cp_gfx::layers::Layers;
+    let (w, h) = (1600, 900);
+    let mut b = Bench::new(w, h);
+    let mut v = arranger();
+    v.rec.clear();
+    v.range = Some((4.0, 14.0));
+    v.guide = cp_ui::Guide::from_reaper(0x71, Some(cp_gfx::rgb(255, 255, 255).with_alpha(120)));
+    v.snapper = Some(Box::new(|q: f64| (q * 4.0).round() / 4.0));
+    v.edit_cursor = Some(6.0);
+    // Comme `Frame::paint` : la vue entiere, coupee a chaque zone.
+    let paint = |b: &mut Bench, v: &mut Arr, l: &mut Layers, d: &[cp_gfx::IRect]| {
+        for r in d {
+            let mut cv = Canvas::new(&mut l.scene, &mut b.k);
+            if cv.push_clip(r.x as f32, r.y as f32, r.w as f32, r.h as f32) {
+                v.draw(&mut cv, &mut b.t, &mut b.icons, &b.th, w as f32, h as f32);
+            }
+        }
+    };
+    let mut l = Layers::default();
+    l.resize(w, h);
+    let d = v.take_damage(w, h);
+    paint(&mut b, &mut v, &mut l, &d);
+    l.drawn();
+    l.compose(&d, &v.strokes(&b.th));
+    let audio = v
+        .rect_of(Hit::Item {
+            t: 0,
+            i: 0,
+            lane: Lane::Audio,
+        })
+        .expect("la couche audio");
+    let mut bad = Vec::new();
+    // La souris traverse la vue en diagonale, sur la selection et hors d'elle,
+    // et repasse sur la prise.
+    for k in 0..240 {
+        let x = 40.0 + k as f32 * 6.3;
+        let y = if k % 3 == 0 {
+            audio.1 + audio.3 * 0.5
+        } else {
+            20.0 + (k as f32 * 3.7) % 860.0
+        };
+        v.event(&Ev::Move {
+            x,
+            y,
+            mods: Mods::default(),
+        });
+        let d = v.take_damage(w, h);
+        paint(&mut b, &mut v, &mut l, &d);
+        let st = v.strokes(&b.th);
+        l.compose(&d, &st);
+        let mut r = Layers::default();
+        r.resize(w, h);
+        v.mark();
+        let full = v.take_damage(w, h);
+        paint(&mut b, &mut v, &mut r, &full);
+        r.compose(&full, &st);
+        let n = (0..l.out.px.len())
+            .filter(|&i| l.out.px[i] != r.out.px[i])
+            .count();
+        if n > 0 {
+            bad.push(format!(
+                "pas {k} (souris {x:.0},{y:.0}, survol {:?}) : {n} px",
+                v.hover
+            ));
+            // Repartir de l'image juste : chaque faute comptee une fois.
+            l.out.px.copy_from_slice(&r.out.px);
+            l.scene.px.copy_from_slice(&r.scene.px);
+        }
+    }
+    assert!(
+        bad.is_empty(),
+        "{} images fausses :\n{}",
+        bad.len(),
+        bad[..bad.len().min(12)].join("\n")
+    );
+}

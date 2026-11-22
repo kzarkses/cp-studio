@@ -112,6 +112,25 @@ impl Ed {
         w: f32,
         h: f32,
     ) {
+        // Chaque decoupage pose est retire : sinon la suite de l'image
+        // sortirait de la zone a redessiner (voir `Canvas::restore_clips`).
+        let (depth, clip) = (cv.clip_depth(), cv.clip());
+        self.draw_scene(cv, text, icons, th, w, h);
+        let ok = cv.restore_clips(depth, clip);
+        if cfg!(test) {
+            assert!(ok, "decoupages desequilibres pendant le dessin");
+        }
+    }
+
+    fn draw_scene(
+        &mut self,
+        cv: &mut Canvas<'_>,
+        text: &mut TextCache,
+        icons: &mut IconCache,
+        th: &Theme,
+        w: f32,
+        h: f32,
+    ) {
         self.scale = th.scale;
         self.layout(w, h, th.scale);
         let mut bx: Vec<HBox> = Vec::new();

@@ -285,6 +285,22 @@ impl<'a> Canvas<'a> {
         self.clip
     }
 
+    /// Le nombre de decoupages poses (chaque `push_clip` doit avoir son
+    /// `pop_clip`).
+    pub fn clip_depth(&self) -> usize {
+        self.clips.len()
+    }
+
+    /// Revient aux decoupages d'avant un dessin (`clip_depth`, `clip`) ; rend
+    /// faux s'ils n'y etaient plus : un `pop_clip` de trop defait celui de la
+    /// zone a redessiner, et la suite se dessine sur toute la fenetre.
+    pub fn restore_clips(&mut self, depth: usize, clip: IRect) -> bool {
+        let ok = self.clips.len() == depth && self.clip == clip;
+        self.clips.truncate(depth);
+        self.clip = clip;
+        ok
+    }
+
     pub fn push_origin(&mut self, dx: f32, dy: f32) {
         self.origins.push((self.ox, self.oy));
         self.ox += dx;

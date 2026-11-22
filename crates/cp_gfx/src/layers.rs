@@ -65,7 +65,10 @@ impl Layers {
             rects.push(s.r.intersect(&whole));
         }
         rects.retain(|r| !r.is_empty());
-        let rects = merge(rects);
+        // Des zones qui ne se recouvrent pas : un trait translucide pose deux
+        // fois la ou deux zones se recouvrent y devenait plus clair (la
+        // trainee de la ligne a la souris, 2026-11-22).
+        let rects = disjoint(merge(rects));
         let ws = w as usize;
         for r in &rects {
             for y in r.y..r.bottom() {
@@ -95,6 +98,36 @@ impl Layers {
         self.shown = strokes.to_vec();
         rects
     }
+}
+
+/// Ce qui reste de `a` hors de `b` : au plus quatre bandes.
+fn subtract(a: IRect, b: &IRect) -> Vec<IRect> {
+    let i = a.intersect(b);
+    if i.is_empty() {
+        return vec![a];
+    }
+    let mut out = Vec::with_capacity(4);
+    // Au-dessus, au-dessous (toute la largeur), puis a gauche et a droite
+    // (la hauteur de l'intersection).
+    out.push(IRect::new(a.x, a.y, a.w, i.y - a.y));
+    out.push(IRect::new(a.x, i.bottom(), a.w, a.bottom() - i.bottom()));
+    out.push(IRect::new(a.x, i.y, i.x - a.x, i.h));
+    out.push(IRect::new(i.right(), i.y, a.right() - i.right(), i.h));
+    out.retain(|r| !r.is_empty());
+    out
+}
+
+/// Les memes pixels, en zones qui ne se recouvrent pas.
+pub fn disjoint(v: Vec<IRect>) -> Vec<IRect> {
+    let mut out: Vec<IRect> = Vec::with_capacity(v.len());
+    for r in v {
+        let mut parts = vec![r];
+        for o in &out {
+            parts = parts.into_iter().flat_map(|p| subtract(p, o)).collect();
+        }
+        out.extend(parts);
+    }
+    out
 }
 
 /// Fond les zones qui se touchent ou se recouvrent (deux colonnes voisines
@@ -167,6 +200,60 @@ mod tests {
         assert_eq!(l.out.px[12], 0xff20_2020);
         // Hors de la zone, l'ecran n'a pas change.
         assert_eq!(l.out.px[20 * 100 + 12], 0xff10_1010);
+    }
+
+    /// Un trait translucide sous deux zones qui se recouvrent n'est pose
+    /// qu'une fois.
+    #[test]
+    fn un_trait_translucide_n_est_pose_qu_une_fois() {
+        let mut l = Layers::default();
+        l.resize(400, 300);
+        fill(&mut l.scene, 0xff10_1010);
+        l.compose(&[IRect::new(0, 0, 400, 300)], &[]);
+        l.drawn();
+        let s = Stroke {
+            r: IRect::new(50, 0, 1, 300),
+            c: rgb(255, 255, 255).with_alpha(120),
+        };
+        let once = {
+            let mut k = Layers::default();
+            k.resize(400, 300);
+            fill(&mut k.scene, 0xff10_1010);
+            k.compose(&[IRect::new(0, 0, 400, 300)], &[s]);
+            k.out.px[40 * 400 + 50]
+        };
+        // Une croix : deux zones trop differentes pour etre fondues, qui
+        // recouvrent toutes deux le trait (en y 140..150).
+        let d = [IRect::new(0, 140, 400, 10), IRect::new(45, 0, 10, 300)];
+        assert_eq!(merge(d.to_vec()).len(), 2);
+        l.compose(&d, &[s]);
+        for y in 0..300 {
+            assert_eq!(l.out.px[y * 400 + 50], once, "ligne {y}");
+        }
+    }
+
+    #[test]
+    fn des_zones_disjointes_couvrent_les_memes_pixels() {
+        let v = vec![
+            IRect::new(0, 0, 10, 10),
+            IRect::new(5, 5, 10, 10),
+            IRect::new(2, 2, 3, 3),
+        ];
+        let d = disjoint(v.clone());
+        let mut a = [[0u8; 20]; 20];
+        for r in &d {
+            for y in r.y..r.bottom() {
+                for x in r.x..r.right() {
+                    a[y as usize][x as usize] += 1;
+                }
+            }
+        }
+        for y in 0..20 {
+            for x in 0..20 {
+                let inside = v.iter().any(|r| r.contains(x, y)) as u8;
+                assert_eq!(a[y as usize][x as usize], inside, "{x},{y}");
+            }
+        }
     }
 
     #[test]

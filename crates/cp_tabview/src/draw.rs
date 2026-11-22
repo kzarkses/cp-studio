@@ -272,6 +272,25 @@ impl Arr {
         w: f32,
         h: f32,
     ) {
+        // Chaque decoupage pose est retire : sinon la suite de l'image
+        // sortirait de la zone a redessiner (voir `Canvas::restore_clips`).
+        let (depth, clip) = (cv.clip_depth(), cv.clip());
+        self.draw_scene(cv, text, icons, th, w, h);
+        let ok = cv.restore_clips(depth, clip);
+        if cfg!(test) {
+            assert!(ok, "decoupages desequilibres pendant le dessin");
+        }
+    }
+
+    fn draw_scene(
+        &mut self,
+        cv: &mut Canvas<'_>,
+        text: &mut TextCache,
+        icons: &mut IconCache,
+        th: &Theme,
+        w: f32,
+        h: f32,
+    ) {
         self.scale = th.scale;
         self.layout(w, h, th.scale);
         let mut bx: Vec<HBox> = Vec::new();
@@ -1111,36 +1130,43 @@ impl Arr {
             // Le fond et le nom de la couche.
             cv.fill_rect(l.label_x, ly, right - l.label_x, lh, track_bg);
             // La grille de l'arrangement, sous les items : mesures et temps.
-            if matches!(lane, Lane::Audio | Lane::Midi) && cv.push_clip(l.sx, ly, l.sw, lh) {
-                let beat = 4.0 / self.sig.1.max(1) as f64;
-                let beat_px = beat as f32 * l.ppq;
-                // La grille de REAPER (sa division, elargie sous 8 px comme
-                // lui) : mesures, temps, et ses lignes entre les temps.
-                let step = self.grid.map(|g| g.step(l.ppq.max(1e-3)));
-                for m in first..=last {
-                    let q = m as f64 * bq;
-                    cv.fill_rect(geo.x(q).round(), ly, 1.0, lh, th.rp.grid_bar);
-                    if let Some(st) = step.filter(|&st| st < bq) {
-                        let n = (bq / st).round() as i64;
-                        for k in 1..n {
-                            let qq = q + k as f64 * st;
-                            let on_beat = ((qq / beat).round() * beat - qq).abs() < 1e-6;
-                            let c = if on_beat {
-                                th.rp.grid_beat
-                            } else {
-                                th.rp.grid_sub
-                            };
-                            cv.fill_rect(geo.x(qq).round(), ly, 1.0, lh, c);
-                        }
-                    } else if step.is_none() && beat_px >= s(12.0) {
-                        for b in 1..self.sig.0.max(1) {
-                            let xb = geo.x(q + b as f64 * beat).round();
-                            cv.fill_rect(xb, ly, 1.0, lh, th.rp.grid_beat);
+            // Le decoupage pose seulement pour l'audio et le MIDI, et retire
+            // seulement pour eux : retire pour chaque couche, il defaisait
+            // celui de la zone a redessiner, et la suite de l'image se
+            // dessinait par-dessus toute la fenetre (la selection de temps
+            // voilee une fois de plus a chaque survol, 2026-11-22).
+            if matches!(lane, Lane::Audio | Lane::Midi) {
+                if cv.push_clip(l.sx, ly, l.sw, lh) {
+                    let beat = 4.0 / self.sig.1.max(1) as f64;
+                    let beat_px = beat as f32 * l.ppq;
+                    // La grille de REAPER (sa division, elargie sous 8 px comme
+                    // lui) : mesures, temps, et ses lignes entre les temps.
+                    let step = self.grid.map(|g| g.step(l.ppq.max(1e-3)));
+                    for m in first..=last {
+                        let q = m as f64 * bq;
+                        cv.fill_rect(geo.x(q).round(), ly, 1.0, lh, th.rp.grid_bar);
+                        if let Some(st) = step.filter(|&st| st < bq) {
+                            let n = (bq / st).round() as i64;
+                            for k in 1..n {
+                                let qq = q + k as f64 * st;
+                                let on_beat = ((qq / beat).round() * beat - qq).abs() < 1e-6;
+                                let c = if on_beat {
+                                    th.rp.grid_beat
+                                } else {
+                                    th.rp.grid_sub
+                                };
+                                cv.fill_rect(geo.x(qq).round(), ly, 1.0, lh, c);
+                            }
+                        } else if step.is_none() && beat_px >= s(12.0) {
+                            for b in 1..self.sig.0.max(1) {
+                                let xb = geo.x(q + b as f64 * beat).round();
+                                cv.fill_rect(xb, ly, 1.0, lh, th.rp.grid_beat);
+                            }
                         }
                     }
                 }
+                cv.pop_clip();
             }
-            cv.pop_clip();
             if matches!(lane, Lane::Audio | Lane::Midi) {
                 cv.fill_rect(
                     l.label_x,
