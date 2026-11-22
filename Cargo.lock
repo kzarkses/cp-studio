@@ -21,6 +21,7 @@ dependencies = [
  "cp_audio",
  "cp_gfx",
  "cp_sys",
+ "cp_theme",
  "cp_ui",
 ]
 

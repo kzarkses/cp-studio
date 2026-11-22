@@ -10,6 +10,23 @@ use crate::reaper::Reaper;
 type P = *mut c_void;
 
 impl Reaper {
+    /// Le dossier ou REAPER enregistre pour le projet courant
+    /// (`GetProjectPathEx`) : celui du projet, ou, sans projet enregistre,
+    /// celui des preferences. C'est celui que montre la barre de titre.
+    pub fn record_path(&self) -> Option<PathBuf> {
+        type F = unsafe extern "C" fn(P, *mut c_char, i32);
+        // SAFETY: void GetProjectPathEx(ReaProject* proj, char* buf, int sz).
+        let f = unsafe { self.api::<F>(c"GetProjectPathEx") }?;
+        let mut buf = vec![0u8; 4096];
+        // SAFETY: projet courant (nul), tampon de 4096 octets annonce.
+        unsafe { f(null_mut(), buf.as_mut_ptr() as *mut c_char, 4096) };
+        // SAFETY: REAPER termine la chaine par zero dans le tampon.
+        let s = unsafe { CStr::from_ptr(buf.as_ptr() as *const c_char) }
+            .to_string_lossy()
+            .into_owned();
+        (!s.trim().is_empty()).then(|| PathBuf::from(s.trim()))
+    }
+
     /// Le dossier du projet courant (`None` s'il n'est pas enregistre).
     pub fn project_dir(&self) -> Option<PathBuf> {
         type F = unsafe extern "C" fn(i32, *mut c_char, i32) -> P;

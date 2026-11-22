@@ -138,6 +138,16 @@ impl App {
     // L'habillage : le theme de REAPER
     // -----------------------------------------------------------------------
 
+    /// Ouvre le theme de REAPER s'il a change (partage par CP Transport et
+    /// le navigateur).
+    pub(crate) fn theme_files(&mut self, path: Option<&std::path::Path>) -> Option<&ThemeFiles> {
+        let cur = self.tp.theme.as_ref().map(|t| t.path.as_path());
+        if cur != path {
+            self.tp.theme = path.and_then(ThemeFiles::open);
+        }
+        self.tp.theme.as_ref()
+    }
+
     /// Relit le theme si REAPER en a change (fichier, couleurs) ou si
     /// l'echelle de l'ecran a change ; rend vrai s'il a ete refait.
     pub(crate) fn transport_skin(&mut self) -> bool {
@@ -151,10 +161,7 @@ impl App {
         if self.tp.skin_key.as_ref() == Some(&key) {
             return false;
         }
-        let path_changed = self.tp.skin_key.as_ref().map(|k| &k.path) != Some(&key.path);
-        if path_changed || self.tp.theme.is_none() {
-            self.tp.theme = key.path.as_deref().and_then(ThemeFiles::open);
-        }
+        self.theme_files(key.path.as_deref());
         self.tp.skin_id += 1;
         self.tp.images.clear();
         let face = self

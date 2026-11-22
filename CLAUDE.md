@@ -31,7 +31,7 @@ est fait, tout ce qui reste, dans l'ordre, avec un critere de fin par etape).
 | `cp_oracle` | l'ancien moteur C++ compile en DLL, pour comparer `cp_engine` a lui, et le programme C++ qui verifie nos tables virtuelles contre le SDK (tests seulement) |
 | `cp_gfx` | le moteur de dessin : rasteriseur a couverture exacte, chemins, texte (cache de glyphes), PNG, sans Windows |
 | `cp_ui` | le toolkit : theme, evenements, icones Lucide (SVG), champ de saisie, defilement |
-| `cp_browser` | le navigateur de fichiers (jalon 1), sans Windows : il se teste avec le vrai moteur et se dessine en PNG |
+| `cp_browser` | le navigateur de fichiers (jalon 1), sans Windows : il se teste avec le vrai moteur et se dessine en PNG. En tete, Recordings (le dossier d'enregistrement de REAPER, `GetProjectPathEx`), le plus recent d'abord, relu quand le disque change ; puis les dossiers de Cedric (ExtState `browser_folders`, ajout par la boite de Windows ou import des raccourcis de l'Explorateur de medias). Les bases MediaDB sont cherchees, plus montrees. Couleurs : `Theme::reaper` (listes de REAPER) |
 | `cp_tab` | CP Guitar Tab : Basic Pitch (reseau, poids Apache-2.0 dans `src/bp_weights.bin`, voir NOTICE), decodage des notes, reechantillonnage, doigte, MusicXML ; teste contre onnxruntime (`tools/make_fixture.py`) |
 | `cp_transport` | CP Transport, la barre qui remplace le transport de REAPER (transport, compteur, tempo, icones d'actions, selecteur de vues), sans Windows : chaque geste rend une `Act` ; habille du theme de REAPER par un `Skin` |
 | `cp_theme` | Le theme de REAPER lu tel quel, sans Windows : zip, DEFLATE, PNG (identique a WIC sur 3473 icones), images a bord rose (`Nine`), vignettes d'etats (`Frames`), images par echelle (`150/`, `200/`) |

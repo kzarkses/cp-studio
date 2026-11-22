@@ -25,6 +25,7 @@ pub use cp_abi as abi;
 pub mod audio;
 pub mod dark;
 pub mod dylib;
+pub mod folders;
 pub mod font;
 pub mod grow;
 pub mod guard;

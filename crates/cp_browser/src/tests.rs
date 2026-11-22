@@ -267,6 +267,7 @@ impl Screen {
                 text: &mut self.t,
                 icons: &mut self.icons,
                 th: &self.th,
+                skin: None,
             };
             b.draw(&mut cv, &mut g, h);
         }
@@ -293,6 +294,13 @@ fn shortcuts(root: &Path) -> Vec<Shortcut> {
     ]
 }
 
+fn places(root: &Path) -> Places {
+    Places {
+        recordings: None,
+        folders: Places::from_shortcuts(&shortcuts(root), Path::new("."), None),
+    }
+}
+
 fn key(b: &mut Browser, h: &mut Fake, k: u32) {
     b.event(
         h,
@@ -308,7 +316,7 @@ fn key(b: &mut Browser, h: &mut Fake, k: u32) {
 fn parcourir_ecouter_et_choisir_une_section() {
     let root = library();
     let mut h = Fake::new();
-    let mut b = Browser::new(&shortcuts(&root), Path::new("."), None, Vec::new());
+    let mut b = Browser::new(places(&root), Path::new("."), Vec::new());
     let mut sc = Screen::new(420, 640);
     b.layout(420.0, 640.0, 1.0);
     // Ouvrir la bibliotheque, puis Drums, puis Kicks, au clavier.
@@ -400,7 +408,7 @@ fn parcourir_ecouter_et_choisir_une_section() {
 fn les_en_tetes_restent_colles_en_haut() {
     let root = library();
     let mut h = Fake::new();
-    let mut b = Browser::new(&shortcuts(&root), Path::new("."), None, Vec::new());
+    let mut b = Browser::new(places(&root), Path::new("."), Vec::new());
     let mut sc = Screen::new(420, 400);
     b.layout(420.0, 400.0, 1.0);
     let lib = b
@@ -428,7 +436,7 @@ fn les_en_tetes_restent_colles_en_haut() {
 fn chercher_trouve_dans_ce_qui_est_ouvert() {
     let root = library();
     let mut h = Fake::new();
-    let mut b = Browser::new(&shortcuts(&root), Path::new("."), None, Vec::new());
+    let mut b = Browser::new(places(&root), Path::new("."), Vec::new());
     let mut sc = Screen::new(420, 400);
     b.layout(420.0, 400.0, 1.0);
     let fx = b
@@ -466,7 +474,7 @@ fn chercher_trouve_dans_ce_qui_est_ouvert() {
 fn l_etat_survit_a_un_rechargement() {
     let root = library();
     let mut h = Fake::new();
-    let mut b = Browser::new(&shortcuts(&root), Path::new("."), None, Vec::new());
+    let mut b = Browser::new(places(&root), Path::new("."), Vec::new());
     b.layout(420.0, 400.0, 1.0);
     let lib = b
         .rows
@@ -479,7 +487,7 @@ fn l_etat_survit_a_un_rechargement() {
     key(&mut b, &mut h, vk::RIGHT);
     let rows = b.rows.len();
     let s = b.save_state();
-    let mut b2 = Browser::new(&shortcuts(&root), Path::new("."), None, Vec::new());
+    let mut b2 = Browser::new(places(&root), Path::new("."), Vec::new());
     b2.layout(420.0, 400.0, 1.0);
     b2.restore_state(&s);
     assert_eq!(b2.rows.len(), rows);
@@ -490,7 +498,7 @@ fn l_etat_survit_a_un_rechargement() {
 fn v2_collections_hasard_echange_effets_tempo() {
     let root = library();
     let mut h = Fake::new();
-    let mut b = Browser::new(&shortcuts(&root), Path::new("."), None, Vec::new());
+    let mut b = Browser::new(places(&root), Path::new("."), Vec::new());
     let data = std::env::temp_dir().join("cp_browser_data");
     let _ = std::fs::remove_file(data.join("collections.txt"));
     b.data_dir = Some(data.clone());
@@ -516,7 +524,7 @@ fn v2_collections_hasard_echange_effets_tempo() {
     let red = b.tree.collections[0];
     assert_eq!(b.tree.nodes[red].children.as_ref().unwrap().len(), 2);
     // Relue a froid.
-    let mut b2 = Browser::new(&shortcuts(&root), Path::new("."), None, Vec::new());
+    let mut b2 = Browser::new(places(&root), Path::new("."), Vec::new());
     b2.data_dir = Some(data.clone());
     b2.load_collections();
     assert_eq!(b2.collections.len(), 2);
@@ -560,7 +568,7 @@ fn v2_collections_hasard_echange_effets_tempo() {
 fn la_vue_samples_montre_une_forme_d_onde_par_fichier() {
     let root = library();
     let mut h = Fake::new();
-    let mut b = Browser::new(&shortcuts(&root), Path::new("."), None, Vec::new());
+    let mut b = Browser::new(places(&root), Path::new("."), Vec::new());
     let mut sc = Screen::new(460, 520);
     b.layout(460.0, 520.0, 1.0);
     let lib = b
@@ -587,4 +595,59 @@ fn la_vue_samples_montre_une_forme_d_onde_par_fichier() {
         assert!(t0.elapsed().as_secs() < 20, "vignettes trop lentes");
         std::thread::sleep(std::time::Duration::from_millis(5));
     }
+}
+
+/// Le navigateur habille du theme COURANT de la machine, sur le vrai dossier
+/// d'enregistrement (lance a la main : `--ignored`) : `cp_browser_theme.png`.
+#[test]
+#[ignore]
+fn habille_du_vrai_theme() {
+    let res = PathBuf::from(std::env::var("APPDATA").unwrap()).join("REAPER");
+    let ini = std::fs::read_to_string(res.join("reaper.ini")).unwrap_or_default();
+    let get = |k: &str| {
+        ini.lines()
+            .find_map(|l| l.strip_prefix(&format!("{k}=")))
+            .map(|s| s.trim().to_string())
+    };
+    let theme =
+        cp_theme::ThemeFiles::open(Path::new(&get("lastthemefn5").unwrap())).expect("theme");
+    let rec = get("defrecpath").map(PathBuf::from);
+    let mut h = Fake::new();
+    let places = Places {
+        recordings: rec,
+        folders: vec![model::Place {
+            path: res.join("Data"),
+            title: Some("REAPER Data".into()),
+        }],
+    };
+    let mut b = Browser::new(places, Path::new("."), Vec::new());
+    let tb = |name: &str| {
+        let (img, s) = theme.image(name, 1.0)?;
+        Some(cp_theme::Frames::split(&img, 3)?.rescaled(s, 1.0))
+    };
+    let skin = crate::draw::Skin {
+        play: tb("transport_play"),
+        play_on: tb("transport_play_on"),
+        repeat_off: tb("transport_repeat_off"),
+        repeat_on: tb("transport_repeat_on"),
+    };
+    b.theme_btn_w = skin.play.as_ref().map(|f| f.w() as f32);
+    b.looping = true;
+    let mut sc = Screen::new(420, 520);
+    sc.th = Theme::reaper(1.0, &|k| theme.color(k));
+    b.layout(420.0, 520.0, 1.0);
+    b.sel = Some(1);
+    {
+        let mut cv = Canvas::new(&mut sc.s, &mut sc.k);
+        let mut g = Gfx {
+            text: &mut sc.t,
+            icons: &mut sc.icons,
+            th: &sc.th,
+            skin: Some(&skin),
+        };
+        b.draw(&mut cv, &mut g, &mut h);
+    }
+    let p = std::env::temp_dir().join("cp_browser_theme.png");
+    std::fs::write(&p, png::encode(&sc.s)).unwrap();
+    println!("{}", p.display());
 }

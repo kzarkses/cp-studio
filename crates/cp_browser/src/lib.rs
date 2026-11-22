@@ -31,7 +31,7 @@ use cp_ui::scroll::Scroll;
 use cp_ui::textfield::Edit;
 use cp_ui::{Button, Ev, Mods, TextField, vk};
 
-use model::{DbEntry, Kind, Meta, Shortcut, Tree};
+use model::{DbEntry, Kind, Meta, Place, Places, Tree};
 use wave::{ClipInfo, Wave};
 
 /// Un chargement en cours, vu du navigateur.
@@ -112,6 +112,18 @@ pub trait Host {
     fn thumb(&mut self, _path: &str, _min: &mut [f32], _max: &mut [f32]) -> i32 {
         -1
     }
+
+    // --- les dossiers de Cedric
+    /// Choisir un dossier (la boite de Windows), qui s'ouvre sur `start`.
+    fn pick_folder(&mut self, _start: Option<&Path>) -> Option<PathBuf> {
+        None
+    }
+    /// Montrer un fichier ou un dossier dans l'Explorateur de Windows.
+    fn show_in_explorer(&mut self, _p: &Path) {}
+    /// Les raccourcis de l'Explorateur de medias de REAPER (dossiers, bases).
+    fn reaper_shortcuts(&mut self) -> Vec<Place> {
+        Vec::new()
+    }
 }
 
 /// Une ligne de menu (`id` 0 = separateur).
@@ -191,6 +203,9 @@ pub struct Layout {
     pub btn: f32,
     pub loop_x: f32,
     pub play_x: f32,
+    /// Lecture et boucle : la largeur des boutons du theme s'il y en a.
+    pub loop_w: f32,
+    pub play_w: f32,
     pub vol_x: f32,
     pub vol_w: f32,
     pub star_x: f32,
@@ -278,8 +293,15 @@ pub struct Browser {
     /// Des vignettes visibles sont en cours de calcul (ecrit pendant le
     /// dessin).
     pub thumbs_pending: std::cell::Cell<bool>,
+    /// La largeur des boutons de lecture et de boucle du theme de REAPER
+    /// (`None` : des boutons carres, icones vectorielles).
+    pub theme_btn_w: Option<f32>,
     /// Seule la forme d'onde (et la ligne d'etat) a change.
     wave_dirty: bool,
+    /// La derniere surveillance du disque, et la derniere minute affichee
+    /// (l'age des enregistrements).
+    watched: Option<std::time::Instant>,
+    minute: u64,
 }
 
 /// Ce qu'il faut redessiner.
@@ -291,13 +313,10 @@ pub enum Redraw {
 }
 
 impl Browser {
-    pub fn new(
-        shortcuts: &[Shortcut],
-        mediadb_dir: &Path,
-        project: Option<&Path>,
-        favorites: Vec<PathBuf>,
-    ) -> Browser {
-        let tree = Tree::from_shortcuts(shortcuts, mediadb_dir, project, &favorites);
+    /// `places` : le dossier d'enregistrement et les dossiers de Cedric ;
+    /// `mediadb_dir` : les bases de REAPER (cherchees, plus montrees).
+    pub fn new(places: Places, mediadb_dir: &Path, favorites: Vec<PathBuf>) -> Browser {
+        let tree = Tree::build(&places, &favorites);
         let mut b = Browser {
             tree,
             rows: Vec::new(),
@@ -336,10 +355,139 @@ impl Browser {
             fx_wanted: false,
             samples_view: false,
             thumbs_pending: std::cell::Cell::new(false),
+            theme_btn_w: None,
             wave_dirty: false,
+            watched: None,
+            minute: 0,
         };
         b.rebuild();
         b
+    }
+
+    // -----------------------------------------------------------------------
+    // Le dossier d'enregistrement et les dossiers de Cedric
+    // -----------------------------------------------------------------------
+
+    /// Le dossier ou REAPER enregistre a change (un autre projet).
+    pub fn set_recordings(&mut self, p: Option<&Path>) {
+        if self.tree.set_recordings(p) {
+            self.rebuild();
+        }
+    }
+
+    /// Relit un dossier ouvert en gardant la ligne choisie et les
+    /// sous-dossiers ouverts.
+    fn reload(&mut self, id: usize) {
+        let sel = self.selected_path();
+        let mut open = Vec::new();
+        let mut stack = self.tree.nodes[id].children.clone().unwrap_or_default();
+        while let Some(c) = stack.pop() {
+            let n = &self.tree.nodes[c];
+            if n.expanded {
+                open.push(n.path.clone());
+                stack.extend(n.children.clone().unwrap_or_default());
+            }
+        }
+        self.tree.nodes[id].children = None;
+        self.tree.nodes[id].error = None;
+        self.tree.load(id);
+        for p in open {
+            self.expand_path(&p);
+        }
+        self.rebuild();
+        if let Some(p) = sel {
+            if let Some(i) = self
+                .rows
+                .iter()
+                .position(|&r| self.row_path(r) == Some(p.as_path()))
+            {
+                self.sel = Some(i);
+            }
+        }
+    }
+
+    /// Le battement de la surveillance (une fois par seconde au plus) : un
+    /// dossier ouvert qui change sur le disque est relu, un enregistrement
+    /// neuf apparait en haut. Rend vrai s'il faut redessiner.
+    pub fn watch(&mut self) -> bool {
+        let now = std::time::Instant::now();
+        if self
+            .watched
+            .is_some_and(|t| now.duration_since(t).as_millis() < 1000)
+        {
+            return false;
+        }
+        self.watched = Some(now);
+        let mut changed = false;
+        for id in self.tree.stale(64) {
+            self.reload(id);
+            changed = true;
+        }
+        // L'age des enregistrements (« 3 min ago ») avance d'une minute.
+        let minute = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_secs() / 60);
+        if minute != self.minute {
+            self.minute = minute;
+            if self
+                .tree
+                .recordings
+                .is_some_and(|r| self.tree.nodes[r].expanded)
+            {
+                changed = true;
+            }
+        }
+        if changed {
+            self.dirty = true;
+        }
+        changed
+    }
+
+    fn save_places(&self, h: &mut dyn Host) {
+        h.save("folders", &Places::folders_text(&self.tree.user_places()));
+    }
+
+    /// Ajoute un dossier (la boite de Windows) a ceux de Cedric.
+    pub fn add_folder(&mut self, h: &mut dyn Host) {
+        let start = self.selected_path().filter(|p| p.is_dir()).or_else(|| {
+            self.tree
+                .recordings
+                .map(|r| self.tree.nodes[r].path.clone())
+        });
+        let Some(p) = h.pick_folder(start.as_deref()) else {
+            return;
+        };
+        self.add_place(
+            h,
+            Place {
+                path: p,
+                title: None,
+            },
+        );
+    }
+
+    fn add_place(&mut self, h: &mut dyn Host, p: Place) {
+        let id = self.tree.add_place(&p);
+        self.save_places(h);
+        self.db = None; // une base ajoutee entre dans la recherche
+        self.rebuild();
+        self.sel = self.rows.iter().position(|&r| r == Row::Node(id));
+        self.status = format!("Added {}", p.path.display());
+    }
+
+    /// Les raccourcis de l'Explorateur de medias de REAPER, ajoutes aux
+    /// dossiers de Cedric (sans doublon).
+    pub fn import_reaper_shortcuts(&mut self, h: &mut dyn Host) {
+        let sc = h.reaper_shortcuts();
+        let before = self.tree.user_places().len();
+        for p in &sc {
+            self.tree.add_place(p);
+        }
+        let n = self.tree.user_places().len() - before;
+        self.save_places(h);
+        self.db = None;
+        self.rebuild();
+        self.status = format!("Imported {n} shortcuts from REAPER's Media Explorer");
     }
 
     /// Le gain : une loi cubique, 0 dB a 0,794, +6 dB au bout.
@@ -479,11 +627,12 @@ impl Browser {
         let btn = s(26.0);
         let pad = s(6.0);
         let vol_w = s(70.0);
+        let tw = self.theme_btn_w.unwrap_or(btn);
         let star_x = w - pad - btn;
         let vol_x = star_x - s(8.0) - vol_w;
-        let play_x = vol_x - s(8.0) - btn;
-        let loop_x = play_x - s(4.0) - btn;
-        let sync_x = loop_x - s(4.0) - btn;
+        let play_x = vol_x - s(8.0) - tw;
+        let loop_x = play_x - s(2.0) - tw;
+        let sync_x = loop_x - s(6.0) - btn;
         let view_x = sync_x - s(4.0) - btn;
         let search_x = pad;
         let search_w = (view_x - s(8.0) - search_x).max(s(40.0));
@@ -506,6 +655,8 @@ impl Browser {
             btn,
             loop_x,
             play_x,
+            loop_w: tw,
+            play_w: tw,
             vol_x,
             vol_w,
             star_x,
@@ -776,14 +927,22 @@ impl Browser {
         if self.db.is_some() || self.db_job.is_some() {
             return;
         }
-        let files: Vec<PathBuf> = self
-            .tree
-            .roots
-            .iter()
-            .filter(|&&r| self.tree.nodes[r].kind == Kind::Db)
-            .map(|&r| self.tree.nodes[r].path.clone())
-            .collect();
-        let _ = &self.mediadb_dir;
+        // Toutes les bases de REAPER (le dossier MediaDB), et celles que
+        // Cedric a ajoutees ailleurs.
+        let mut files: Vec<PathBuf> = std::fs::read_dir(&self.mediadb_dir)
+            .map(|rd| {
+                rd.flatten()
+                    .map(|e| e.path())
+                    .filter(|p| model::is_db(p))
+                    .collect()
+            })
+            .unwrap_or_default();
+        for &r in &self.tree.roots {
+            let n = &self.tree.nodes[r];
+            if n.kind == Kind::Db && !files.contains(&n.path) {
+                files.push(n.path.clone());
+            }
+        }
         self.db_job = std::thread::Builder::new()
             .name("cp_mediadb".into())
             .spawn(move || {
@@ -1095,6 +1254,9 @@ impl Browser {
             vk::RETURN => {
                 if let Some(r) = self.sel.and_then(|i| self.rows.get(i).copied()) {
                     match r {
+                        Row::Node(id) if self.tree.nodes[id].kind == Kind::Add => {
+                            self.add_folder(h)
+                        }
                         Row::Node(id) if self.tree.is_container(id) => self.toggle(id),
                         _ => self.insert_selected(h),
                     }
@@ -1211,7 +1373,11 @@ impl Browser {
     }
 
     fn btn_hit(&self, x: f32, y: f32, bx: f32) -> bool {
-        y < self.lay.bar_h && x >= bx && x < bx + self.lay.btn
+        self.btn_hit_w(x, y, bx, self.lay.btn)
+    }
+
+    fn btn_hit_w(&self, x: f32, y: f32, bx: f32, w: f32) -> bool {
+        y < self.lay.bar_h && x >= bx && x < bx + w
     }
 
     fn set_volume_x(&mut self, x: f32, h: &mut dyn Host) {
@@ -1337,10 +1503,10 @@ impl Browser {
                     let r = self.sync_rate(h).unwrap_or(1.0);
                     h.set_rate(self.voice, r);
                 }
-            } else if self.btn_hit(x, y, self.lay.loop_x) {
+            } else if self.btn_hit_w(x, y, self.lay.loop_x, self.lay.loop_w) {
                 self.looping = !self.looping;
                 h.save("loop", if self.looping { "1" } else { "0" });
-            } else if self.btn_hit(x, y, self.lay.play_x) {
+            } else if self.btn_hit_w(x, y, self.lay.play_x, self.lay.play_w) {
                 self.toggle_play(h);
             } else if self.btn_hit(x, y, self.lay.star_x) {
                 self.toggle_favorite(h);
@@ -1397,6 +1563,11 @@ impl Browser {
                 if let Some(i) = row {
                     let r = self.rows[i];
                     if let Row::Node(id) = r {
+                        if self.tree.nodes[id].kind == Kind::Add {
+                            self.sel = Some(i);
+                            self.add_folder(h);
+                            return;
+                        }
                         // Le chevron (ou un double-clic) ouvre et ferme.
                         let d = self.tree.nodes[id].depth as f32;
                         let chev_x1 = (8.0 + d * 14.0 + 16.0) * self.scale;
@@ -1437,9 +1608,9 @@ impl Browser {
             Button::Right => {
                 if let Some(i) = row {
                     self.sel = Some(i);
-                    self.context_menu(h, x, y);
+                    self.context_menu(h, x, y, true);
                 } else {
-                    self.window_menu(h, x, y);
+                    self.context_menu(h, x, y, false);
                 }
             }
             Button::Middle => {}
@@ -1542,14 +1713,26 @@ impl Browser {
         self.dirty = true;
     }
 
-    fn context_menu(&mut self, h: &mut dyn Host, x: f32, y: f32) {
-        let Some(r) = self.sel.and_then(|i| self.rows.get(i).copied()) else {
-            return;
+    fn context_menu(&mut self, h: &mut dyn Host, x: f32, y: f32, on_row: bool) {
+        let r = if on_row {
+            self.sel.and_then(|i| self.rows.get(i).copied())
+        } else {
+            None
         };
-        let path = self.row_path(r).map(Path::to_path_buf);
+        let path = r.and_then(|r| self.row_path(r)).map(Path::to_path_buf);
         let fav = path.as_ref().is_some_and(|p| self.is_favorite(p));
+        let node = match r {
+            Some(Row::Node(id)) => Some(id),
+            _ => None,
+        };
+        let user = node.is_some_and(|id| self.tree.nodes[id].user);
+        let folder = node.is_some_and(|id| {
+            matches!(self.tree.nodes[id].kind, Kind::Dir | Kind::Drive | Kind::Db)
+                && !self.tree.nodes[id].user
+                && Some(id) != self.tree.recordings
+        });
         let mut items = Vec::new();
-        if self.row_is_file(r) {
+        if r.is_some_and(|r| self.row_is_file(r)) {
             items.push(MenuEntry::new(1, "Insert into project\tEnter", false));
             items.push(MenuEntry::new(2, "Play\tSpace", false));
             items.push(MenuEntry::sep());
@@ -1557,7 +1740,26 @@ impl Browser {
         if path.is_some() {
             items.push(MenuEntry::new(3, "Favorite\tF", fav));
             items.push(MenuEntry::new(4, "Copy path\tCtrl+C", false));
+            items.push(MenuEntry::new(6, "Show in Explorer", false));
+            items.push(MenuEntry::sep());
         }
+        if folder {
+            items.push(MenuEntry::new(7, "Add to my folders", false));
+        }
+        if user {
+            items.push(MenuEntry::new(9, "Move up", false));
+            items.push(MenuEntry::new(10, "Move down", false));
+            items.push(MenuEntry::new(8, "Remove from my folders", false));
+        }
+        if folder || user {
+            items.push(MenuEntry::sep());
+        }
+        items.push(MenuEntry::new(11, "Add folder…", false));
+        items.push(MenuEntry::new(
+            12,
+            "Import REAPER Media Explorer shortcuts",
+            false,
+        ));
         items.push(MenuEntry::sep());
         items.push(MenuEntry::new(5, "Refresh\tF5", false));
         let win = h.window_items();
@@ -1579,6 +1781,39 @@ impl Browser {
                 }
             }
             5 => self.refresh(),
+            6 => {
+                if let Some(p) = path {
+                    h.show_in_explorer(&p);
+                }
+            }
+            7 => {
+                if let Some(p) = path {
+                    self.add_place(
+                        h,
+                        Place {
+                            path: p,
+                            title: None,
+                        },
+                    );
+                }
+            }
+            8 => {
+                if let Some(id) = node {
+                    self.tree.remove_place(id);
+                    self.save_places(h);
+                    self.db = None;
+                    self.rebuild();
+                }
+            }
+            m @ (9 | 10) => {
+                if let Some(id) = node {
+                    self.tree.move_place(id, if m == 9 { -1 } else { 1 });
+                    self.save_places(h);
+                    self.rebuild();
+                }
+            }
+            11 => self.add_folder(h),
+            12 => self.import_reaper_shortcuts(h),
             _ => {}
         }
         self.dirty = true;
@@ -1598,6 +1833,11 @@ impl Browser {
         }
         if self.tree.nodes[self.tree.favorites].expanded {
             s += "open_favorites\t1\n";
+        }
+        if let Some(r) = self.tree.recordings {
+            if !self.tree.nodes[r].expanded {
+                s += "rec_closed\t1\n";
+            }
         }
         if let Some(p) = self.selected_path() {
             s += &format!("sel\t{}\n", p.to_string_lossy());
@@ -1624,6 +1864,11 @@ impl Browser {
                 "open_favorites" => {
                     let f = self.tree.favorites;
                     self.tree.nodes[f].expanded = true;
+                }
+                "rec_closed" => {
+                    if let Some(r) = self.tree.recordings {
+                        self.tree.nodes[r].expanded = false;
+                    }
                 }
                 "sel" => sel = Some(PathBuf::from(v)),
                 "selrow" => selrow = v.parse().ok(),

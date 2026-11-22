@@ -2,16 +2,29 @@
 
 use cp_gfx::text::{Align, TextCache};
 use cp_gfx::{Canvas, Color, Pt, pt};
+use cp_theme::Frames;
 use cp_ui::{Icon, IconCache, Theme};
 
 use crate::model::{Kind, Meta};
 use crate::{Browser, Focus, Host, Row};
+
+/// Les boutons du theme de REAPER pour la barre : ceux de son transport, a
+/// leur taille (lecture, lecture allumee, boucle eteinte et allumee).
+#[derive(Clone, Debug, Default)]
+pub struct Skin {
+    pub play: Option<Frames>,
+    pub play_on: Option<Frames>,
+    pub repeat_off: Option<Frames>,
+    pub repeat_on: Option<Frames>,
+}
 
 /// Ce dont le dessin a besoin.
 pub struct Gfx<'a> {
     pub text: &'a mut TextCache,
     pub icons: &'a mut IconCache,
     pub th: &'a Theme,
+    /// Les boutons natifs ; `None` : les icones vectorielles.
+    pub skin: Option<&'a Skin>,
 }
 
 /// « 1:23.456 » ou « 4.250 s ».
@@ -107,7 +120,7 @@ impl Browser {
         let placeholder = if self.db_loading() {
             "Search (reading databases…)"
         } else {
-            "Search files and databases"
+            "Search"
         };
         self.search.draw(
             cv,
@@ -170,23 +183,57 @@ impl Browser {
         );
         let sync_tint = if self.sync { th.accent } else { th.text_dim };
         button(cv, g, l.sync_x, Icon::Music, self.sync, false, sync_tint);
-        let loop_tint = if self.looping { th.accent } else { th.text_dim };
-        button(
-            cv,
-            g,
-            l.loop_x,
-            Icon::Repeat,
-            self.looping,
-            false,
-            loop_tint,
-        );
         let playing = self.voice != 0;
-        let (pi, pt_) = if playing {
-            (Icon::Stop, th.text)
-        } else {
-            (Icon::Play, th.text_dim)
-        };
-        button(cv, g, l.play_x, pi, false, false, pt_);
+        // Les boutons du transport du theme, a leur taille ; a defaut, les
+        // icones vectorielles.
+        let frame =
+            |f: &Option<Frames>, on: &Option<Frames>, lit: bool| -> Option<cp_gfx::Surface> {
+                let f = if lit {
+                    on.as_ref().or(f.as_ref())
+                } else {
+                    f.as_ref()
+                };
+                f.and_then(|f| f.get(0)).cloned()
+            };
+        let skin = g.skin;
+        let loop_img = skin.and_then(|s| frame(&s.repeat_off, &s.repeat_on, self.looping));
+        let play_img = skin.and_then(|s| frame(&s.play, &s.play_on, playing));
+        match loop_img {
+            Some(img) => cv.draw_image(
+                &img,
+                l.loop_x,
+                ((l.bar_h - img.h as f32) * 0.5).floor(),
+                1.0,
+            ),
+            None => {
+                let loop_tint = if self.looping { th.accent } else { th.text_dim };
+                button(
+                    cv,
+                    g,
+                    l.loop_x,
+                    Icon::Repeat,
+                    self.looping,
+                    false,
+                    loop_tint,
+                );
+            }
+        }
+        match play_img {
+            Some(img) => cv.draw_image(
+                &img,
+                l.play_x,
+                ((l.bar_h - img.h as f32) * 0.5).floor(),
+                1.0,
+            ),
+            None => {
+                let (pi, pt_) = if playing {
+                    (Icon::Stop, th.text)
+                } else {
+                    (Icon::Play, th.text_dim)
+                };
+                button(cv, g, l.play_x, pi, false, false, pt_);
+            }
+        }
         // Le volume : une piste, le remplissage, la poignee.
         let vy = (l.bar_h * 0.5).round();
         let vh = th.s(4.0);
@@ -217,57 +264,45 @@ impl Browser {
         );
     }
 
-    fn row_icon(&self, r: Row) -> (Icon, Color, bool) {
+    fn row_icon(&self, r: Row, th: &Theme) -> (Icon, Color, bool) {
         match r {
-            Row::Hit(_) => (
-                Icon::FileMusic,
-                Color {
-                    a: 255,
-                    ..self.wave_color()
-                },
-                false,
-            ),
+            Row::Hit(_) => (Icon::FileMusic, Self::file_color(th), false),
             Row::Node(id) => {
                 let n = &self.tree.nodes[id];
+                let folder = if n.expanded {
+                    Icon::FolderOpen
+                } else {
+                    Icon::Folder
+                };
+                if Some(id) == self.tree.recordings {
+                    return (folder, th.accent, false);
+                }
                 match n.kind {
-                    Kind::Dir => (
-                        if n.expanded {
-                            Icon::FolderOpen
-                        } else {
-                            Icon::Folder
-                        },
-                        self.dir_color(),
-                        false,
-                    ),
-                    Kind::Drive => (Icon::HardDrive, self.dir_color(), false),
-                    Kind::Db => (Icon::Database, self.db_color(), false),
-                    Kind::File => (Icon::FileMusic, self.wave_color(), false),
-                    Kind::Favorites => (Icon::Star, cp_gfx::hex(0xF2C444), true),
-                    Kind::Section => (Icon::List, self.dir_color(), false),
-                    Kind::Collection(_) => (Icon::List, self.dir_color(), false),
-                    Kind::FxRoot | Kind::FxGroup => (
-                        if n.expanded {
-                            Icon::FolderOpen
-                        } else {
-                            Icon::Folder
-                        },
-                        cp_gfx::hex(0xB48CE0),
-                        false,
-                    ),
-                    Kind::Fx => (Icon::AudioLines, cp_gfx::hex(0xB48CE0), false),
+                    Kind::Dir => (folder, Self::dir_color(th), false),
+                    Kind::Drive => (Icon::HardDrive, Self::dir_color(th), false),
+                    Kind::Db => (Icon::Database, Self::db_color(th), false),
+                    Kind::File => (Icon::FileMusic, Self::file_color(th), false),
+                    Kind::Favorites => (Icon::Star, th.star, true),
+                    Kind::Section => (Icon::List, th.text_faint, false),
+                    Kind::Collection(_) => (Icon::List, Self::dir_color(th), false),
+                    Kind::FxRoot | Kind::FxGroup => (folder, th.text_dim, false),
+                    Kind::Fx => (Icon::AudioLines, th.text_dim, false),
+                    Kind::Add => (Icon::Plus, th.text_faint, false),
                 }
             }
         }
     }
 
-    fn dir_color(&self) -> Color {
-        cp_gfx::hex(0xC9A86A)
+    /// Les teintes des icones, prises dans le theme : un dossier tire vers
+    /// le jaune de la tete de lecture, une base et un fichier vers l'accent.
+    fn dir_color(th: &Theme) -> Color {
+        th.text_dim.mix(th.wave_sel, 0.3)
     }
-    fn db_color(&self) -> Color {
-        cp_gfx::hex(0x8FB3E0)
+    fn db_color(th: &Theme) -> Color {
+        th.text_dim.mix(th.accent, 0.55)
     }
-    fn wave_color(&self) -> Color {
-        cp_gfx::hex(0x7DB6E8)
+    fn file_color(th: &Theme) -> Color {
+        th.text_faint.mix(th.accent, 0.35)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -368,7 +403,7 @@ impl Browser {
             );
         }
         x += s(16.0);
-        let (icon, tint, filled) = self.row_icon(r);
+        let (icon, tint, filled) = self.row_icon(r, th);
         let isz = s(15.0);
         match r {
             Row::Node(id) if matches!(self.tree.nodes[id].kind, Kind::Collection(_)) => {
@@ -387,8 +422,29 @@ impl Browser {
         let right = match r {
             Row::Node(id) => {
                 let n = &self.tree.nodes[id];
-                if n.kind == Kind::File {
+                if n.kind == Kind::File && n.meta == Meta::default() && n.mtime.is_some() {
+                    // Un enregistrement : son age (« 3 min ago »).
+                    n.mtime
+                        .map(|t| crate::model::age(t, std::time::SystemTime::now()))
+                        .unwrap_or_default()
+                } else if n.kind == Kind::File {
                     fmt_meta(&n.meta)
+                } else if Some(id) == self.tree.recordings && n.error.is_none() {
+                    // Ou est-il : la fin du chemin.
+                    let p = n.path.to_string_lossy();
+                    let tail: String = p
+                        .chars()
+                        .rev()
+                        .take(34)
+                        .collect::<Vec<_>>()
+                        .into_iter()
+                        .rev()
+                        .collect();
+                    if tail.len() < p.len() {
+                        format!("…{tail}")
+                    } else {
+                        tail
+                    }
                 } else if let Some(e) = &n.error {
                     let _ = e;
                     "unavailable".into()
@@ -470,11 +526,7 @@ impl Browser {
                         1 => {
                             let mid = ty + thh * 0.5;
                             let half = thh * 0.5;
-                            let c = if sel {
-                                cp_gfx::rgb(200, 225, 255)
-                            } else {
-                                th.wave.fade(0.75)
-                            };
+                            let c = if sel { th.text } else { th.wave.fade(0.75) };
                             for k in 0..tw {
                                 let a = (mid - hi[k].clamp(-1.0, 1.0) * half).floor();
                                 let b = (mid - lo[k].clamp(-1.0, 1.0) * half).ceil();

@@ -20,7 +20,7 @@ pub use icons::{Icon, IconCache};
 pub use textfield::TextField;
 
 use cp_gfx::text::Font;
-use cp_gfx::{Color, hex};
+use cp_gfx::{Color, hex, rgb};
 
 /// Les boutons de la souris.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -98,6 +98,9 @@ pub mod vk {
     pub const F5: u32 = 0x74;
 }
 
+/// Une couleur (r, g, b).
+pub type Rgb = (u8, u8, u8);
+
 /// Couleurs, tailles, polices. `scale` = DPI / 96.
 #[derive(Clone, Debug)]
 pub struct Theme {
@@ -146,6 +149,41 @@ impl Theme {
             star: hex(0xF2C444),
             field: hex(0x16171A),
             error: hex(0xE06A5A),
+        }
+    }
+
+    /// Les couleurs du theme de REAPER : `color` lit une cle du theme
+    /// (`GetThemeColor`). Les listes prennent celles des listes de REAPER
+    /// (`genlist_*`), les barres celle du transport, l'accent celui des
+    /// boutons allumes ; ce que le theme ne dit pas garde la valeur sombre.
+    pub fn reaper(scale: f32, color: &dyn Fn(&str) -> Option<Rgb>) -> Theme {
+        let d = Theme::dark(scale);
+        let c = |k: &str, def: Color| color(k).map_or(def, |(r, g, b)| rgb(r, g, b));
+        let bg = c("genlist_bg", d.bg);
+        let text = c("genlist_fg", d.text);
+        let accent = c("col_toolbar_text_on", d.accent);
+        let play = c("playcursor_color", d.wave_sel);
+        Theme {
+            scale: d.scale,
+            bg,
+            bg_alt: bg.mix(text, 0.025),
+            panel: bg.mix(text, 0.07),
+            bar: c("col_main_bg2", d.bar),
+            seam: c("genlist_grid", d.seam),
+            text,
+            text_dim: c("col_main_text", d.text_dim),
+            text_faint: c("col_main_text2", d.text_faint),
+            accent,
+            sel: c("genlist_selbg", d.sel),
+            sel_dim: c("genlist_seliabg", d.sel_dim),
+            hover: bg.mix(text, 0.06),
+            wave: accent.mix(text, 0.25),
+            wave_sel: play,
+            section: bg.mix(play, 0.14),
+            playhead: play,
+            star: d.star,
+            field: c("col_main_editbk", d.field),
+            error: d.error,
         }
     }
 

@@ -22,7 +22,7 @@ use cp_abi::{
     PLACE_ARRANGE, PLACE_HELD, VIEW_DOCK, VIEW_FLOAT, VIEW_PLACED, WM_CP_ACCEL, WM_CP_FRAME,
 };
 use cp_browser::draw::Gfx;
-use cp_browser::model::{self, Shortcut};
+use cp_browser::model::{self, Places, Shortcut};
 use cp_browser::wave::ClipInfo;
 use cp_browser::{Browser, Focus, Host as BrowserHost, KeyUse, Loaded, MenuEntry, Redraw};
 use cp_gfx::text::{Align, TextCache};
@@ -262,6 +262,16 @@ impl BrowserHost for Adapter<'_> {
     fn add_fx(&mut self, name: &str) -> Result<(), String> {
         self.r.add_fx(name)
     }
+    fn pick_folder(&mut self, start: Option<&std::path::Path>) -> Option<PathBuf> {
+        cp_sys::folders::pick_folder(self.hwnd, start, "Add a folder to CP Browser")
+    }
+    fn show_in_explorer(&mut self, p: &std::path::Path) {
+        cp_sys::folders::show_in_explorer(p);
+    }
+    fn reaper_shortcuts(&mut self) -> Vec<model::Place> {
+        let (sc, mediadb) = read_shortcuts(&self.r);
+        Places::from_shortcuts(&sc, &mediadb, self.r.project_dir().as_deref())
+    }
     fn thumb(&mut self, path: &str, min: &mut [f32], max: &mut [f32]) -> i32 {
         self.host.audio_thumb(path, min, max)
     }
@@ -328,6 +338,10 @@ pub(crate) struct App {
     /// La place choisie pour le navigateur.
     place: Place,
     tp: tview::TPart,
+    /// Le navigateur habille du theme : ses boutons, et ce dont ils dependent
+    /// (fichier du theme, couleurs, echelle).
+    bskin: Option<cp_browser::draw::Skin>,
+    blook: Option<LookKey>,
     text: TextCache,
     /// La famille 2 du texte : la police du transport du theme.
     face: String,
@@ -349,7 +363,71 @@ fn read_shortcuts(r: &Reaper) -> (Vec<Shortcut>, PathBuf) {
     (model::read_shortcuts(&ini), res.join("MediaDB"))
 }
 
+/// Ce dont depend l'habillage du navigateur : le fichier du theme, ses
+/// couleurs, l'echelle (x 100).
+type LookKey = (Option<PathBuf>, Vec<Option<(u8, u8, u8)>>, i32);
+
+/// Les couleurs du theme que le navigateur lit (et qu'on surveille).
+const BROWSER_COLORS: [&str; 10] = [
+    "genlist_bg",
+    "genlist_fg",
+    "genlist_grid",
+    "genlist_selbg",
+    "genlist_seliabg",
+    "col_main_bg2",
+    "col_main_text",
+    "col_main_text2",
+    "col_main_editbk",
+    "col_toolbar_text_on",
+];
+
 impl App {
+    /// Habille le navigateur du theme de REAPER s'il a change : ses couleurs
+    /// (celles des listes de REAPER) et les boutons du transport du theme.
+    pub(crate) fn browser_look(&mut self) {
+        let Some(scale) = self.view.as_ref().map(|v| v.theme.scale) else {
+            return;
+        };
+        let r = self.r;
+        let key = (
+            r.theme_file(),
+            BROWSER_COLORS
+                .iter()
+                .map(|k| r.theme_color(k))
+                .collect::<Vec<_>>(),
+            (scale * 100.0).round() as i32,
+        );
+        if self.blook.as_ref() == Some(&key) {
+            return;
+        }
+        let tb = |t: &cp_theme::ThemeFiles, name: &str| {
+            let (img, s) = t.image(name, scale)?;
+            Some(cp_theme::Frames::split(&img, 3)?.rescaled(s, scale))
+        };
+        self.bskin = self
+            .theme_files(key.0.as_deref())
+            .map(|t| cp_browser::draw::Skin {
+                play: tb(t, "transport_play"),
+                play_on: tb(t, "transport_play_on"),
+                repeat_off: tb(t, "transport_repeat_off"),
+                repeat_on: tb(t, "transport_repeat_on"),
+            });
+        self.browser.theme_btn_w = self
+            .bskin
+            .as_ref()
+            .and_then(|s| s.play.as_ref().map(|f| f.w() as f32));
+        if let Some(v) = self.view.as_mut() {
+            v.theme = Theme::reaper(scale, &|k| r.theme_color(k));
+            let (w, h) = (self.browser.lay.w, self.browser.lay.h);
+            if w > 0.0 && h > 0.0 {
+                self.browser.layout(w, h, scale);
+            }
+        }
+        self.blook = Some(key);
+        self.browser.mark();
+        self.want_frames();
+    }
+
     fn ext(&self, key: &str) -> Option<String> {
         self.r.ext_get(SECTION, key)
     }
@@ -453,12 +531,14 @@ impl App {
             surf: Surface::default(),
             present: Vec::new(),
             shown: Vec::new(),
-            theme: Theme::dark(scale),
+            theme: Theme::reaper(scale, &|k| self.r.theme_color(k)),
             tracking: false,
             frames_on: false,
             closing: false,
             perf: Perf::default(),
         });
+        self.blook = None;
+        self.browser_look();
         self.render(true);
         // Ce qui a ete demande avant que la fenetre existe (les mesures, une
         // ecoute) reprend sa cadence.
@@ -611,7 +691,10 @@ impl App {
         }
         let scale = ui::dpi(v.hwnd) as f32 / 96.0;
         if (scale - v.theme.scale).abs() > 0.01 {
-            v.theme = Theme::dark(scale);
+            v.theme = Theme::reaper(scale, &|k| self.r.theme_color(k));
+            self.browser_look();
+            self.render(true);
+            return;
         }
         let resized = v.surf.resize(w, h);
         if resized || force || (self.browser.lay.w as i32 != w) || (self.browser.lay.h as i32 != h)
@@ -642,6 +725,7 @@ impl App {
                 text: &mut self.text,
                 icons: &mut self.icons,
                 th: theme,
+                skin: self.bskin.as_ref(),
             };
             let mut ad = Adapter {
                 host: self.host,
@@ -1041,8 +1125,13 @@ fn decode(st: &[u8]) -> Option<Saved> {
 impl Module for App {
     fn init(host: HostRef, state: &[u8]) -> Self {
         let r = host.reaper();
-        let (sc, mediadb) = read_shortcuts(&r);
-        let project = r.project_dir();
+        let (_, mediadb) = read_shortcuts(&r);
+        let places = Places {
+            recordings: r.record_path(),
+            folders: Places::parse_folders(
+                &r.ext_get(SECTION, "browser_folders").unwrap_or_default(),
+            ),
+        };
         let favs: Vec<PathBuf> = r
             .ext_get(SECTION, "browser_favorites")
             .unwrap_or_default()
@@ -1050,7 +1139,7 @@ impl Module for App {
             .filter(|s| !s.is_empty())
             .map(PathBuf::from)
             .collect();
-        let mut browser = Browser::new(&sc, &mediadb, project.as_deref(), favs);
+        let mut browser = Browser::new(places, &mediadb, favs);
         if let Some(v) = r
             .ext_get(SECTION, "browser_volume")
             .and_then(|v| v.parse().ok())
@@ -1140,6 +1229,8 @@ impl Module for App {
             view: None,
             place,
             tp,
+            bskin: None,
+            blook: None,
             text: TextCache::new(Box::new(GdiGlyphs::new(&["Segoe UI", "Consolas"]))),
             face: String::new(),
             icons: IconCache::default(),
@@ -1237,6 +1328,14 @@ impl Module for App {
             return;
         }
         self.with_browser(|b, h| b.tick(h));
+        // Un fichier enregistre apparait tout seul ; le dossier
+        // d'enregistrement suit le projet ; le theme suit REAPER.
+        self.browser.watch();
+        if self.ticks % 30 == 0 {
+            let rp = self.r.record_path();
+            self.browser.set_recordings(rp.as_deref());
+            self.browser_look();
+        }
         let shown = self.view.as_ref().is_some_and(|v| ui::is_shown(v.hwnd));
         if !shown {
             return;
