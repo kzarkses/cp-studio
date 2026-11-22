@@ -801,6 +801,10 @@ pub struct Arr {
     /// Le magnetisme de REAPER (noires -> noires), pose par le module ; sans
     /// lui, la double croche.
     pub snapper: Option<Box<dyn Fn(f64) -> f64 + Send>>,
+    /// La grille de REAPER, calculee au zoom de CETTE vue (prioritaire sur
+    /// `snapper`) : SnapToGrid prend celle de l'arrangement de REAPER, a SON
+    /// zoom (cache derriere Guitar Tab, il calait toutes les deux mesures).
+    pub grid: Option<SnapGrid>,
     pub sel: Option<Sel>,
     pub range: Option<(f64, f64)>,
     /// Ce qui se passe (« Transcribing 45 % »).
@@ -829,6 +833,29 @@ pub struct Arr {
     pub(crate) tracks_bottom: f32,
 }
 
+/// Le magnetisme de REAPER : sa division, s'il est allume, et l'ecart
+/// minimum entre deux lignes de magnetisme (`projgridsnapmin`, en px) au-dela
+/// duquel REAPER prend une grille deux fois plus large.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SnapGrid {
+    pub on: bool,
+    /// La division, en noires (la grille de REAPER en rondes x 4).
+    pub div_qn: f64,
+    pub min_px: f32,
+}
+
+impl SnapGrid {
+    /// Le pas effectif a `ppq` pixels par noire.
+    pub fn step(&self, ppq: f32) -> f64 {
+        let mut g = self.div_qn.max(1.0 / 64.0);
+        let min = self.min_px.max(1.0) as f64;
+        while g * (ppq as f64) < min && g < 4096.0 {
+            g *= 2.0;
+        }
+        g
+    }
+}
+
 pub use cp_ui::Guide;
 
 impl Default for Arr {
@@ -855,6 +882,7 @@ impl Arr {
             rec: Vec::new(),
             auto: false,
             snapper: None,
+            grid: None,
             sel: None,
             range: None,
             busy: None,
@@ -1865,6 +1893,13 @@ impl Arr {
 
     /// Le debut d'une prise glissee, cale par le magnetisme de REAPER.
     fn snap_item(&self, q: f64) -> f64 {
+        if let Some(g) = self.grid {
+            if !g.on {
+                return q;
+            }
+            let step = g.step(self.lay.ppq.max(1e-3));
+            return (q / step).round() * step;
+        }
         match &self.snapper {
             Some(f) => f(q),
             None => (q * 4.0).round() / 4.0,

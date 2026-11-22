@@ -44,6 +44,28 @@ impl Reaper {
         self.call0::<f64>(c"GetPlayPosition")
     }
 
+    /// La division de la grille du projet, en rondes (0.25 : la noire),
+    /// telle que la regle la fenetre « Grid » de REAPER.
+    pub fn project_grid(&self) -> Option<f64> {
+        type F = unsafe extern "C" fn(*mut c_void, bool, *mut f64, *mut i32, *mut f64) -> i32;
+        // SAFETY: int GetSetProjectGrid(ReaProject*, bool set, double*
+        // division, int* swingmode, double* swingamt) ; projet nul = courant,
+        // lecture seule (set = false), pointeurs optionnels nuls.
+        let f = unsafe { self.api::<F>(c"GetSetProjectGrid") }?;
+        let mut div = 0.0f64;
+        // SAFETY: voir ci-dessus ; `div` vit pendant l'appel.
+        unsafe {
+            f(
+                std::ptr::null_mut(),
+                false,
+                &mut div,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+            )
+        };
+        (div > 0.0).then_some(div)
+    }
+
     /// Le compteur de changements du projet : il bouge a chaque
     /// modification (et a chaque annulation). Tant qu'il ne bouge pas, rien
     /// n'est a relire.

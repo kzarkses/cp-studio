@@ -90,6 +90,19 @@ impl App {
                 .map_or(0.5, |m| cp_sys::theme::drawmode_alpha(m).0);
             cp_gfx::rgba(cr, cg, cb, (a * 255.0).round() as u8)
         });
+        // Le magnetisme de REAPER, a calculer au zoom de Guitar Tab : sa
+        // division, son bouton (1157), son ecart minimum en pixels.
+        let grid = cp_tabview::SnapGrid {
+            on: r.toggle_state(1157) == 1,
+            div_qn: r.project_grid().unwrap_or(0.0625) * 4.0,
+            min_px: r
+                .config_int("projgridsnapmin")
+                .filter(|&v| v > 0)
+                .unwrap_or(8) as f32,
+        };
+        if self.gt.arr.grid != Some(grid) {
+            self.gt.arr.grid = Some(grid);
+        }
         let g = Guide::from_reaper(g2, color);
         if self.gt.arr.guide != g {
             self.gt.arr.guide = g;

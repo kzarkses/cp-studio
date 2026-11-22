@@ -1248,3 +1248,31 @@ fn couches_et_ordre_des_guitares() {
     // Un simple clic sur l'en-tete : rien ne bouge.
     assert_eq!(click(&mut v, x0, y0), None);
 }
+
+/// Le magnetisme suit la grille de REAPER au zoom de CETTE vue : une
+/// double croche reste une double croche tant que ses lignes sont a 8 px ou
+/// plus ; en dessous, REAPER double le pas. (SnapToGrid prenait le zoom de
+/// l'arrangement de REAPER, cache : toutes les deux mesures.)
+#[test]
+fn le_magnetisme_suit_la_grille_a_notre_zoom() {
+    let g = SnapGrid {
+        on: true,
+        div_qn: 0.25,
+        min_px: 8.0,
+    };
+    assert_eq!(g.step(40.0), 0.25);
+    assert_eq!(g.step(20.0), 0.5);
+    assert_eq!(g.step(6.0), 2.0);
+    let mut b = Bench::new(1600, 900);
+    let mut v = arranger();
+    v.rec.clear();
+    v.zoom = 64.0;
+    v.grid = Some(g);
+    v.guide = cp_ui::Guide::from_reaper(0x71, None);
+    b.draw(&mut v);
+    let x = v.x_of(40.0 + 0.3);
+    assert!((v.cursor_q(x, Mods::default()) - 40.25).abs() < 1e-9);
+    // Magnetisme coupe dans REAPER : la ou est la souris.
+    v.grid = Some(SnapGrid { on: false, ..g });
+    assert!((v.cursor_q(x, Mods::default()) - v.qn_of(x)).abs() < 1e-9);
+}
