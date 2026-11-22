@@ -23,6 +23,12 @@ pub struct QnNote {
 
 type GetStr = unsafe extern "C" fn(P, *const c_char, *mut c_char, bool) -> bool;
 
+thread_local! {
+    /// GUID d'item -> son pointeur, verifie a chaque usage (fil principal).
+    static ITEMS: std::cell::RefCell<std::collections::HashMap<String, usize>> =
+        std::cell::RefCell::new(std::collections::HashMap::new());
+}
+
 impl Reaper {
     fn f<F: Copy>(&self, name: &CStr) -> Option<F> {
         // SAFETY: les appelants nomment une fonction du SDK avec sa signature.
@@ -33,7 +39,8 @@ impl Reaper {
     fn item_str(&self, item: P, key: &str, set: Option<&str>) -> Option<String> {
         let gs: GetStr = self.f(c"GetSetMediaItemInfo_String")?;
         let k = CString::new(key).ok()?;
-        let mut buf = vec![0u8; 8192];
+        // Un GUID tient en 39 octets ; le reste (P_EXT, noms) en 8 Ko.
+        let mut buf = vec![0u8; if key == "GUID" { 64 } else { 8192 }];
         if let Some(v) = set {
             let c = CString::new(v.replace('\0', " ")).ok()?;
             let b = c.as_bytes_with_nul();
@@ -68,18 +75,47 @@ impl Reaper {
     fn item_of(&self, guid: &str) -> Option<P> {
         type Count = unsafe extern "C" fn(P) -> i32;
         type Get = unsafe extern "C" fn(P, i32) -> P;
+        type Valid = unsafe extern "C" fn(P, P, *const c_char) -> bool;
+        // Le dernier pointeur connu de ce GUID, s'il est toujours un item du
+        // projet et toujours le sien (REAPER reutilise les adresses) : la
+        // recherche coutait un parcours de tout le projet a chaque appel.
+        let known = ITEMS.with(|m| m.borrow().get(guid).copied());
+        if let (Some(p), Some(valid)) = (known, self.f::<Valid>(c"ValidatePtr2")) {
+            let it = p as P;
+            // SAFETY: projet nul = courant ; ValidatePtr2 accepte tout pointeur.
+            if unsafe { valid(null_mut(), it, c"MediaItem*".as_ptr()) }
+                && self.item_str(it, "GUID", None).as_deref() == Some(guid)
+            {
+                return Some(it);
+            }
+        }
         let count: Count = self.f(c"CountMediaItems")?;
         let get: Get = self.f(c"GetMediaItem")?;
         // SAFETY: projet nul = courant.
         let n = unsafe { count(null_mut()) };
-        for i in 0..n {
-            // SAFETY: indice dans les bornes rendues par REAPER.
-            let it = unsafe { get(null_mut(), i) };
-            if !it.is_null() && self.item_str(it, "GUID", None).as_deref() == Some(guid) {
-                return Some(it);
+        let mut found = None;
+        ITEMS.with(|m| {
+            let mut m = m.borrow_mut();
+            if m.len() > 4096 {
+                m.clear();
             }
-        }
-        None
+            for i in 0..n {
+                // SAFETY: indice dans les bornes rendues par REAPER.
+                let it = unsafe { get(null_mut(), i) };
+                if it.is_null() {
+                    continue;
+                }
+                if let Some(g) = self.item_str(it, "GUID", None) {
+                    if g == guid {
+                        found = Some(it);
+                    }
+                    // Au passage, tous les items du projet (le prochain
+                    // appel, pour un autre, est direct).
+                    m.insert(g, it as usize);
+                }
+            }
+        });
+        found
     }
 
     pub fn item_exists(&self, guid: &str) -> bool {

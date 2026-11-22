@@ -44,6 +44,19 @@ impl Reaper {
         self.call0::<f64>(c"GetPlayPosition")
     }
 
+    /// Le compteur de changements du projet : il bouge a chaque
+    /// modification (et a chaque annulation). Tant qu'il ne bouge pas, rien
+    /// n'est a relire.
+    pub fn state_count(&self) -> i32 {
+        type F = unsafe extern "C" fn(*mut c_void) -> i32;
+        // SAFETY: int GetProjectStateChangeCount(ReaProject*), nul = courant.
+        match unsafe { self.api::<F>(c"GetProjectStateChangeCount") } {
+            // SAFETY: fil principal.
+            Some(f) => unsafe { f(std::ptr::null_mut()) },
+            None => -1,
+        }
+    }
+
     pub fn cursor_position(&self) -> f64 {
         self.call0::<f64>(c"GetCursorPosition")
     }

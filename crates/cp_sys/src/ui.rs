@@ -58,6 +58,7 @@ unsafe extern "system" {
     fn LoadCursorW(inst: Raw, name: *const u16) -> Raw;
     fn TrackMouseEvent(t: *mut TrackMouseEvent) -> i32;
     fn GetKeyState(vk: i32) -> i16;
+    fn GetAsyncKeyState(vk: i32) -> i16;
     fn GetKeyboardState(state: *mut u8) -> i32;
     fn ToUnicode(vk: u32, scan: u32, state: *const u8, buf: *mut u16, n: i32, flags: u32) -> i32;
     fn SetFocus(h: Raw) -> Raw;
@@ -152,11 +153,17 @@ pub fn present(
             continue;
         }
         let (cw, ch) = (x1 - x0, y1 - y0);
-        scratch.clear();
-        for y in y0..y1 {
-            let row = (y * w) as usize;
-            scratch.extend_from_slice(&px[row + x0 as usize..row + x1 as usize]);
-        }
+        // Des lignes entieres sont deja contigues : pas de copie.
+        let data: &[u32] = if x0 == 0 && x1 == w {
+            &px[(y0 * w) as usize..(y1 * w) as usize]
+        } else {
+            scratch.clear();
+            for y in y0..y1 {
+                let row = (y * w) as usize;
+                scratch.extend_from_slice(&px[row + x0 as usize..row + x1 as usize]);
+            }
+            scratch
+        };
         let bmi = BitmapInfoHeader {
             size: size_of::<BitmapInfoHeader>() as u32,
             width: cw,
@@ -170,7 +177,7 @@ pub fn present(
             clr_used: 0,
             clr_important: 0,
         };
-        // SAFETY: `scratch` tient cw * ch pixels de 32 bits, decrits par `bmi`.
+        // SAFETY: `data` tient cw * ch pixels de 32 bits, decrits par `bmi`.
         unsafe {
             SetDIBitsToDevice(
                 dc,
@@ -182,7 +189,7 @@ pub fn present(
                 0,
                 0,
                 ch as u32,
-                scratch.as_ptr() as *const c_void,
+                data.as_ptr() as *const c_void,
                 &bmi,
                 0,
             );
@@ -497,6 +504,14 @@ pub fn mods() -> Mods {
         alt: down(0x12),
         win: down(0x5B) || down(0x5C),
     }
+}
+
+/// Un bouton de la souris est tenu, ou qu'elle soit (un geste en cours dans
+/// REAPER : on n'ecrit rien sous ses doigts).
+pub fn mouse_held() -> bool {
+    // SAFETY: aucune precondition.
+    let down = |vk: i32| unsafe { GetAsyncKeyState(vk) } < 0;
+    down(0x01) || down(0x02) || down(0x04)
 }
 
 /// Le texte que produirait la touche `vk` (clavier courant, AZERTY compris),
