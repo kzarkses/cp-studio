@@ -623,6 +623,21 @@ impl Reaper {
         Some(unsafe { g(tr, fx, param, &mut lo, &mut hi) })
     }
 
+    /// Recharge un effet (hors ligne puis en ligne, ses reglages gardes) :
+    /// un JSFX dont le fichier a change est recompile.
+    pub fn track_fx_reload(&self, guid: &str, fx: i32) -> bool {
+        type Off = unsafe extern "C" fn(P, i32, bool);
+        match (self.track_of(guid), self.tf::<Off>(c"TrackFX_SetOffline")) {
+            // SAFETY: piste vivante, effet a son rang.
+            (Some(tr), Some(f)) => unsafe {
+                f(tr, fx, true);
+                f(tr, fx, false);
+                true
+            },
+            _ => false,
+        }
+    }
+
     pub fn set_track_fx_param(&self, guid: &str, fx: i32, param: i32, v: f64) -> bool {
         type Set = unsafe extern "C" fn(P, i32, i32, f64) -> bool;
         match (self.track_of(guid), self.tf::<Set>(c"TrackFX_SetParam")) {

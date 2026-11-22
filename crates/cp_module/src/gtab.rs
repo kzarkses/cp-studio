@@ -757,25 +757,56 @@ impl App {
     // -----------------------------------------------------------------------
 
     /// Installe le synthe dans `Effects/CP_Studio/` (une fois par session, et
-    /// s'il a change).
-    fn gtab_install_synth(&mut self) {
+    /// s'il a change). Rend vrai si le fichier vient d'etre reecrit.
+    fn gtab_install_synth(&mut self) -> bool {
         if self.gt.synth_ok {
-            return;
+            return false;
         }
         let Some(res) = self.r.resource_path() else {
-            return;
+            return false;
         };
         let dir = res.join("Effects").join("CP_Studio");
         let p = dir.join(SYNTH_FILE);
+        let mut wrote = false;
         if std::fs::read_to_string(&p).ok().as_deref() != Some(SYNTH_SRC) {
             let _ = std::fs::create_dir_all(&dir);
             if std::fs::write(&p, SYNTH_SRC).is_err() {
                 self.host
                     .warn("Guitar Tab : le synthe n'a pas pu etre installe");
-                return;
+                return false;
             }
+            wrote = true;
         }
         self.gt.synth_ok = true;
+        wrote
+    }
+
+    /// Le synthe a change (une nouvelle version du module) : son fichier est
+    /// reecrit, et chaque piste tab le recharge (REAPER ne recompile pas un
+    /// JSFX dont le fichier change).
+    fn gtab_refresh_synth(&mut self) {
+        if self.gt.synth_ok || !self.gtab_install_synth() {
+            return;
+        }
+        let r = self.r;
+        let mut n = 0;
+        let tabs: Vec<String> = self
+            .gt
+            .arr
+            .tracks
+            .iter()
+            .filter_map(|t| t.head.tab_guid.clone())
+            .collect();
+        for g in tabs {
+            if let Some(fx) = r.track_fx_find(&g, SYNTH_NAME) {
+                if r.track_fx_reload(&g, fx) {
+                    n += 1;
+                }
+            }
+        }
+        self.host.info(&format!(
+            "Guitar Tab : synthe mis a jour, recharge sur {n} piste(s) tab"
+        ));
     }
 
     /// La piste tab d'une guitare (sa piste audio `a`) : la cree si elle
@@ -2728,6 +2759,11 @@ impl App {
             return;
         }
         self.gtab_next_job();
+        // Une nouvelle version du synthe : installee et rechargee sur les
+        // pistes tab (une fois les guitares lues).
+        if !self.gt.synth_ok && !self.gt.arr.tracks.is_empty() {
+            self.gtab_refresh_synth();
+        }
         let r = self.r;
         let ps = r.play_state();
         let playing = ps & (play::PLAYING | play::RECORDING) != 0;
