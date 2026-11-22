@@ -30,7 +30,7 @@ impl Bench {
     fn draw(&mut self, t: &mut Transport) {
         let (w, h) = (self.s.w as f32, self.s.h as f32);
         let mut cv = Canvas::new(&mut self.s, &mut self.k);
-        t.draw(&mut cv, &mut self.t, &mut self.icons, &self.th, w, h);
+        t.draw(&mut cv, &mut self.t, &mut self.icons, &self.th, None, w, h);
     }
 
     fn shot(&mut self, t: &mut Transport, name: &str) {
@@ -316,4 +316,154 @@ fn arrete_et_en_enregistrement() {
     b.shot(&mut t, "narrow");
     assert!(t.rect_of(Hit::View(1)).is_some());
     let _ = rgba(0, 0, 0, 0);
+}
+
+/// Le transport habille du theme COURANT de la machine (lance a la main :
+/// `--ignored`), a 100 % et 200 %, dans tous ses etats : planches
+/// `cp_transport_skin_*.png`.
+#[test]
+#[ignore]
+fn habille_du_vrai_theme() {
+    let res = std::path::PathBuf::from(std::env::var("APPDATA").unwrap()).join("REAPER");
+    let ini = std::fs::read_to_string(res.join("reaper.ini")).unwrap_or_default();
+    let path = ini
+        .lines()
+        .find_map(|l| l.strip_prefix("lastthemefn5="))
+        .unwrap()
+        .trim()
+        .to_string();
+    let theme = cp_theme::ThemeFiles::open(std::path::Path::new(&path)).expect("theme");
+    let face = theme
+        .font_face("trans_font")
+        .unwrap_or_else(|| "Segoe UI".into());
+    let icons_dir = res.join("Data").join("toolbar_icons");
+    let tools = cp_theme::ThemeFiles::dir(&icons_dir);
+    for scale in [1.0f32, 2.0] {
+        let sk = Skin::build(&theme, scale, &|k| theme.color(k), 2, 1);
+        let w = (1500.0 * scale) as i32;
+        let h = (36.0 * scale) as i32;
+        let mut b = Bench::new(w, h * 3);
+        b.th = Theme::dark(scale);
+        b.t = TextCache::new(Box::new(GdiGlyphs::new(&["Segoe UI", "Consolas", &face])));
+        let mut t = Transport::new();
+        let gs = theme
+            .image("toolbar_misc_guitar", scale)
+            .or_else(|| tools.image("toolbar_misc_guitar", scale))
+            .map(|(i, s)| cp_theme::Frames::toolbar(&i).rescaled(s, scale));
+        let ai = tools
+            .image(
+                "AI_Function_Sample_View_Show_SampleTrack_Waveform_DF",
+                scale,
+            )
+            .map(|(i, s)| cp_theme::Frames::toolbar(&i).rescaled(s, scale));
+        t.items = vec![
+            Item {
+                id: "a".into(),
+                name: "Global Sampler".into(),
+                glyph: ai.map_or(Glyph::Text("GS".into()), Glyph::Frames),
+                on: false,
+                open: false,
+            },
+            Item {
+                id: "b".into(),
+                name: "Guitar Tab".into(),
+                glyph: gs.map_or(Glyph::Icon(Icon::Guitar), Glyph::Frames),
+                on: false,
+                open: false,
+            },
+            Item {
+                id: "c".into(),
+                name: "Lucide".into(),
+                glyph: Glyph::Icon(Icon::Guitar),
+                on: false,
+                open: false,
+            },
+            Item {
+                id: "d".into(),
+                name: "Some Script".into(),
+                glyph: Glyph::Text("SS".into()),
+                on: false,
+                open: false,
+            },
+        ];
+        t.views = vec![
+            ViewTab {
+                name: "Arrange".into(),
+                active: true,
+                open: false,
+            },
+            ViewTab {
+                name: "Browser".into(),
+                active: false,
+                open: true,
+            },
+        ];
+        // Trois bandes : a l'arret ; en lecture (boucle, metronome, survol) ;
+        // en enregistrement, pause, vitesse changee, icone allumee.
+        let mut full = Surface::new(w, h * 3);
+        for band in 0..3 {
+            let mut st = Status {
+                beats: "2.1.00".into(),
+                time: "0:02.142".into(),
+                bpm: 112.0,
+                ..Status::default()
+            };
+            match band {
+                1 => {
+                    st.play = PLAYING;
+                    st.repeat = true;
+                    st.metronome = true;
+                }
+                2 => {
+                    st.play = RECORDING | PLAYING | PAUSED;
+                    st.rate = 1.25;
+                    t.items[1].on = true;
+                }
+                _ => {}
+            }
+            t.set_status(st);
+            let mut s = Surface::new(w, h);
+            {
+                let mut k = Scratch::default();
+                let mut cv = Canvas::new(&mut s, &mut k);
+                t.draw(
+                    &mut cv,
+                    &mut b.t,
+                    &mut b.icons,
+                    &b.th,
+                    Some(&sk),
+                    w as f32,
+                    h as f32,
+                );
+            }
+            if band == 1 {
+                let (x, y) = center(&t, Hit::Item(0));
+                t.event(&Ev::Move {
+                    x,
+                    y,
+                    mods: Mods::default(),
+                });
+                let mut k = Scratch::default();
+                let mut cv = Canvas::new(&mut s, &mut k);
+                t.draw(
+                    &mut cv,
+                    &mut b.t,
+                    &mut b.icons,
+                    &b.th,
+                    Some(&sk),
+                    w as f32,
+                    h as f32,
+                );
+            }
+            for y in 0..h {
+                let o = ((band * h + y) * w) as usize;
+                full.px[o..o + w as usize]
+                    .copy_from_slice(&s.px[(y * w) as usize..((y + 1) * w) as usize]);
+            }
+        }
+        let p =
+            std::env::temp_dir().join(format!("cp_transport_skin_{}.png", (scale * 100.0) as i32));
+        std::fs::write(&p, png::encode(&full)).unwrap();
+        println!("{}", p.display());
+    }
 }

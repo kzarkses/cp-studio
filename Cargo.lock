@@ -70,6 +70,7 @@ dependencies = [
  "cp_gfx",
  "cp_sys",
  "cp_tab",
+ "cp_theme",
  "cp_transport",
  "cp_ui",
 ]
@@ -95,11 +96,20 @@ name = "cp_tab"
 version = "0.1.0"
 
 [[package]]
+name = "cp_theme"
+version = "0.1.0"
+dependencies = [
+ "cp_gfx",
+ "cp_sys",
+]
+
+[[package]]
 name = "cp_transport"
 version = "0.1.0"
 dependencies = [
  "cp_gfx",
  "cp_sys",
+ "cp_theme",
  "cp_ui",
 ]
 

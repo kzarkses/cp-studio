@@ -5,11 +5,14 @@
 use std::path::PathBuf;
 
 use cp_abi::{PLACE_ARRANGE, PLACE_HELD, PLACE_TRANSPORT, PLACE_YIELDED, VIEW_PLACED};
+use cp_gfx::text::TextCache;
 use cp_gfx::{Canvas, Surface};
+use cp_sys::font::GdiGlyphs;
 use cp_sys::transport::{fmt, play};
 use cp_sys::ui::{self, MenuItem};
 use cp_sys::win::{self, Hwnd, WinMsg};
-use cp_transport::{Act, Glyph, Item, Status, ViewTab, fit_icon, fmt_bpm, initials};
+use cp_theme::{Frames, ThemeFiles};
+use cp_transport::{Act, Glyph, Item, Skin, Status, ViewTab, fmt_bpm, initials};
 use cp_ui::{Button, Ev, Theme};
 
 use crate::items::{self, ItemCfg};
@@ -64,11 +67,20 @@ pub(crate) struct TPart {
     shown: Vec<(usize, i32)>,
     /// Une session de la liste des actions est ouverte (« Add action »).
     pub prompt: bool,
-    icons_dir: PathBuf,
     scripts_dir: PathBuf,
     data_file: Option<PathBuf>,
     kb: std::collections::HashMap<String, String>,
-    images: std::collections::HashMap<String, Option<Surface>>,
+    /// Les icones deja lues, par nom et echelle.
+    images: std::collections::HashMap<String, Option<Frames>>,
+    /// Le theme de REAPER (ses images), et `Data/toolbar_icons`.
+    theme: Option<ThemeFiles>,
+    tools: ThemeFiles,
+    /// L'habillage du transport, et ce dont il depend (theme, echelle,
+    /// couleurs) : refait quand l'un change.
+    pub skin: Option<Skin>,
+    skin_key: Option<SkinKey>,
+    skin_id: u32,
+    since_theme: u32,
     /// Battements depuis la derniere relecture des icones.
     since_items: u32,
     /// L'infobulle, et la cible survolee depuis quand.
@@ -88,11 +100,16 @@ impl TPart {
             cfg: Vec::new(),
             shown: Vec::new(),
             prompt: false,
-            icons_dir: res.join("Data").join("toolbar_icons"),
             scripts_dir: res.join("Scripts"),
             data_file: Some(res.join("CP_Studio").join("transport_items.txt")),
             kb: items::kb_scripts(&kb),
             images: Default::default(),
+            theme: None,
+            tools: ThemeFiles::dir(&res.join("Data").join("toolbar_icons")),
+            skin: None,
+            skin_key: None,
+            skin_id: 0,
+            since_theme: 0,
             since_items: 0,
             tip: None,
             hover: (cp_transport::Hit::None, std::time::Instant::now()),
@@ -100,7 +117,101 @@ impl TPart {
     }
 }
 
+/// Les couleurs du theme que l'habillage lit (et qu'on surveille).
+const SKIN_COLORS: [&str; 5] = [
+    "col_main_bg2",
+    "col_toolbar_text",
+    "col_main_text2",
+    "col_toolbar_text_on",
+    "col_transport_editbk",
+];
+
+#[derive(Clone, Debug, PartialEq)]
+struct SkinKey {
+    path: Option<PathBuf>,
+    scale: i32,
+    colors: Vec<Option<(u8, u8, u8)>>,
+}
+
 impl App {
+    // -----------------------------------------------------------------------
+    // L'habillage : le theme de REAPER
+    // -----------------------------------------------------------------------
+
+    /// Relit le theme si REAPER en a change (fichier, couleurs) ou si
+    /// l'echelle de l'ecran a change ; rend vrai s'il a ete refait.
+    pub(crate) fn transport_skin(&mut self) -> bool {
+        let scale = self.tp.view.as_ref().map_or(1.0, |v| v.theme.scale);
+        let r = self.r;
+        let key = SkinKey {
+            path: r.theme_file(),
+            scale: (scale * 100.0).round() as i32,
+            colors: SKIN_COLORS.iter().map(|k| r.theme_color(k)).collect(),
+        };
+        if self.tp.skin_key.as_ref() == Some(&key) {
+            return false;
+        }
+        let path_changed = self.tp.skin_key.as_ref().map(|k| &k.path) != Some(&key.path);
+        if path_changed || self.tp.theme.is_none() {
+            self.tp.theme = key.path.as_deref().and_then(ThemeFiles::open);
+        }
+        self.tp.skin_id += 1;
+        self.tp.images.clear();
+        let face = self
+            .tp
+            .theme
+            .as_ref()
+            .and_then(|t| t.font_face("trans_font"))
+            .unwrap_or_else(|| "Segoe UI".into());
+        if face != self.face {
+            // La police du transport du theme : famille 2 du texte.
+            self.face = face;
+            self.text = TextCache::new(Box::new(GdiGlyphs::new(&[
+                "Segoe UI", "Consolas", &self.face,
+            ])));
+        }
+        let id = self.tp.skin_id;
+        self.tp.skin = self.tp.theme.as_ref().map(|t| {
+            Skin::build(
+                t,
+                scale,
+                &|k| r.theme_color(k).or_else(|| t.color(k)),
+                2,
+                id,
+            )
+        });
+        let name = key
+            .path
+            .as_ref()
+            .and_then(|p| p.file_stem())
+            .map_or_else(|| "(aucun)".into(), |s| s.to_string_lossy().into_owned());
+        let line = match &self.tp.skin {
+            Some(sk) => format!(
+                "CP Transport : habille du theme \u{ab} {name} \u{bb} a {} % (boutons {}, metronome {}, police {})",
+                key.scale,
+                if sk.play_off.is_some() {
+                    "du theme"
+                } else {
+                    "vectoriels"
+                },
+                if sk.metro_off.is_some() {
+                    "du theme"
+                } else {
+                    "vectoriel"
+                },
+                self.face
+            ),
+            None => {
+                format!("CP Transport : theme \u{ab} {name} \u{bb} illisible, icones vectorielles")
+            }
+        };
+        self.host.info(&line);
+        self.tp.skin_key = Some(key);
+        self.refresh_items();
+        self.tp.t.mark();
+        true
+    }
+
     // -----------------------------------------------------------------------
     // Ouvrir, fermer
     // -----------------------------------------------------------------------
@@ -150,6 +261,8 @@ impl App {
             frames_on: false,
         });
         self.load_items();
+        self.tp.skin_key = None;
+        self.transport_skin();
         self.refresh_items();
         let st = self.read_status();
         self.tp.t.set_status(st);
@@ -233,7 +346,8 @@ impl App {
             .filter(|s| !s.is_empty())
             .map(String::from)
             .collect();
-        if items::seed_tools(&mut cfg, &mut seeded) {
+        let migrated = items::migrate(&mut cfg);
+        if items::seed_tools(&mut cfg, &mut seeded) || migrated {
             self.tp.cfg = cfg;
             self.save_items();
         } else {
@@ -280,20 +394,41 @@ impl App {
         c
     }
 
-    fn image(&mut self, file: &str, size: i32) -> Option<Surface> {
-        let key = format!("{file}@{size}");
+    /// Une icone de barre d'outils, comme REAPER la trouve : dans le theme
+    /// courant d'abord, puis dans `Data/toolbar_icons` ; a l'echelle de
+    /// l'ecran (`150/`, `200/`), ses etats separes, jamais reduite a la main.
+    fn image(&mut self, file: &str, scale: f32) -> Option<Frames> {
+        let key = format!("{file}@{scale}");
         if let Some(v) = self.tp.images.get(&key) {
             return v.clone();
         }
-        let img = cp_sys::image::load(&self.tp.icons_dir.join(file)).map(|s| fit_icon(&s, size));
-        self.tp.images.insert(key, img.clone());
-        img
+        let found = self
+            .tp
+            .theme
+            .as_ref()
+            .and_then(|t| t.image(file, scale))
+            .or_else(|| self.tp.tools.image(file, scale))
+            .map(|(img, s)| Frames::toolbar(&img).rescaled(s, scale));
+        self.tp.images.insert(key, found.clone());
+        found
+    }
+
+    /// Ce que montre une icone : `png:`, `lucide:`, ou des initiales.
+    fn glyph(&mut self, icon: &str, name: &str, scale: f32) -> Option<Glyph> {
+        if let Some(f) = icon.strip_prefix("png:") {
+            self.image(f, scale).map(Glyph::Frames)
+        } else if let Some(n) = icon.strip_prefix("lucide:") {
+            items::lucide(n).map(Glyph::Icon)
+        } else if icon.is_empty() {
+            Some(Glyph::Text(initials(name)))
+        } else {
+            None
+        }
     }
 
     /// Les icones montrees : celles dont l'action existe, avec leur etat.
     pub(crate) fn refresh_items(&mut self) {
         let scale = self.tp.view.as_ref().map_or(1.0, |v| v.theme.scale);
-        let isz = (24.0 * scale).round() as i32;
         let mut shown = Vec::new();
         let mut out = Vec::new();
         let cfg = self.tp.cfg.clone();
@@ -303,16 +438,12 @@ impl App {
                 continue;
             }
             let name = self.r.command_text(cmd);
-            let glyph = if let Some(f) = c.icon.strip_prefix("png:") {
-                match self.image(f, isz) {
-                    Some(img) => Glyph::Image(img),
-                    None => Glyph::Text(initials(&name)),
-                }
-            } else if let Some(n) = c.icon.strip_prefix("lucide:") {
-                items::lucide(n).map_or_else(|| Glyph::Text(initials(&name)), Glyph::Icon)
-            } else {
-                Glyph::Text(initials(&name))
-            };
+            // L'icone choisie, sinon celle de secours d'un outil, sinon des
+            // initiales.
+            let glyph = self
+                .glyph(&c.icon, &name, scale)
+                .or_else(|| items::fallback(&c.id).and_then(|f| self.glyph(f, &name, scale)))
+                .unwrap_or_else(|| Glyph::Text(initials(&name)));
             // Nos propres actions se lisent ici : demander leur etat a REAPER
             // repasserait par le module, occupe a ce battement (il rendrait
             // « pas d'etat »).
@@ -375,6 +506,11 @@ impl App {
                     self.refresh_items();
                 }
             }
+        }
+        self.tp.since_theme += 1;
+        if self.tp.since_theme >= 30 {
+            self.tp.since_theme = 0;
+            self.transport_skin();
         }
         self.tp.since_items += 1;
         if self.tp.since_items >= 10 {
@@ -466,6 +602,9 @@ impl App {
         let scale = ui::dpi(v.hwnd) as f32 / 96.0;
         if (scale - v.theme.scale).abs() > 0.01 {
             v.theme = Theme::dark(scale);
+            self.transport_skin();
+            self.transport_render(true);
+            return;
         }
         let resized = v.surf.resize(w, h);
         let dirty = self.tp.t.take_dirty();
@@ -479,6 +618,7 @@ impl App {
                 &mut self.text,
                 &mut self.icons,
                 &v.theme,
+                self.tp.skin.as_ref(),
                 w as f32,
                 h as f32,
             );
@@ -514,7 +654,12 @@ impl App {
             Act::SetRate { rate, .. } => r.set_play_rate(rate),
             Act::Item(i) => {
                 if let Some(&(_, c)) = self.tp.shown.get(i) {
-                    r.main_on_command(c);
+                    // Nos propres actions se lancent ici : par REAPER, elles
+                    // repasseraient par le module, occupe a ce message, et le
+                    // chargeur les jetterait (BUSY). Guitar Tab ne partait pas.
+                    if !cp_sys::module::Module::on_action(self, c) {
+                        r.main_on_command(c);
+                    }
                 }
             }
             Act::ItemMenu { i, x, y } => self.item_menu(i, x, y),

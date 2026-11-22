@@ -33,7 +33,8 @@ est fait, tout ce qui reste, dans l'ordre, avec un critere de fin par etape).
 | `cp_ui` | le toolkit : theme, evenements, icones Lucide (SVG), champ de saisie, defilement |
 | `cp_browser` | le navigateur de fichiers (jalon 1), sans Windows : il se teste avec le vrai moteur et se dessine en PNG |
 | `cp_tab` | CP Guitar Tab : Basic Pitch (reseau, poids Apache-2.0 dans `src/bp_weights.bin`, voir NOTICE), decodage des notes, reechantillonnage, doigte, MusicXML ; teste contre onnxruntime (`tools/make_fixture.py`) |
-| `cp_transport` | CP Transport, la barre qui remplace le transport de REAPER (transport, compteur, tempo, icones d'actions, selecteur de vues), sans Windows : chaque geste rend une `Act` |
+| `cp_transport` | CP Transport, la barre qui remplace le transport de REAPER (transport, compteur, tempo, icones d'actions, selecteur de vues), sans Windows : chaque geste rend une `Act` ; habille du theme de REAPER par un `Skin` |
+| `cp_theme` | Le theme de REAPER lu tel quel, sans Windows : zip, DEFLATE, PNG (identique a WIC sur 3473 icones), images a bord rose (`Nine`), vignettes d'etats (`Frames`), images par echelle (`150/`, `200/`) |
 | `cp_hot` | le rechargement a chaud : surveiller, copier, charger, passer l'etat |
 | `cp_loader` | `reaper_cp_studio.dll`, la petite DLL FIXE que REAPER charge au demarrage |
 | `cp_module` | `cp_module.dll`, tout le code de CP Studio, recharge a chaud |
@@ -141,7 +142,14 @@ refuse. Changer le moteur = reinstaller le chargeur, REAPER ferme.
   une autre extension avorte a la sortie, meme sans la notre ; xtask l'arrete.)
 - `cp_browser` : ses tests ecrivent des PNG (`%TEMP%\cp_browser_*.png`) :
   les REGARDER apres un changement de dessin. Idem `cp_transport`
-  (`%TEMP%\cp_transport_*.png`).
+  (`%TEMP%\cp_transport_*.png`) ; `cargo test -p cp_transport -- --ignored`
+  l'habille du theme COURANT de la machine (`cp_transport_skin_*.png`).
+- `cp_theme` : un faux theme dont on connait chaque pixel
+  (`tests/fixtures/theme.zip`, `tools/make_fixture.py`) ; `--ignored` compare
+  notre PNG a WIC sur `Data/toolbar_icons` et decode tout le theme courant.
+- Les icones de CP Studio dans REAPER : les images NATIVES d'abord (theme
+  courant, puis `Data/toolbar_icons`), a leur taille et a l'echelle de l'ecran,
+  jamais reduites a la main (c'est ce qui floutait). Lucide seulement a defaut.
 - `cp_tab` : le reseau contre le VRAI modele (onnxruntime) a 1e-4 pres, les
   notes d'un signal connu, le reechantillonnage (hauteur, amplitude, pas de
   repliement), le doigte, les mesures du MusicXML. Regenerer la reference :

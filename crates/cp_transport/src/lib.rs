@@ -23,10 +23,14 @@
 
 use cp_gfx::text::{Align, Font, TextCache};
 use cp_gfx::{Canvas, Color, Surface, hex};
+use cp_theme::Frames;
 use cp_ui::{Button, Ev, Icon, IconCache, Mods, Theme};
 
+mod skin;
 #[cfg(test)]
 mod tests;
+
+pub use skin::{Skin, face_color};
 
 /// Les bits de lecture (ceux de `GetPlayState`).
 pub const PLAYING: i32 = 1;
@@ -66,6 +70,9 @@ impl Default for Status {
 /// Ce qu'une icone montre.
 #[derive(Clone, Debug)]
 pub enum Glyph {
+    /// Une icone de barre d'outils de REAPER et ses etats (normale, survol,
+    /// allumee), a sa taille d'origine : dessinee telle quelle.
+    Frames(Frames),
     /// Une image (une icone de barre d'outils de REAPER), deja a la taille.
     Image(Surface),
     Icon(Icon),
@@ -195,6 +202,8 @@ pub struct Transport {
     pressed: Hit,
     drag: Option<Drag>,
     dirty: bool,
+    /// Les images du theme deja etirees (voir `skin.rs`).
+    stretch: Vec<((u32, u8, i32, i32), Surface)>,
 }
 
 impl Default for Transport {
@@ -312,6 +321,7 @@ impl Transport {
             pressed: Hit::None,
             drag: None,
             dirty: true,
+            stretch: Vec::new(),
         }
     }
 
@@ -566,16 +576,23 @@ impl Transport {
     }
 
     /// Dessine toute la barre (`w x h` px) et retient ou sont les cibles.
+    /// Avec un [`Skin`], les images et couleurs du theme de REAPER ; sans,
+    /// les icones vectorielles de CP Studio.
     pub fn draw(
         &mut self,
         cv: &mut Canvas<'_>,
         text: &mut TextCache,
         icons: &mut IconCache,
         th: &Theme,
+        skin: Option<&Skin>,
         w: f32,
         h: f32,
     ) {
         self.boxes.clear();
+        if let Some(sk) = skin {
+            self.draw_skin(cv, text, icons, th, sk, w, h);
+            return;
+        }
         cv.fill_rect(0.0, 0.0, w, h, th.bar);
         cv.fill_rect(0.0, h - 1.0, w, 1.0, th.seam);
         let pad = th.s(4.0);
@@ -838,6 +855,13 @@ impl Transport {
             let ix = x + ((bw - isz2 as f32) * 0.5).round();
             let iy = by + ((bh - isz2 as f32) * 0.5).round();
             match &it.glyph {
+                Glyph::Frames(f) => {
+                    if let Some(img) = f.get(if it.on { 2 } else { 0 }) {
+                        let ox = x + ((bw - img.w as f32) * 0.5).round();
+                        let oy = by + ((bh - img.h as f32) * 0.5).round();
+                        cv.draw_image(img, ox, oy, 1.0);
+                    }
+                }
                 Glyph::Image(img) => {
                     let ox = x + ((bw - img.w as f32) * 0.5).round();
                     let oy = by + ((bh - img.h as f32) * 0.5).round();

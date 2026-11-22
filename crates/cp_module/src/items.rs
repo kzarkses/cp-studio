@@ -2,8 +2,9 @@
 //! `<ressources REAPER>/CP_Studio/transport_items.txt`, une par ligne :
 //! `identifiant<TAB>icone`. L'identifiant est celui que REAPER garde stable
 //! (« _RS... » pour un script, « _CPSTUDIO_... » pour les notres, un numero
-//! pour une action native). L'icone : `png:<fichier de Data/toolbar_icons>`,
-//! `lucide:<Nom>`, ou rien (des initiales).
+//! pour une action native). L'icone : `png:<fichier>` (cherche dans le theme
+//! courant, puis dans `Data/toolbar_icons`, comme REAPER le fait pour ses
+//! barres d'outils), `lucide:<Nom>`, ou rien (des initiales).
 //!
 //! Les outils de CP Studio s'y ajoutent d'eux-memes, UNE fois : si Cedric en
 //! retire un, il ne revient pas (la liste des deja-ajoutes est gardee a cote).
@@ -18,8 +19,34 @@ pub struct ItemCfg {
     pub icon: String,
 }
 
-/// Les outils de CP Studio a poser dans la barre : (action, icone).
-pub const TOOLS: [(&str, &str); 1] = [("_CPSTUDIO_GUITARTAB", "lucide:Guitar")];
+/// Les outils de CP Studio a poser dans la barre : (action, icone, icone de
+/// secours si le theme et `Data/toolbar_icons` n'ont pas la premiere). Les
+/// icones natives d'abord : elles ont la finesse et les couleurs du theme.
+pub const TOOLS: [(&str, &str, &str); 1] = [(
+    "_CPSTUDIO_GUITARTAB",
+    "png:toolbar_misc_guitar.png",
+    "lucide:Guitar",
+)];
+
+/// L'icone de secours d'un outil de CP Studio.
+pub fn fallback(id: &str) -> Option<&'static str> {
+    TOOLS.iter().find(|t| t.0 == id).map(|t| t.2)
+}
+
+/// Les outils poses avec leur ancienne icone par defaut (vectorielle)
+/// prennent l'icone native. Rend vrai si la liste a change.
+pub fn migrate(items: &mut [ItemCfg]) -> bool {
+    let mut changed = false;
+    for c in items.iter_mut() {
+        if let Some(t) = TOOLS.iter().find(|t| t.0 == c.id) {
+            if c.icon == t.2 {
+                c.icon = t.1.to_string();
+                changed = true;
+            }
+        }
+    }
+    changed
+}
 
 pub fn parse(text: &str) -> Vec<ItemCfg> {
     text.lines()
@@ -47,7 +74,7 @@ pub fn serialize(items: &[ItemCfg]) -> String {
 /// Ajoute les outils pas encore poses. Rend vrai si la liste a change.
 pub fn seed_tools(items: &mut Vec<ItemCfg>, seeded: &mut Vec<String>) -> bool {
     let mut changed = false;
-    for (id, icon) in TOOLS {
+    for (id, icon, _) in TOOLS {
         if seeded.iter().any(|s| s == id) {
             continue;
         }
@@ -152,6 +179,25 @@ mod tests {
         items.clear();
         assert!(!seed_tools(&mut items, &mut seeded));
         assert!(items.is_empty());
+    }
+
+    #[test]
+    fn l_ancienne_icone_vectorielle_devient_native() {
+        let mut v = vec![
+            ItemCfg {
+                id: "_CPSTUDIO_GUITARTAB".into(),
+                icon: "lucide:Guitar".into(),
+            },
+            ItemCfg {
+                id: "_RSabc".into(),
+                icon: "lucide:Guitar".into(),
+            },
+        ];
+        assert!(migrate(&mut v));
+        assert_eq!(v[0].icon, "png:toolbar_misc_guitar.png");
+        assert_eq!(v[1].icon, "lucide:Guitar"); // pas un outil : intact
+        assert!(!migrate(&mut v));
+        assert_eq!(fallback("_CPSTUDIO_GUITARTAB"), Some("lucide:Guitar"));
     }
 
     #[test]

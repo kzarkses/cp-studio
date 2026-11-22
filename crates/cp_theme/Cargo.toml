@@ -1,0 +1,16 @@
+[package]
+name = "cp_theme"
+description = "Le theme de REAPER lu tel quel : zip, PNG, images a bord rose et vignettes d'etats (sans Windows)"
+edition.workspace = true
+version.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+cp_gfx = { path = "../cp_gfx" }
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+cp_sys = { path = "../cp_sys" }

@@ -329,6 +329,8 @@ pub(crate) struct App {
     place: Place,
     tp: tview::TPart,
     text: TextCache,
+    /// La famille 2 du texte : la police du transport du theme.
+    face: String,
     icons: IconCache,
     scratch: Scratch,
     action: Option<u32>,
@@ -1139,6 +1141,7 @@ impl Module for App {
             place,
             tp,
             text: TextCache::new(Box::new(GdiGlyphs::new(&["Segoe UI", "Consolas"]))),
+            face: String::new(),
             icons: IconCache::default(),
             scratch: Scratch::default(),
             action: None,
