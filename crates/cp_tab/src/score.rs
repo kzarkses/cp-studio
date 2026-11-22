@@ -171,6 +171,19 @@ pub fn write_musicxml(notes: &[TNote], spec: &ScoreSpec, dropped: usize) -> (Str
             for sg in eng.signs.iter().filter(|s| s.measure == m) {
                 let ev = &eng.events[sg.ev];
                 let d = sg.dur;
+                // Un triolet : trois dans le temps de deux, et son crochet.
+                let tmod = if sg.tuplet == 3 {
+                    "<time-modification><actual-notes>3</actual-notes><normal-notes>2</normal-notes></time-modification>"
+                } else {
+                    ""
+                };
+                let mut tup = String::new();
+                if sg.tup_start {
+                    tup += "<tuplet type=\"start\" bracket=\"yes\"/>";
+                }
+                if sg.tup_stop {
+                    tup += "<tuplet type=\"stop\"/>";
+                }
                 if ev.notes.is_empty() {
                     let _ = write!(
                         x,
@@ -180,7 +193,12 @@ pub fn write_musicxml(notes: &[TNote], spec: &ScoreSpec, dropped: usize) -> (Str
                     for _ in 0..sg.dots {
                         x += "<dot/>";
                     }
-                    let _ = writeln!(x, "<staff>{staff}</staff></note>");
+                    x += tmod;
+                    let _ = write!(x, "<staff>{staff}</staff>");
+                    if !tup.is_empty() {
+                        let _ = write!(x, "<notations>{tup}</notations>");
+                    }
+                    x += "</note>\n";
                     continue;
                 }
                 let tag = |t: Tech| match t {
@@ -208,8 +226,12 @@ pub fn write_musicxml(notes: &[TNote], spec: &ScoreSpec, dropped: usize) -> (Str
                     for _ in 0..sg.dots {
                         x += "<dot/>";
                     }
+                    x += tmod;
                     let _ = write!(x, "<staff>{staff}</staff>");
                     let mut nots = String::new();
+                    if ci == 0 {
+                        nots += &tup;
+                    }
                     if sg.tie_in {
                         nots += "<tied type=\"stop\"/>";
                     }

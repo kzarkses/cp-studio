@@ -707,3 +707,101 @@ fn une_glisse_reste_sur_sa_corde() {
     assert_eq!(tab[0].string, tab[1].string, "{tab:?}");
     assert_eq!(tab[1].tech, Tech::Slide);
 }
+
+/// Des notes simples sur la corde de Sol (doigtees a la main).
+fn tri_note(q: f64, len: f64, fret: i32) -> TNote {
+    TNote {
+        qn0: q,
+        qn1: q + len,
+        pitch: 55 + fret,
+        string: 3,
+        fret,
+        vel: 90,
+        ..Default::default()
+    }
+}
+
+#[test]
+fn les_triolets_se_reconnaissent_et_s_ecrivent() {
+    let third = 1.0 / 3.0;
+    let mut tab = vec![
+        // Temps 1 : trois croches de triolet (un peu en avance, en retard).
+        tri_note(0.01, third, 0),
+        tri_note(third - 0.02, third, 2),
+        tri_note(2.0 * third + 0.015, third, 4),
+        // Temps 2 : deux croches droites.
+        tri_note(1.0, 0.5, 5),
+        tri_note(1.5, 0.5, 7),
+        // Temps 3 : le shuffle, une noire de triolet puis une croche.
+        tri_note(2.0, 2.0 * third, 5),
+        tri_note(2.0 + 2.0 * third, third, 7),
+        // Temps 4 : quatre doubles croches.
+        tri_note(3.0, 0.25, 0),
+        tri_note(3.25, 0.25, 2),
+        tri_note(3.5, 0.25, 4),
+        tri_note(3.75, 0.25, 5),
+    ];
+    doc::sort(&mut tab);
+    let e = engrave(&tab, 0.0, (4, 4), 4);
+    assert_eq!(e.triplets.iter().copied().collect::<Vec<_>>(), vec![0, 2]);
+    assert_eq!(e.grid, 12);
+    assert_eq!(e.measures, 1);
+    let sum: i64 = e.signs.iter().map(|s| s.dur).sum();
+    assert_eq!(sum, e.mlen);
+    let beat = |b: i64| -> Vec<(&str, u8, bool, bool)> {
+        e.signs
+            .iter()
+            .filter(|s| s.start / 12 == b)
+            .map(|s| (s.ty, s.tuplet, s.tup_start, s.tup_stop))
+            .collect()
+    };
+    assert_eq!(
+        beat(0),
+        vec![
+            ("eighth", 3, true, false),
+            ("eighth", 3, false, false),
+            ("eighth", 3, false, true)
+        ]
+    );
+    assert_eq!(beat(1), vec![("eighth", 0, false, false); 2]);
+    assert_eq!(
+        beat(2),
+        vec![("quarter", 3, true, false), ("eighth", 3, false, true)]
+    );
+    assert_eq!(beat(3), vec![("16th", 0, false, false); 4]);
+    // Le MusicXML porte le 3 : sept signes de triolet, deux crochets.
+    let spec = ScoreSpec {
+        title: "t".into(),
+        origin_qn: 0.0,
+        sig: (4, 4),
+        bpm: 100.0,
+        grid: 4,
+        tuning: Tuning::standard(),
+    };
+    let (x, _) = crate::score::write_musicxml(&tab, &spec, 0);
+    assert_eq!(x.matches("<actual-notes>3</actual-notes>").count(), 2 * 5);
+    assert_eq!(x.matches("<tuplet type=\"start\"").count(), 2 * 2);
+    assert!(x.contains("<divisions>12</divisions>"));
+}
+
+#[test]
+fn des_doubles_croches_jouees_ne_deviennent_pas_des_triolets() {
+    // Le jeu d'un humain : +-25 ms a 100 BPM (0,04 noire).
+    let jit = [0.03, -0.035, 0.02, -0.04, 0.0, 0.04, -0.02, 0.035];
+    let mut tab = Vec::new();
+    for b in 0..8 {
+        for k in 0..4 {
+            let q = b as f64 + k as f64 * 0.25 + jit[(b * 4 + k) % 8];
+            tab.push(tri_note(q.max(0.0), 0.2, (k * 2) as i32));
+        }
+    }
+    // Et des croches simples, et des noires pointees.
+    tab.push(tri_note(8.0, 0.5, 0));
+    tab.push(tri_note(8.52, 0.5, 2));
+    tab.push(tri_note(9.0, 1.5, 0));
+    tab.push(tri_note(10.5, 0.5, 2));
+    doc::sort(&mut tab);
+    let e = engrave(&tab, 0.0, (4, 4), 4);
+    assert!(e.triplets.is_empty(), "{:?}", e.triplets);
+    assert_eq!(e.grid, 4);
+}

@@ -10,8 +10,12 @@
 //!   l'accord dure jusqu'au suivant au plus.
 //! - Les MESURES : une note qui deborde est coupee et liee ; une duree qui ne
 //!   s'ecrit pas d'un seul signe (5 doubles croches) devient deux signes lies.
+//! - Les TRIOLETS : chaque temps (une noire) choisit entre la grille droite
+//!   et des triolets de croches, selon ce qui explique le mieux ses attaques
+//!   jouees. Un temps en triolets se coupe a ses bords ; ses signes portent
+//!   le 3 (crochet, `<time-modification>` du MusicXML).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::doc::{TNote, Tech};
 
@@ -47,11 +51,18 @@ pub struct Sign {
     /// porte la liaison d'arrivee (ou de depart).
     pub first: bool,
     pub last: bool,
+    /// 3 : un signe de triolet (trois dans le temps de deux) ; 0 sinon.
+    pub tuplet: u8,
+    /// Le premier et le dernier signe de son temps en triolets : le crochet
+    /// et son 3 vont de l'un a l'autre.
+    pub tup_start: bool,
+    pub tup_stop: bool,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Engraved {
-    /// Cases par noire, et par mesure.
+    /// Cases par noire, et par mesure. Avec des triolets, la grille est
+    /// assez fine pour les deux (la grille droite fois 3, ou moins).
     pub grid: i64,
     pub mlen: i64,
     pub measures: i64,
@@ -65,6 +76,8 @@ pub struct Engraved {
     pub notes: usize,
     pub chords: usize,
     pub legato: usize,
+    /// Les temps en triolets (rang de la noire depuis l'origine).
+    pub triplets: BTreeSet<i64>,
 }
 
 impl Engraved {
@@ -118,15 +131,83 @@ pub fn split_dur(d: i64, table: &[(i64, &'static str, u8)]) -> Vec<(i64, &'stati
     out
 }
 
+/// Le temps (rang de la noire) d'un instant `t` (noires depuis l'origine) :
+/// une attaque un peu avant le temps lui appartient (la moitie d'une case
+/// de la grille droite).
+fn beat_of(t: f64, g: i64) -> i64 {
+    (t + 0.5 / g as f64).floor() as i64
+}
+
+/// Les temps joues en triolets : ceux dont les attaques s'expliquent bien
+/// mieux par trois croches par noire que par la grille droite (`g` cases
+/// par noire). Il en faut deux distinctes, dont une hors du temps.
+pub fn triplet_beats(notes: &[TNote], origin_qn: f64, g: i64) -> BTreeSet<i64> {
+    let g = g.max(1);
+    let mut out = BTreeSet::new();
+    // Une grille droite qui contient deja les triolets (g multiple de 3) :
+    // rien a choisir.
+    if g % 3 == 0 {
+        return out;
+    }
+    let mut by: BTreeMap<i64, Vec<f64>> = BTreeMap::new();
+    for n in notes {
+        let t = n.qn0 - origin_qn;
+        if t < -0.5 / g as f64 {
+            continue;
+        }
+        let b = beat_of(t, g);
+        by.entry(b).or_default().push(t - b as f64);
+    }
+    for (b, mut ph) in by {
+        ph.sort_by(f64::total_cmp);
+        // Les notes d'un accord comptent une fois.
+        ph.dedup_by(|a, b| (*a - *b).abs() < 0.04);
+        if ph.len() < 2 {
+            continue;
+        }
+        let err = |k: f64| -> f64 {
+            ph.iter()
+                .map(|&p| {
+                    let d = p - (p * k).round() / k;
+                    d * d
+                })
+                .sum()
+        };
+        let (es, et) = (err(g as f64), err(3.0));
+        let off = ph.iter().any(|&p| {
+            let r = (p * 3.0).round();
+            (r == 1.0 || r == 2.0) && (p * 3.0 - r).abs() < 0.25
+        });
+        if off && et < es * 0.35 {
+            out.insert(b);
+        }
+    }
+    out
+}
+
 /// Met la tablature en partition. Les notes avant `origin_qn` sont ignorees.
 pub fn engrave(notes: &[TNote], origin_qn: f64, sig: (i32, i32), grid: u32) -> Engraved {
-    let g = grid.max(1) as i64;
-    let gf = g as f64;
+    let g0 = grid.max(1) as i64;
+    let trip = triplet_beats(notes, origin_qn, g0);
+    // La grille fine : la droite, et les triolets s'il y en a.
+    let g = if trip.is_empty() {
+        g0
+    } else {
+        g0 * 3 / gcd(g0, 3)
+    };
+    // Un instant sur la grille de son temps : droite ou en triolets ; et
+    // le pas de cette grille.
+    let cell = |t: f64| -> (i64, i64) {
+        let b = beat_of(t, g0);
+        let k = if trip.contains(&b) { 3 } else { g0 };
+        let c = ((t - b as f64) * k as f64).round() as i64;
+        (b * g + c * (g / k), g / k)
+    };
     // 1. Le rythme, sur la grille.
     let mut groups: BTreeMap<i64, Vec<(usize, i64)>> = BTreeMap::new();
     for (i, n) in notes.iter().enumerate() {
-        let s = ((n.qn0 - origin_qn) * gf).round() as i64;
-        let e = (((n.qn1 - origin_qn) * gf).round() as i64).max(s + 1);
+        let (s, step) = cell(n.qn0 - origin_qn);
+        let e = cell(n.qn1 - origin_qn).0.max(s + step);
         if s < 0 {
             continue;
         }
@@ -138,6 +219,7 @@ pub fn engrave(notes: &[TNote], origin_qn: f64, sig: (i32, i32), grid: u32) -> E
         mlen: (sig.0.max(1) as i64 * g * 4 / sig.1.max(1) as i64).max(1),
         origin_qn,
         sig,
+        triplets: trip.clone(),
         ..Engraved::default()
     };
     // 2. Les evenements de la voix.
@@ -202,8 +284,11 @@ pub fn engrave(notes: &[TNote], origin_qn: f64, sig: (i32, i32), grid: u32) -> E
         });
     }
     eng.measures = nmeas;
-    // 4. Les signes.
+    // 4. Les signes. Un temps en triolets coupe ce qui le traverse a ses
+    // bords, et s'ecrit en croches (ou noires) de triolet.
     let table = notatable(g);
+    let ttable: Vec<(i64, &'static str, u8)> =
+        vec![(2 * g / 3, "quarter", 0), (g / 3, "eighth", 0)];
     for m in 0..nmeas {
         let (m0, m1) = (m * mlen, (m + 1) * mlen);
         for (ei, ev) in eng.events.iter().enumerate() {
@@ -211,10 +296,35 @@ pub fn engrave(notes: &[TNote], origin_qn: f64, sig: (i32, i32), grid: u32) -> E
             if b <= a {
                 continue;
             }
-            let parts = split_dur(b - a, &table);
+            // Les morceaux : coupes aux bords des temps en triolets.
+            let mut cuts = vec![a, b];
+            for &tb in trip.range(a.div_euclid(g)..=b.div_euclid(g)) {
+                for c in [tb * g, (tb + 1) * g] {
+                    if c > a && c < b {
+                        cuts.push(c);
+                    }
+                }
+            }
+            cuts.sort_unstable();
+            cuts.dedup();
+            let mut parts: Vec<(i64, &'static str, u8, u8)> = Vec::new();
+            for w in cuts.windows(2) {
+                let (ca, cb) = (w[0], w[1]);
+                let in_trip = trip.contains(&ca.div_euclid(g)) && cb - ca < g;
+                let (tab, k) = if in_trip { (&ttable, 3) } else { (&table, 0) };
+                let mut sp = split_dur(cb - ca, tab);
+                // Un temps en triolets coupe par une barre au milieu (7/8) :
+                // la grille droite.
+                let (sp, k) = if sp.iter().map(|x| x.0).sum::<i64>() == cb - ca {
+                    (std::mem::take(&mut sp), k)
+                } else {
+                    (split_dur(cb - ca, &table), 0)
+                };
+                parts.extend(sp.into_iter().map(|(d, t, dots)| (d, t, dots, k)));
+            }
             let n = parts.len();
             let mut at = a;
-            for (pi, (d, ty, dots)) in parts.into_iter().enumerate() {
+            for (pi, (d, ty, dots, tuplet)) in parts.into_iter().enumerate() {
                 eng.signs.push(Sign {
                     measure: m,
                     start: at,
@@ -226,10 +336,34 @@ pub fn engrave(notes: &[TNote], origin_qn: f64, sig: (i32, i32), grid: u32) -> E
                     tie_out: pi + 1 < n || b < ev.start + ev.dur,
                     first: pi == 0 && a == ev.start,
                     last: pi + 1 == n && b == ev.start + ev.dur,
+                    tuplet,
+                    tup_start: false,
+                    tup_stop: false,
                 });
                 at += d;
             }
         }
     }
+    // Le premier et le dernier signe de chaque temps en triolets.
+    let mut by_beat: BTreeMap<i64, Vec<usize>> = BTreeMap::new();
+    for (si, sg) in eng.signs.iter().enumerate() {
+        if sg.tuplet == 3 {
+            by_beat.entry(sg.start.div_euclid(g)).or_default().push(si);
+        }
+    }
+    for v in by_beat.values() {
+        if let (Some(&f), Some(&l)) = (v.first(), v.last()) {
+            eng.signs[f].tup_start = true;
+            eng.signs[l].tup_stop = true;
+        }
+    }
     eng
+}
+
+fn gcd(a: i64, b: i64) -> i64 {
+    if b == 0 {
+        a.abs().max(1)
+    } else {
+        gcd(b, a % b)
+    }
 }

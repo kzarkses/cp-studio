@@ -2926,6 +2926,46 @@ pub(crate) fn draw_score(
             }
         }
     }
+    // Les triolets : le 3 du cote des hampes, et un crochet quand le temps
+    // n'est pas une seule ligature.
+    let f3 = Font::new(0, (gap * 1.45) as u16, 700);
+    for (si, sg) in eng.signs.iter().enumerate() {
+        if !sg.tup_start {
+            continue;
+        }
+        let Some(sj) = (si..eng.signs.len()).find(|&k| eng.signs[k].tup_stop) else {
+            continue;
+        };
+        let run = si..=sj;
+        let (xa, xb) = (hx(eng.signs[si].start), hx(eng.signs[sj].start));
+        if !geo.visible(xa) && !geo.visible(xb) {
+            continue;
+        }
+        let stems: Vec<(bool, f32)> = run.clone().filter_map(|k| stem[k]).collect();
+        let up = stems.first().is_none_or(|s| s.0);
+        let y = if up {
+            stems.iter().map(|s| s.1).fold(y_of(10), f32::min) - gap * 0.9
+        } else {
+            stems.iter().map(|s| s.1).fold(y_of(-2), f32::max) + gap * 0.9
+        };
+        let one_beam = beam_group[si].is_some()
+            && run.clone().all(|k| beam_group[k] == beam_group[si])
+            && beam_group[si].is_some_and(|g| groups[g].len() == sj - si + 1);
+        let label = "3";
+        let w3 = text.measure(f3, label);
+        let xm = (xa + xb) * 0.5 + if up { rx } else { 0.0 };
+        let base = if up { y } else { y + gap * 1.2 };
+        if !one_beam {
+            let (x0, x1) = (xa - rx, xb + rx);
+            let yb = if up { y - gap * 0.5 } else { y + gap * 0.5 };
+            let hook = if up { gap * 0.5 } else { -gap * 0.5 };
+            cv.line(x0, yb + hook, x0, yb, lw, ink);
+            cv.line(x0, yb, xm - w3 * 0.5 - s(2.0), yb, lw, ink);
+            cv.line(xm + w3 * 0.5 + s(2.0), yb, x1, yb, lw, ink);
+            cv.line(x1, yb, x1, yb + hook, lw, ink);
+        }
+        text.draw(cv, f3, xm - w3 * 0.5, base, label, ink);
+    }
     // Les fantomes : une tete creuse en pointilles.
     if it.detect.ghosts {
         let g = eng.grid.max(1) as f64;

@@ -2007,3 +2007,49 @@ fn une_guitare_entiere_s_exporte() {
     }
     assert!(print::whole_track(&none).is_none());
 }
+
+/// Un temps de triolets, un shuffle, des croches et des doubles croches :
+/// la partition porte ses 3 (sur la ligature, ou avec un crochet).
+#[test]
+fn les_triolets_se_dessinent() {
+    use cp_tab::doc::TNote;
+    let mut b = Bench::new(1600, 900);
+    let mut v = arranger();
+    v.rec.clear();
+    let q0 = v.tracks[0].items[0].qn0;
+    let note = |q: f64, len: f64, fret: i32| TNote {
+        qn0: q0 + q,
+        qn1: q0 + q + len,
+        pitch: 55 + fret,
+        string: 3,
+        fret,
+        vel: 96,
+        ..Default::default()
+    };
+    let t = 1.0 / 3.0;
+    let mut d = vec![
+        note(0.0, t, 0),
+        note(t, t, 2),
+        note(2.0 * t, t, 4),
+        note(1.0, 0.5, 5),
+        note(1.5, 0.5, 7),
+        note(2.0, 2.0 * t, 5),
+        note(2.0 + 2.0 * t, t, 7),
+        note(3.0, 0.25, 0),
+        note(3.25, 0.25, 2),
+        note(3.5, 0.25, 4),
+        note(3.75, 0.25, 5),
+        // Un triolet avec un silence au milieu : le crochet.
+        note(4.0, t, 7),
+        note(4.0 + 2.0 * t, t, 5),
+    ];
+    cp_tab::doc::sort(&mut d);
+    v.tracks[0].items[0].set_doc(d);
+    v.tracks[0].items[0].ghosts.clear();
+    b.shot(&mut v, "14_triolets");
+    let eng = v.tracks[0].items[0].engraved().clone();
+    assert_eq!(
+        eng.triplets.iter().copied().collect::<Vec<_>>(),
+        vec![0, 2, 4]
+    );
+}
