@@ -37,9 +37,9 @@ use cp_ui::{Button, Ev, IconCache, Mods, Theme};
 
 mod editor;
 mod frame;
-mod native;
 mod gtab;
 mod items;
+mod native;
 mod tuner;
 mod tview;
 

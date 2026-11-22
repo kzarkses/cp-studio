@@ -279,8 +279,18 @@ fn work(mut src: CppSource, item: ItemAudio, progress: Arc<Progress>) -> Out {
             result: Err("the file has no sample rate".into()),
         };
     }
-    // La section jouee par l'item, en secondes du fichier.
-    let want = (item.len * item.rate * sr).max(0.0) as usize;
+    // Le FICHIER ENTIER, depuis son debut : l'analyse est rangee comme celle
+    // du fichier (une coupe, une copie, un rognage y prennent leur tranche).
+    // Avant, seule la section jouee etait analysee mais rangee comme le
+    // fichier : une prise au debut rogne recevait ses notes trop tot d'autant
+    // (2026-11-22).
+    let _ = &item;
+    let total = src.length();
+    let want = if total > 0.0 {
+        (total * sr) as usize
+    } else {
+        usize::MAX
+    };
     let block = 65536usize;
     let mut buf = vec![0f64; block * nch];
     let mut mono: Vec<f32> = Vec::with_capacity(want);
@@ -293,7 +303,7 @@ fn work(mut src: CppSource, item: ItemAudio, progress: Arc<Progress>) -> Out {
             };
         }
         let n = block.min(want - at);
-        let t = item.offs + at as f64 / sr;
+        let t = at as f64 / sr;
         let got = src.read(t, sr, nch, &mut buf[..n * nch]);
         for f in 0..got {
             let mut s = 0f64;
@@ -337,6 +347,26 @@ struct Src {
 /// La cle de l'analyse d'un FICHIER : son chemin, sa taille et sa date (un
 /// fichier reecrit est analyse de nouveau).
 fn file_key(path: &str) -> String {
+    format!("g{}", file_hash(path))
+}
+
+/// La cle d'avant le 2026-11-22 : l'analyse rangee sous elle n'etait parfois
+/// que la section d'un item (voir [`legacy_ok`]).
+fn legacy_key(path: &str) -> String {
+    format!("f{}", file_hash(path))
+}
+
+/// Une ancienne analyse rangee comme celle du fichier n'en est sure que si
+/// elle couvre tout ce que l'item joue depuis le debut du fichier : alors
+/// elle a ete faite depuis le debut (une prise transcrite sans rognage, le
+/// cas courant). Sinon elle partait du debut rogne d'alors : a refaire.
+fn legacy_ok(an: &Analysis, src: &Src) -> bool {
+    let secs = an.frames as f64 * HOP as f64 / SR as f64;
+    let need = src.offs.max(0.0) + src.len.max(0.0) * src.rate.max(1e-6);
+    secs + 0.05 >= need
+}
+
+fn file_hash(path: &str) -> String {
     let meta = std::fs::metadata(path).ok();
     let size = meta.as_ref().map_or(0, |m| m.len());
     let date = meta
@@ -349,7 +379,7 @@ fn file_key(path: &str) -> String {
         h ^= b as u64;
         h = h.wrapping_mul(0x100000001b3);
     }
-    format!("f{h:016x}")
+    format!("{h:016x}")
 }
 
 /// La tranche de l'analyse d'un fichier qu'un item joue.
@@ -459,6 +489,12 @@ impl App {
         if !self.gt.files.contains_key(&fkey) {
             if let Some(an) = read(self.gtab_cache(&fkey, "cpga")) {
                 self.gt.files.insert(fkey.clone(), an);
+            } else if let Some(an) = read(self.gtab_cache(&legacy_key(&src.path), "cpga"))
+                .filter(|an| legacy_ok(an, src))
+            {
+                // Une ancienne analyse sure : reprise sous la cle neuve.
+                let _ = std::fs::write(self.gtab_cache(&fkey, "cpga"), an.to_bytes());
+                self.gt.files.insert(fkey.clone(), an);
             }
         }
         let an = match self.gt.files.get(&fkey) {
@@ -545,6 +581,11 @@ impl App {
         let Some(it) = self.gt.arr.item(t, i) else {
             return;
         };
+        // Sans analyse, un decodage ne trouverait rien et effacerait les
+        // notes non tenues.
+        if !self.gt.anas.contains_key(&it.akey) {
+            return;
+        }
         let tuning = it.detect.tuning();
         let grid = it.detect.grid;
         let notes = self.gtab_notes(it, false);
@@ -1047,7 +1088,10 @@ impl App {
                             {
                                 to_fix.push((m.guid.clone(), is.pos, is.len, is.lane));
                             }
-                            let mut want_m = Geo { offs: gm.offs, ..ga };
+                            let mut want_m = Geo {
+                                offs: gm.offs,
+                                ..ga
+                            };
                             match a0 {
                                 Some(a0) => {
                                     // Un MIDI boucle (le defaut de REAPER) ne
@@ -1290,6 +1334,21 @@ impl App {
         };
         let ready = self.gtab_ana(&akey, &is.guid, &src);
         let wants = self.gtab_wants(&is.guid);
+        if !ready && midi_take_ok {
+            // Transcrite (son MIDI est la), son analyse n'est plus valable (le
+            // cache a change de version) : la tab vient du MIDI ; les
+            // fantomes et un nouveau decodage attendent une analyse neuve.
+            if let Some(m) = midi {
+                if let Some(d) = self.gtab_doc_from_midi(&m.guid, &it) {
+                    it.state = Some(State::Ready);
+                    it.set_doc(d);
+                    if let Some(h) = &midi_hash {
+                        self.gt.midi_seen.insert(m.guid.clone(), h.clone());
+                    }
+                    return (it, Todo::Nothing);
+                }
+            }
+        }
         if !ready {
             // Une coupe ou une copie d'une prise transcrite : son MIDI vient
             // de celui de la prise d'origine.
@@ -1822,6 +1881,22 @@ impl App {
                 }
             }
             GAct::Retune { t } => self.gtab_retune(t),
+            GAct::TranscribeFresh { t, i } => {
+                // Repartir de zero : plus de notes tenues ni effacees, le
+                // decodage neuf remplace tout.
+                if let Some(it) = self.gt.arr.item_mut(t, i) {
+                    let mut d = it.doc.clone();
+                    for n in &mut d {
+                        n.locked = false;
+                    }
+                    it.suppressed.clear();
+                    it.set_doc(d);
+                }
+                if let Some(it) = self.gt.arr.item(t, i).cloned() {
+                    self.gtab_save_tab(&it);
+                }
+                self.gtab_act(GAct::Transcribe { t, i });
+            }
             GAct::Transcribe { t, i } => {
                 // Sur demande. L'analyse d'un fichier ne change pas : si elle
                 // est la, on decode tout de suite (les notes tenues restent) ;
@@ -2072,7 +2147,11 @@ impl App {
                 r.undo_begin();
                 r.set_item_value(
                     &it.guid,
-                    if fade_in { "D_FADEINLEN" } else { "D_FADEOUTLEN" },
+                    if fade_in {
+                        "D_FADEINLEN"
+                    } else {
+                        "D_FADEOUTLEN"
+                    },
                     secs.clamp(0.0, info.len),
                 );
                 r.undo_end(
@@ -3168,7 +3247,15 @@ fn arr_sig(a: &Arr) -> u64 {
                 (&k.name, k.done).hash(&mut h);
             }
             for n in it.doc.iter().chain(it.ghosts.iter()) {
-                (n.qn0.to_bits(), n.qn1.to_bits(), n.pitch, n.string, n.fret, n.vel).hash(&mut h);
+                (
+                    n.qn0.to_bits(),
+                    n.qn1.to_bits(),
+                    n.pitch,
+                    n.string,
+                    n.fret,
+                    n.vel,
+                )
+                    .hash(&mut h);
                 (n.locked, format!("{:?}", n.tech)).hash(&mut h);
             }
         }
@@ -3247,5 +3334,49 @@ mod tests {
         assert_ne!(k, sound_key("C:\\a.wav", 0.6, 4.0, 1.0));
         assert!((db_of(vol_of(-6.0)) + 6.0).abs() < 1e-3);
         assert_eq!(vol_of(-80.0), 0.0);
+    }
+
+    /// Une analyse de fichier (une trame = HOP / SR s) dont la trame f porte
+    /// sa note a f.
+    fn ana(secs: f64) -> Analysis {
+        let frames = (secs * SR as f64 / HOP as f64).round() as usize;
+        let mut note = vec![0u8; frames * cp_tab::model::NOTES];
+        for f in 0..frames {
+            note[f * cp_tab::model::NOTES + f % cp_tab::model::NOTES] = 255;
+        }
+        Analysis {
+            frames,
+            note,
+            onset: vec![0u8; frames * cp_tab::model::NOTES],
+            env: vec![0u8; frames],
+        }
+    }
+
+    /// Le decalage de Cedric (2026-11-22) : une prise au debut rogne recevait
+    /// ses notes trop tot de la longueur rognee. La tranche d'une prise
+    /// commence a son decalage dans le fichier ; une ancienne analyse n'est
+    /// reprise que si elle couvre la prise depuis le debut du fichier.
+    #[test]
+    fn la_tranche_d_une_prise_rognee_commence_a_son_decalage() {
+        let fps = SR as f64 / HOP as f64;
+        let file = ana(20.0);
+        let src = Src {
+            path: String::new(),
+            offs: 2.0,
+            len: 10.0,
+            rate: 1.0,
+        };
+        let s = slice_of(&file, &src);
+        let f0 = (2.0 * fps).round() as usize;
+        // Sa premiere trame est celle du fichier a 2 s.
+        assert_eq!(
+            s.note[..cp_tab::model::NOTES],
+            file.note[f0 * cp_tab::model::NOTES..(f0 + 1) * cp_tab::model::NOTES]
+        );
+        assert_eq!(s.frames, (10.0 * fps).ceil() as usize);
+        // Faite depuis le debut, assez longue : sure.
+        assert!(legacy_ok(&file, &src));
+        // Seulement la section de la prise (10 s, faite depuis 2 s) : a refaire.
+        assert!(!legacy_ok(&ana(10.0), &src));
     }
 }

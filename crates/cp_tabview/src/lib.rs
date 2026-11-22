@@ -618,6 +618,12 @@ pub enum Act {
         fade_in: bool,
         len: f64,
     },
+    /// Retranscrire en repartant de zero (Maj) : les notes retouchees et
+    /// effacees sont oubliees.
+    TranscribeFresh {
+        t: usize,
+        i: usize,
+    },
     /// Un simple clic sur une prise : le curseur a `q`, et l'item de cette
     /// couche (le MIDI, ou l'audio) choisi dans REAPER et montre dans
     /// l'editeur.
@@ -2075,6 +2081,9 @@ impl Arr {
             Hit::KeepGhosts => self.keep_ghosts(),
             Hit::Retranscribe => {
                 let (t, i) = self.sel_item()?;
+                if mods.shift && self.item(t, i)?.state == Some(State::Ready) {
+                    return Some(Act::TranscribeFresh { t, i });
+                }
                 Some(Act::Transcribe { t, i })
             }
             Hit::DeleteItem => {
@@ -2272,7 +2281,7 @@ impl Arr {
             Hit::Retranscribe => {
                 let (t, i) = self.sel_item()?;
                 if self.item(t, i)?.state == Some(State::Ready) {
-                    "Transcribe again (your edited notes stay)".into()
+                    "Transcribe again (your edited notes stay)\nShift: start over".into()
                 } else {
                     "Transcribe".into()
                 }
