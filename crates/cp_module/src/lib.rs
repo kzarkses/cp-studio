@@ -335,6 +335,7 @@ pub(crate) struct App {
     cmd_gtab: i32,
     cmd_gtab_set: i32,
     cmd_view_gtab: i32,
+    cmd_gtab_make: i32,
     /// Une transcription Guitar Tab en cours.
     /// Guitar Tab : la fenetre, la prise, la transcription.
     gt: gtab::GPart,
@@ -1242,6 +1243,10 @@ impl Module for App {
             "CPSTUDIO_GUITARTAB_SETTINGS",
             "CP Studio: Guitar Tab - settings",
         );
+        let cmd_gtab_make = host.register_action(
+            "CPSTUDIO_GUITARTAB_MAKE",
+            "CP Studio: Guitar Tab - make the selected track a guitar track",
+        );
         let tp = tview::TPart::new(&r);
         let mut app = App {
             host,
@@ -1259,6 +1264,7 @@ impl Module for App {
             cmd_gtab,
             cmd_gtab_set,
             cmd_view_gtab,
+            cmd_gtab_make,
             gt: gtab::GPart::new(&r),
             browser,
             view: None,
@@ -1467,6 +1473,9 @@ impl Module for App {
             true
         } else if cmd == self.cmd_gtab_set {
             self.gtab_edit_settings();
+            true
+        } else if cmd == self.cmd_gtab_make {
+            self.gtab_make_selected();
             true
         } else {
             false
