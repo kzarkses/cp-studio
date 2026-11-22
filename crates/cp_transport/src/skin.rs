@@ -320,35 +320,58 @@ impl Transport {
         let cw_time = text.measure(small, "00:00:00.000").ceil();
         let cw = cw_beats + cw_time + th.s(24.0);
         self.field(cv, th, sk, Hit::Counter, x, by, cw, bh);
-        let beats_c = if rec {
-            sk.rec
-        } else if play & PLAYING != 0 {
-            sk.play
-        } else {
-            sk.text
+        let ink = crate::TunerInk {
+            text: sk.text,
+            dim: sk.text_dim,
+            good: sk.play,
+            warn: sk.pause,
+            bad: sk.rec,
+            track: sk.text_dim.fade(0.35),
         };
-        text.draw_in(
-            cv,
-            big,
-            x + th.s(9.0),
-            by,
-            cw_beats,
-            bh,
-            &self.st.beats,
-            beats_c,
-            Align::Left,
-        );
-        text.draw_in(
-            cv,
-            small,
-            x + cw - cw_time - th.s(9.0),
-            by,
-            cw_time,
-            bh,
-            &self.st.time,
-            sk.text_dim,
-            Align::Right,
-        );
+        if self.tuner_in_clock() {
+            crate::draw_tuner(
+                cv,
+                text,
+                sk.face,
+                th.scale,
+                x,
+                by,
+                cw,
+                bh,
+                self.tuner.as_ref(),
+                &ink,
+            );
+        } else {
+            let beats_c = if rec {
+                sk.rec
+            } else if play & PLAYING != 0 {
+                sk.play
+            } else {
+                sk.text
+            };
+            text.draw_in(
+                cv,
+                big,
+                x + th.s(9.0),
+                by,
+                cw_beats,
+                bh,
+                &self.st.beats,
+                beats_c,
+                Align::Left,
+            );
+            text.draw_in(
+                cv,
+                small,
+                x + cw - cw_time - th.s(9.0),
+                by,
+                cw_time,
+                bh,
+                &self.st.time,
+                sk.text_dim,
+                Align::Right,
+            );
+        }
         self.push(Hit::Counter, x, by, cw, bh);
         x += cw + th.s(8.0);
 
@@ -550,6 +573,27 @@ impl Transport {
                 false,
             );
             self.push(Hit::Add, x, sy, slot, slot);
+            x += slot + gap;
+        }
+        if self.tuner_mode == crate::TunerMode::Slot {
+            let tw = crate::slot_width(th.scale);
+            if strip_end - x >= tw + th.s(16.0) {
+                let tx = (x + (strip_end - x - tw) * 0.5).round();
+                self.field(cv, th, sk, Hit::Tuner, tx, by, tw, bh);
+                crate::draw_tuner(
+                    cv,
+                    text,
+                    sk.face,
+                    th.scale,
+                    tx,
+                    by,
+                    tw,
+                    bh,
+                    self.tuner.as_ref(),
+                    &ink,
+                );
+                self.push(Hit::Tuner, tx, by, tw, bh);
+            }
         }
     }
 }

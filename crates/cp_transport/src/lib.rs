@@ -29,8 +29,10 @@ use cp_ui::{Button, Ev, Icon, IconCache, Mods, Theme};
 mod skin;
 #[cfg(test)]
 mod tests;
+pub mod tuner;
 
 pub use skin::{Skin, face_color};
+pub use tuner::{TunerInk, TunerMode, TunerView, draw_tuner, slot_width};
 
 /// Les bits de lecture (ceux de `GetPlayState`).
 pub const PLAYING: i32 = 1;
@@ -124,6 +126,8 @@ pub enum Hit {
     Item(usize),
     Add,
     View(usize),
+    /// L'accordeur, dans son emplacement.
+    Tuner,
 }
 
 /// Ce que le module doit faire.
@@ -197,6 +201,9 @@ pub struct Transport {
     pub st: Status,
     pub items: Vec<Item>,
     pub views: Vec<ViewTab>,
+    /// Ce que l'accordeur entend (aucune note : `None`).
+    pub tuner: Option<TunerView>,
+    pub tuner_mode: TunerMode,
     boxes: Vec<Box_>,
     hover: Hit,
     pressed: Hit,
@@ -316,6 +323,8 @@ impl Transport {
             st: Status::default(),
             items: Vec::new(),
             views: Vec::new(),
+            tuner: None,
+            tuner_mode: TunerMode::Clock,
             boxes: Vec::new(),
             hover: Hit::None,
             pressed: Hit::None,
@@ -371,6 +380,9 @@ impl Transport {
             Hit::Metronome => "Metronome".into(),
             Hit::Rate => "Play rate: drag or wheel, double-click for 1.00".into(),
             Hit::Add => "Add an action to CP Transport".into(),
+            Hit::Tuner => {
+                "Tuner: listens to the armed track's input (right-click: where it lives)".into()
+            }
             Hit::Item(i) => {
                 let it = self.items.get(i)?;
                 format!("{}  (right-click: move, remove)", it.name)
@@ -671,35 +683,58 @@ impl Transport {
         let cw_time = text.measure(small, "00:00:00.000").ceil();
         let cw = cw_beats + cw_time + th.s(22.0);
         cv.fill_round_rect(x, by, cw, bh, r, th.field);
-        let beats_c = if play & RECORDING != 0 {
-            hex(RED)
-        } else if play & PLAYING != 0 {
-            hex(GREEN)
-        } else {
-            th.text
+        let ink = TunerInk {
+            text: th.text,
+            dim: th.text_dim,
+            good: hex(GREEN),
+            warn: hex(AMBER),
+            bad: hex(RED),
+            track: th.seam,
         };
-        text.draw_in(
-            cv,
-            big,
-            x + th.s(8.0),
-            by,
-            cw_beats,
-            bh,
-            &self.st.beats,
-            beats_c,
-            Align::Left,
-        );
-        text.draw_in(
-            cv,
-            small,
-            x + cw - cw_time - th.s(8.0),
-            by,
-            cw_time,
-            bh,
-            &self.st.time,
-            th.text_dim,
-            Align::Right,
-        );
+        if self.tuner_in_clock() {
+            draw_tuner(
+                cv,
+                text,
+                0,
+                th.scale,
+                x,
+                by,
+                cw,
+                bh,
+                self.tuner.as_ref(),
+                &ink,
+            );
+        } else {
+            let beats_c = if play & RECORDING != 0 {
+                hex(RED)
+            } else if play & PLAYING != 0 {
+                hex(GREEN)
+            } else {
+                th.text
+            };
+            text.draw_in(
+                cv,
+                big,
+                x + th.s(8.0),
+                by,
+                cw_beats,
+                bh,
+                &self.st.beats,
+                beats_c,
+                Align::Left,
+            );
+            text.draw_in(
+                cv,
+                small,
+                x + cw - cw_time - th.s(8.0),
+                by,
+                cw_time,
+                bh,
+                &self.st.time,
+                th.text_dim,
+                Align::Right,
+            );
+        }
         self.push(Hit::Counter, x, by, cw, bh);
         x += cw + th.s(8.0);
 
@@ -916,6 +951,34 @@ impl Transport {
                 false,
             );
             self.push(Hit::Add, x, by, bw, bh);
+            x += bw + th.s(2.0);
         }
+        if self.tuner_mode == TunerMode::Slot {
+            let tw = slot_width(th.scale);
+            if strip_end - x >= tw + th.s(16.0) {
+                let tx = (x + (strip_end - x - tw) * 0.5).round();
+                cv.fill_round_rect(tx, by, tw, bh, r, th.field);
+                draw_tuner(
+                    cv,
+                    text,
+                    0,
+                    th.scale,
+                    tx,
+                    by,
+                    tw,
+                    bh,
+                    self.tuner.as_ref(),
+                    &ink,
+                );
+                self.push(Hit::Tuner, tx, by, tw, bh);
+            }
+        }
+    }
+
+    /// L'accordeur a la place du compteur : a l'arret, une note entendue.
+    pub fn tuner_in_clock(&self) -> bool {
+        self.tuner_mode == TunerMode::Clock
+            && self.tuner.is_some()
+            && self.st.play & (PLAYING | RECORDING) == 0
     }
 }

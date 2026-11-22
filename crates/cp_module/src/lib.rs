@@ -37,6 +37,7 @@ use cp_ui::{Button, Ev, IconCache, Mods, Theme};
 
 mod gtab;
 mod items;
+mod tuner;
 mod tview;
 
 pub(crate) const SECTION: &str = "CP_Studio";

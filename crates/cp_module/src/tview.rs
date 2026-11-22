@@ -47,6 +47,10 @@ const M_PLACE_DOCK: u32 = 11;
 const M_PLACE_FLOAT: u32 = 12;
 const M_VIEW_CLOSE: u32 = 13;
 const M_GTAB_SETTINGS: u32 = 14;
+const M_TUNER_OFF: u32 = 20;
+const M_TUNER_CLOCK: u32 = 21;
+const M_TUNER_SLOT: u32 = 22;
+const M_TUNER_A4: u32 = 23;
 
 /// La fenetre du transport.
 pub(crate) struct TView {
@@ -86,6 +90,8 @@ pub(crate) struct TPart {
     /// L'infobulle, et la cible survolee depuis quand.
     tip: Option<ui::Tooltip>,
     hover: (cp_transport::Hit, std::time::Instant),
+    /// L'accordeur.
+    pub tu: crate::tuner::Tuner,
 }
 
 impl TPart {
@@ -113,6 +119,7 @@ impl TPart {
             since_items: 0,
             tip: None,
             hover: (cp_transport::Hit::None, std::time::Instant::now()),
+            tu: crate::tuner::Tuner::new(r),
         }
     }
 }
@@ -545,6 +552,7 @@ impl App {
         let st = self.read_status();
         let playing = st.play & (play::PLAYING | play::RECORDING) != 0;
         self.tp.t.set_status(st);
+        self.tuner_tick();
         if playing || self.tp.t.dragging() {
             self.transport_want_frames();
         } else if self.tp.t.take_dirty() {
@@ -807,12 +815,39 @@ impl App {
     }
 
     fn bar_menu(&mut self, x: f32, y: f32) {
+        let tm = self.tp.tu.mode;
+        let a4 = format!("Tuner reference: A4 = {} Hz...", self.tp.tu.a4);
         let items = [
             Some(MenuItem {
                 id: M_ADD,
                 text: "Add action...",
                 checked: false,
                 enabled: true,
+            }),
+            None,
+            Some(MenuItem {
+                id: M_TUNER_CLOCK,
+                text: "Tuner: in the clock, when stopped",
+                checked: tm == cp_transport::TunerMode::Clock,
+                enabled: true,
+            }),
+            Some(MenuItem {
+                id: M_TUNER_SLOT,
+                text: "Tuner: its own place, in the middle",
+                checked: tm == cp_transport::TunerMode::Slot,
+                enabled: true,
+            }),
+            Some(MenuItem {
+                id: M_TUNER_OFF,
+                text: "Tuner: off",
+                checked: tm == cp_transport::TunerMode::Off,
+                enabled: true,
+            }),
+            Some(MenuItem {
+                id: M_TUNER_A4,
+                text: &a4,
+                checked: false,
+                enabled: tm != cp_transport::TunerMode::Off,
             }),
             None,
             Some(MenuItem {
@@ -825,6 +860,10 @@ impl App {
         match self.menu_at(x, y, &items) {
             M_ADD => self.add_item(),
             M_CLOSE => self.queue(crate::WinOp::TransportOff),
+            M_TUNER_OFF => self.tuner_set_mode(cp_transport::TunerMode::Off),
+            M_TUNER_CLOCK => self.tuner_set_mode(cp_transport::TunerMode::Clock),
+            M_TUNER_SLOT => self.tuner_set_mode(cp_transport::TunerMode::Slot),
+            M_TUNER_A4 => self.tuner_ask_a4(),
             _ => {}
         }
     }

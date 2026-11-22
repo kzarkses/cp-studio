@@ -467,3 +467,36 @@ fn habille_du_vrai_theme() {
         println!("{}", p.display());
     }
 }
+
+#[test]
+fn l_accordeur_dans_le_compteur_ou_a_sa_place() {
+    let mut b = Bench::new(1600, 36);
+    let mut t = sample();
+    let a = TunerView {
+        note: "A".into(),
+        octave: 2,
+        cents: -4.0,
+        freq: 109.7,
+        string: "string 5".into(),
+    };
+    // A l'arret, une note entendue : le compteur devient l'accordeur.
+    t.st.play = 0;
+    t.tuner = Some(a.clone());
+    assert!(t.tuner_in_clock());
+    b.shot(&mut t, "tuner_clock");
+    // En lecture, le compteur revient.
+    t.st.play = PLAYING;
+    assert!(!t.tuner_in_clock());
+    // A sa place : toujours la, au centre, meme sans note.
+    t.tuner_mode = TunerMode::Slot;
+    t.st.play = 0;
+    t.tuner = None;
+    b.draw(&mut t);
+    let (x, _) = center(&t, Hit::Tuner);
+    assert!(x > 500.0 && x < 1300.0, "au centre : {x}");
+    t.tuner = Some(TunerView { cents: 1.0, ..a });
+    b.shot(&mut t, "tuner_slot");
+    assert!(t.label(Hit::Tuner).is_some());
+    assert_eq!(TunerMode::from_key(TunerMode::Slot.key()), TunerMode::Slot);
+    assert_eq!(TunerMode::from_key("?"), TunerMode::Clock);
+}
