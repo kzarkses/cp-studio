@@ -552,6 +552,7 @@ pub enum Act {
     },
     Solo {
         t: usize,
+        how: SoloHow,
     },
     InputMenu {
         t: usize,
@@ -880,6 +881,27 @@ impl SnapGrid {
 }
 
 pub use cp_ui::Guide;
+
+/// Un clic sur Solo, comme dans REAPER : seul (en place), Alt (sans tenir
+/// compte du routage), Ctrl (toutes les pistes), Ctrl + Alt (exclusif).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SoloHow {
+    Toggle,
+    IgnoreRouting,
+    All,
+    Exclusive,
+}
+
+impl SoloHow {
+    pub fn of(m: Mods) -> SoloHow {
+        match (m.ctrl, m.alt) {
+            (true, true) => SoloHow::Exclusive,
+            (true, false) => SoloHow::All,
+            (false, true) => SoloHow::IgnoreRouting,
+            _ => SoloHow::Toggle,
+        }
+    }
+}
 
 /// Comment une note se joue, pour l'infobulle et la ligne d'etat :
 /// « · hammer-on », « · slide », « · slide in from below », « · bend full ».
@@ -2219,7 +2241,10 @@ impl Arr {
             Hit::Input(t) => Some(Act::InputMenu { t, x, y }),
             Hit::Monitor(t) => Some(Act::Monitor { t }),
             Hit::Mute(t) => Some(Act::Mute { t }),
-            Hit::Solo(t) => Some(Act::Solo { t }),
+            Hit::Solo(t) => Some(Act::Solo {
+                t,
+                how: SoloHow::of(mods),
+            }),
             Hit::Fader { t, tab } => {
                 if dbl {
                     let hd = &mut self.tracks.get_mut(t)?.head;
@@ -2558,7 +2583,10 @@ impl Arr {
             Hit::Input(_) => "Input".into(),
             Hit::Monitor(_) => "Monitor the input".into(),
             Hit::Mute(_) => "Mute".into(),
-            Hit::Solo(_) => "Solo".into(),
+            Hit::Solo(_) => {
+                "Solo  (Alt: ignore routing \u{00b7} Ctrl: all tracks \u{00b7} Ctrl+Alt: exclusive)"
+                    .into()
+            }
             Hit::Fader { t, tab } => {
                 let hd = &self.tracks.get(t)?.head;
                 if tab {

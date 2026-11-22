@@ -1484,3 +1484,39 @@ fn le_lasso_choisit_les_prises() {
     });
     assert_eq!(v.tracks[0].items[0].picked, (true, false));
 }
+
+/// Solo comme dans REAPER : seul, Alt (sans le routage), Ctrl (toutes les
+/// pistes), Ctrl + Alt (exclusif).
+#[test]
+fn solo_et_ses_modificateurs() {
+    let mut b = Bench::new(1600, 900);
+    let mut v = arranger();
+    b.draw(&mut v);
+    let (x, y) = find(&v, |h| matches!(h, Hit::Solo(0))).expect("le solo");
+    for (ctrl, alt, how) in [
+        (false, false, SoloHow::Toggle),
+        (false, true, SoloHow::IgnoreRouting),
+        (true, false, SoloHow::All),
+        (true, true, SoloHow::Exclusive),
+    ] {
+        let mods = Mods {
+            ctrl,
+            alt,
+            ..Mods::default()
+        };
+        let a = v.event(&Ev::Down {
+            x,
+            y,
+            b: Button::Left,
+            dbl: false,
+            mods,
+        });
+        v.event(&Ev::Up {
+            x,
+            y,
+            b: Button::Left,
+            mods,
+        });
+        assert_eq!(a, Some(Act::Solo { t: 0, how }));
+    }
+}

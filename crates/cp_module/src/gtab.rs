@@ -2163,15 +2163,33 @@ impl App {
                     self.gtab_sync();
                 }
             }
-            GAct::Mute { t } | GAct::Solo { t } => {
+            GAct::Mute { t } => {
                 if let Some(h) = head(self, t) {
                     let target = r.track_ext(&h.guid, "CPGT_bus").unwrap_or(h.guid.clone());
-                    match a {
-                        GAct::Mute { .. } => {
-                            r.set_track_value(&target, "B_MUTE", if h.mute { 0.0 } else { 1.0 });
+                    r.set_track_value(&target, "B_MUTE", if h.mute { 0.0 } else { 1.0 });
+                    self.gtab_sync();
+                }
+            }
+            GAct::Solo { t, how } => {
+                use cp_tabview::SoloHow as H;
+                if let Some(h) = head(self, t) {
+                    let target = r.track_ext(&h.guid, "CPGT_bus").unwrap_or(h.guid.clone());
+                    // Comme le bouton de REAPER : en place par defaut (son
+                    // reglage « soloip »), Alt : sans tenir compte du routage.
+                    let in_place = r.config_int("soloip").is_none_or(|v| v != 0);
+                    let on = if how == H::IgnoreRouting || !in_place {
+                        1.0
+                    } else {
+                        2.0
+                    };
+                    match how {
+                        H::Toggle | H::IgnoreRouting => {
+                            r.set_track_value(&target, "I_SOLO", if h.solo { 0.0 } else { on });
                         }
-                        _ => {
-                            r.set_track_value(&target, "I_SOLO", if h.solo { 0.0 } else { 1.0 });
+                        H::All => r.set_all_tracks_value("I_SOLO", if h.solo { 0.0 } else { on }),
+                        H::Exclusive => {
+                            r.set_all_tracks_value("I_SOLO", 0.0);
+                            r.set_track_value(&target, "I_SOLO", on);
                         }
                     }
                     self.gtab_sync();

@@ -437,6 +437,20 @@ impl Reaper {
         unsafe { f(tr, c.as_ptr(), v) }
     }
 
+    /// Une valeur sur toutes les pistes du projet (Ctrl + Solo : toutes).
+    pub fn set_all_tracks_value(&self, key: &str, v: f64) {
+        let (Some(f), Ok(c)) = (
+            self.tf::<SetVal>(c"SetMediaTrackInfo_Value"),
+            CString::new(key),
+        ) else {
+            return;
+        };
+        for tr in self.tracks_raw() {
+            // SAFETY: piste vivante (lue a l'instant), cle terminee par zero.
+            unsafe { f(tr, c.as_ptr(), v) };
+        }
+    }
+
     pub fn set_track_name(&self, guid: &str, name: &str) -> bool {
         self.track_of(guid)
             .is_some_and(|tr| self.tr_str(tr, "P_NAME", Some(name)).is_some())
