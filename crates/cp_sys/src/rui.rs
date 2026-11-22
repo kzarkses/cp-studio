@@ -110,6 +110,46 @@ impl Reaper {
         unsafe { f(s.as_ptr(), k.as_ptr(), v.as_ptr(), persist) };
     }
 
+    /// Une preference entiere de REAPER (une cle de reaper.ini), lue dans sa
+    /// memoire par `get_config_var`.
+    pub fn config_int(&self, name: &str) -> Option<i32> {
+        let p = self.config_var(name, 4)?;
+        // SAFETY: REAPER annonce une variable de 4 octets a cette adresse.
+        Some(unsafe { *(p as *const i32) })
+    }
+
+    /// Change une preference entiere de REAPER. Elle sera enregistree dans
+    /// reaper.ini avec les autres.
+    pub fn set_config_int(&self, name: &str, v: i32) -> bool {
+        let Some(p) = self.config_var(name, 4) else {
+            return false;
+        };
+        // SAFETY: meme variable de 4 octets, ecrite depuis le fil principal.
+        unsafe { *(p as *mut i32) = v };
+        true
+    }
+
+    fn config_var(&self, name: &str, size: i32) -> Option<*mut c_void> {
+        type F = unsafe extern "C" fn(*const c_char, *mut i32) -> *mut c_void;
+        // SAFETY: void* get_config_var(const char* name, int* szOut).
+        let f = unsafe { self.api::<F>(c"get_config_var") }?;
+        let c = CString::new(name).ok()?;
+        let mut sz = 0;
+        // SAFETY: chaine vivante, taille ecrite par REAPER.
+        let p = unsafe { f(c.as_ptr(), &mut sz) };
+        (!p.is_null() && sz == size).then_some(p)
+    }
+
+    /// Redispose tous les dockers (apres un changement de preference).
+    pub fn dock_refresh(&self) {
+        type F = unsafe extern "C" fn();
+        // SAFETY: void DockWindowRefresh().
+        if let Some(f) = unsafe { self.api::<F>(c"DockWindowRefresh") } {
+            // SAFETY: sans argument.
+            unsafe { f() };
+        }
+    }
+
     /// Une action de REAPER par son nom (« _RS... », « _SWS_... ») ou son
     /// numero ; 0 si inconnue.
     pub fn named_command(&self, name: &str) -> i32 {

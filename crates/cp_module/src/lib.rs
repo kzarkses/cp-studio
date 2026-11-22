@@ -1130,6 +1130,30 @@ fn decode(st: &[u8]) -> Option<Saved> {
     Some(out)
 }
 
+impl App {
+    /// La bande d'onglets des dockers. Quand un docker ne tient qu'une
+    /// fenetre et qu'il est plus petit que `dock_mini_tab_size`
+    /// (Preferences > Appearance, 200 px par defaut), REAPER remplace sa bande
+    /// d'onglets par une poignee de 6 px. Cedric la veut toujours cachee : la
+    /// taille passe a 4096 px a chaque chargement (REAPER ne l'enregistre pas).
+    /// Mesure du 2026-11-22 : marge gauche du navigateur 15 px -> 0.
+    fn docker_tabs(&self) {
+        const SIZE: &str = "dock_mini_tab_size";
+        const WANT: i32 = 4096;
+        match self.r.config_int(SIZE) {
+            Some(was) if was < WANT => {
+                if self.r.set_config_int(SIZE, WANT) {
+                    self.r.dock_refresh();
+                }
+                self.host
+                    .info(&format!("onglets des dockers : {SIZE} {was} -> {WANT}"));
+            }
+            Some(_) => {}
+            None => self.host.warn("dock_mini_tab_size introuvable"),
+        }
+    }
+}
+
 impl Module for App {
     fn init(host: HostRef, state: &[u8]) -> Self {
         let r = host.reaper();
@@ -1350,6 +1374,9 @@ impl Module for App {
         // de se construire (ses dockers compris).
         if !self.ops.is_empty() && self.ticks >= 15 {
             self.do_ops();
+        }
+        if self.ticks == 15 {
+            self.docker_tabs();
         }
         self.gtab_tick();
         self.transport_tick();
