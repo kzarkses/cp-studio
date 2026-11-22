@@ -400,3 +400,32 @@ fn le_sinc_tient_le_temps_reel() {
     // Sans optimisation de compilation, large : un dixieme du temps reel.
     assert!(ms < 100.0, "{ms} ms");
 }
+
+/// Les niveaux d'un port pour les vumetres : la crete depuis la derniere
+/// lecture, par canal, remise a zero en la lisant.
+#[test]
+fn les_niveaux_d_un_port() {
+    let mut h = AudioHost::new(None, 48000.0);
+    let s: Vec<f32> = (0..48000)
+        .flat_map(|i| {
+            let x = (std::f64::consts::TAU * 440.0 * i as f64 / 48000.0).sin() as f32;
+            [x, x * 0.25]
+        })
+        .collect();
+    let c = h.load_samples(s, 2, 48000.0).unwrap();
+    block(&mut h, 0, 64);
+    assert_eq!(h.port_levels(0), [0.0, 0.0]);
+    h.play(0, c, 0, 0, true, 0.5).unwrap();
+    for _ in 0..20 {
+        block(&mut h, 0, 512);
+    }
+    let [l, r] = h.port_levels(0);
+    assert!(
+        (l - 0.5).abs() < 0.01 && (r - 0.125).abs() < 0.01,
+        "{l} {r}"
+    );
+    // Lue : remise a zero.
+    assert_eq!(h.port_levels(0), [0.0, 0.0]);
+    // Un port jamais ouvert : rien.
+    assert_eq!(h.port_levels(5), [0.0, 0.0]);
+}

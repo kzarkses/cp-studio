@@ -546,6 +546,23 @@ impl Reaper {
         true
     }
 
+    /// Coupe (ou rend) le son du master du projet courant.
+    pub fn set_master_mute(&self, on: bool) -> bool {
+        type Master = unsafe extern "C" fn(P) -> P;
+        type Set = unsafe extern "C" fn(P, *const std::ffi::c_char, f64) -> bool;
+        let (Some(m), Some(set)) = (
+            self.tf::<Master>(c"GetMasterTrack"),
+            self.tf::<Set>(c"SetMediaTrackInfo_Value"),
+        ) else {
+            return false;
+        };
+        // SAFETY: projet nul = courant ; le master existe toujours.
+        unsafe {
+            let tr = m(null_mut());
+            !tr.is_null() && set(tr, c"B_MUTE".as_ptr(), if on { 1.0 } else { 0.0 })
+        }
+    }
+
     /// La crete de la piste depuis le dernier appel (0..1+, lineaire).
     pub fn track_peak(&self, guid: &str) -> f32 {
         type Peak = unsafe extern "C" fn(P, i32) -> f64;

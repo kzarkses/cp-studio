@@ -77,6 +77,14 @@ pub trait Host: Send + Sync {
     fn audio_stretch(&self, _clip: u32, _start: i64, _end: i64, _tempo: f64, _shift: f64) -> u32 {
         0
     }
+    /// Un port dans une piste (rien : la sortie materielle).
+    fn audio_route(&self, _port: u32, _guid: Option<&str>) -> bool {
+        false
+    }
+    /// Les cretes d'un port depuis la derniere lecture.
+    fn audio_levels(&self, _port: u32) -> Option<[f32; 2]> {
+        None
+    }
 
     // --- les vues (ABI 3)
     #[allow(clippy::too_many_arguments)]
@@ -145,6 +153,8 @@ static API: HostApi = HostApi {
         srate: a_srate,
         thumb: a_thumb,
         stretch: a_stretch,
+        route: a_route,
+        levels: a_levels,
     },
     create_view: v_create,
     destroy_window: v_destroy,
@@ -371,6 +381,27 @@ extern "C" fn a_thumb(path: *const u8, len: usize, min: *mut f32, max: *mut f32,
 
 extern "C" fn a_stretch(clip: u32, start: i64, end: i64, tempo: f64, shift: f64) -> u32 {
     with(0, |h| h.audio_stretch(clip, start, end, tempo, shift))
+}
+
+extern "C" fn a_route(port: u32, guid: *const u8, len: usize) -> i32 {
+    // SAFETY: le module passe un GUID valide pendant l'appel (ou len = 0).
+    let g = (len > 0 && !guid.is_null()).then(|| unsafe { bytes(guid, len) });
+    let g = g.map(|b| String::from_utf8_lossy(b).into_owned());
+    with(false, |h| h.audio_route(port, g.as_deref())) as i32
+}
+
+extern "C" fn a_levels(port: u32, out: *mut f32) -> i32 {
+    if out.is_null() {
+        return 0;
+    }
+    match with(None, |h| h.audio_levels(port)) {
+        Some(v) => {
+            // SAFETY: le module passe deux f32 a lui.
+            unsafe { std::ptr::copy_nonoverlapping(v.as_ptr(), out, 2) };
+            1
+        }
+        None => 0,
+    }
 }
 
 extern "C" fn a_srate() -> f64 {

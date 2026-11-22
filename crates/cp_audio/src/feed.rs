@@ -27,6 +27,19 @@ pub struct FeedStats {
     pub busy_ns: AtomicU64,
     /// Le dernier temps demande (bits d'un f64), pour la continuite.
     last_time: AtomicU64,
+    /// La crete de chaque canal depuis la derniere lecture (bits d'un f32
+    /// positif : l'ordre des entiers est celui des nombres).
+    pub peak: [AtomicU32; 2],
+}
+
+impl FeedStats {
+    /// Les cretes (gauche, droite) depuis la derniere lecture, remises a 0.
+    pub fn take_peaks(&self) -> [f32; 2] {
+        [
+            f32::from_bits(self.peak[0].swap(0, Relaxed)),
+            f32::from_bits(self.peak[1].swap(0, Relaxed)),
+        ]
+    }
 }
 
 pub struct PortFeed {
@@ -65,6 +78,7 @@ impl PortRender for PortFeed {
         let nch = b.nch;
         let chans = nch.min(MAX_CHANS);
         let mut tmp = [0.0f32; CHUNK * MAX_CHANS];
+        let mut pk = [0.0f32; 2];
         let mut done = 0;
         while done < b.frames {
             let n = (b.frames - done).min(CHUNK);
@@ -82,11 +96,21 @@ impl PortRender for PortFeed {
                             0.0
                         };
                     }
+                    for c in 0..chans.min(2) {
+                        pk[c] = pk[c].max(tmp[i * chans + c].abs());
+                    }
                 }
             } else {
                 out.fill(0.0);
             }
             done += n;
+        }
+        for (c, &v) in pk.iter().enumerate() {
+            // Un canal mono se lit des deux cotes.
+            let v = if chans == 1 { pk[0] } else { v };
+            if v.is_finite() && v > 0.0 {
+                st.peak[c].fetch_max(v.to_bits(), Relaxed);
+            }
         }
         st.frames.fetch_add(b.frames as u64, Relaxed);
         st.busy_ns

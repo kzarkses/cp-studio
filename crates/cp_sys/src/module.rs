@@ -157,6 +157,18 @@ impl HostRef {
     pub fn audio_stretch(&self, clip: u32, start: i64, end: i64, tempo: f64, shift: f64) -> u32 {
         (self.0.audio.stretch)(clip, start, end, tempo, shift)
     }
+    /// Fait jouer un port dans une piste (son GUID), ou (rien) sur la
+    /// sortie materielle 1/2.
+    pub fn audio_route(&self, port: u32, track: Option<&str>) -> bool {
+        let g = track.unwrap_or("");
+        (self.0.audio.route)(port, g.as_ptr(), g.len()) == 1
+    }
+    /// Les cretes d'un port (gauche, droite) depuis la derniere lecture.
+    pub fn audio_levels(&self, port: u32) -> [f32; 2] {
+        let mut v = [0f32; 2];
+        (self.0.audio.levels)(port, v.as_mut_ptr());
+        v
+    }
     /// La vignette d'un fichier : 1 rendue, 0 en cours, -1 impossible.
     pub fn audio_thumb(&self, path: &str, min: &mut [f32], max: &mut [f32]) -> i32 {
         let n = min.len().min(max.len());

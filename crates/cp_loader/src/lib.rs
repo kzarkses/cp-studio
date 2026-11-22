@@ -296,6 +296,14 @@ impl Host for LoaderHost {
         audio(0.0, |a| a.core().srate())
     }
 
+    fn audio_route(&self, port: u32, guid: Option<&str>) -> bool {
+        audio(false, |a| a.route_port(port as usize, guid))
+    }
+
+    fn audio_levels(&self, port: u32) -> Option<[f32; 2]> {
+        audio(None, |a| Some(a.port_levels(port as usize)))
+    }
+
     fn audio_stretch(&self, clip: u32, start: i64, end: i64, tempo: f64, shift: f64) -> u32 {
         audio(0, |a| a.stretch(ClipH(clip), start, end, tempo, shift))
     }

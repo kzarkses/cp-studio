@@ -201,6 +201,10 @@ pub struct Preview {
     playing: bool,
     play: Option<PlayPreviewExFn>,
     stop: Option<StopPreviewFn>,
+    play_tr: Option<PlayTrackFn>,
+    stop_tr: Option<StopTrackFn>,
+    /// La piste ou l'apercu joue (son GUID), ou rien : la sortie materielle.
+    route: Option<String>,
 }
 
 // SAFETY: le registre n'est touche que par le fil principal (play/stop/drop) ;
@@ -231,15 +235,68 @@ impl Preview {
             play: unsafe { r.api::<PlayPreviewExFn>(c"PlayPreviewEx") },
             // SAFETY: voir ci-dessus.
             stop: unsafe { r.api::<StopPreviewFn>(c"StopPreview") },
+            // SAFETY: int PlayTrackPreview2Ex(ReaProject*, preview_register_t*,
+            // int flags, double measure_align) ; int StopTrackPreview2(
+            // ReaProject*, preview_register_t*).
+            play_tr: unsafe { r.api::<PlayTrackFn>(c"PlayTrackPreview2Ex") },
+            // SAFETY: voir ci-dessus.
+            stop_tr: unsafe { r.api::<StopTrackFn>(c"StopTrackPreview2") },
+            route: None,
+        }
+    }
+
+    /// Fait jouer l'apercu DANS une piste (son GUID) : par ses effets, son
+    /// volume, ses envois, comme un item. Le master n'est pas une
+    /// destination valable (REAPER repond « succes » et ne joue rien) ; une
+    /// piste qui porte un instrument ignore l'audio qu'on y verse.
+    pub fn play_track(&mut self, r: &Reaper, guid: &str) -> bool {
+        if self.playing && self.route.as_deref() == Some(guid) {
+            return true;
+        }
+        self.stop();
+        let (Some(play), Some(tr)) = (self.play_tr, r.track_of(guid)) else {
+            return false;
+        };
+        self.reg.preview_track = tr;
+        self.reg.m_out_chan = -1;
+        // SAFETY: registre et source vivants tant que `self` vit ; `stop`
+        // (et `Drop`) arretent l'apercu avant de les liberer.
+        self.playing = unsafe { play(null_mut(), &mut *self.reg, 0, -1.0) } != 0;
+        if self.playing {
+            self.route = Some(guid.to_string());
+        }
+        self.playing
+    }
+
+    /// La piste ou joue l'apercu.
+    pub fn routed(&self) -> Option<&str> {
+        self.route.as_deref()
+    }
+
+    /// La piste de l'apercu existe-t-elle toujours (a la meme adresse) ? Vrai
+    /// sans piste.
+    pub fn track_alive(&self, r: &Reaper) -> bool {
+        if self.route.is_none() {
+            return true;
+        }
+        type Valid =
+            unsafe extern "C" fn(*mut c_void, *mut c_void, *const std::ffi::c_char) -> bool;
+        // SAFETY: bool ValidatePtr2(ReaProject*, void*, const char*) ; un
+        // pointeur quelconque est permis, c'est son role.
+        match unsafe { r.api::<Valid>(c"ValidatePtr2") } {
+            // SAFETY: projet nul = courant ; tout pointeur est permis.
+            Some(f) => unsafe { f(null_mut(), self.reg.preview_track, c"MediaTrack*".as_ptr()) },
+            None => true,
         }
     }
 
     /// Lance l'aperçu vers la sortie materielle `first_out` (0 = sorties 1/2),
     /// sans tampon, immediatement.
     pub fn play_hardware(&mut self, first_out: i32) -> bool {
-        if self.playing {
+        if self.playing && self.route.is_none() {
             return true;
         }
+        self.stop();
         let Some(play) = self.play else { return false };
         self.reg.m_out_chan = first_out & 1023;
         self.reg.preview_track = null_mut();
@@ -253,11 +310,18 @@ impl Preview {
         if !self.playing {
             return;
         }
-        if let Some(stop) = self.stop {
+        if self.route.is_some() {
+            if let Some(stop) = self.stop_tr {
+                // SAFETY: le registre lance par `play_track`.
+                unsafe { stop(null_mut(), &mut *self.reg) };
+            }
+        } else if let Some(stop) = self.stop {
             // SAFETY: le registre lance par `play_hardware`.
             unsafe { stop(&mut *self.reg) };
         }
         self.playing = false;
+        self.route = None;
+        self.reg.preview_track = null_mut();
     }
 
     pub fn is_playing(&self) -> bool {

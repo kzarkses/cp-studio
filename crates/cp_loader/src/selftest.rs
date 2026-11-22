@@ -38,6 +38,8 @@ pub struct SelfTest {
     /// clics ?), et quand elles ont commence.
     stretches: Vec<(u32, f64, f64, usize, bool)>,
     stretch_at: Option<Instant>,
+    /// La piste de sortie (GUID), la voix, l'etape et son heure.
+    route: Option<(String, cp_audio::VoiceH, u8, Instant)>,
     ui_at: Option<Instant>,
     keys_step: u8,
     wheels: u32,
@@ -71,6 +73,8 @@ enum Phase {
     Playing,
     /// L'etireur de REAPER : durees exactes, clics a leur place, hauteur.
     Stretch,
+    /// Une colonne qui joue DANS une piste, puis la piste effacee en jouant.
+    Route,
     /// La suite se passe hors du moteur audio : insertion, interface.
     Insert,
     OpenUi,
@@ -101,6 +105,7 @@ pub fn requested() -> Option<SelfTest> {
         played_at: None,
         stretches: Vec::new(),
         stretch_at: None,
+        route: None,
         ui_at: None,
         keys_step: 0,
         wheels: 0,
@@ -259,6 +264,110 @@ impl SelfTest {
                     .join(" ")
             ),
         );
+    }
+
+    /// Une piste muette pour les ecoutes (sans envoi au master : rien ne sort
+    /// des enceintes), le port 3 joue dedans, a plein volume.
+    fn start_route(&mut self, a: &mut AudioHost) {
+        let Some(r) = crate::REAPER.get() else { return };
+        // Un La d'une seconde, en boucle.
+        let la: Vec<f32> = (0..48000)
+            .flat_map(|i| {
+                let x = (std::f64::consts::TAU * 440.0 * i as f64 / 48000.0).sin() as f32 * 0.5;
+                [x, x]
+            })
+            .collect();
+        let Ok(c) = a.load_samples(la, 2, 48000.0) else {
+            self.say(false, "sortie dans une piste : clip refuse".into());
+            return;
+        };
+        let Some(g) = r.insert_track(0, "CP selftest route") else {
+            self.say(false, "sortie dans une piste : piste refusee".into());
+            return;
+        };
+        // Rien ne doit sortir des enceintes de Cedric : le master du projet
+        // de test se tait (la piste l'alimente, pour que REAPER la traite).
+        r.set_master_mute(true);
+        if !a.route_port(3, Some(&g)) || a.port_route(3).as_deref() != Some(g.as_str()) {
+            self.say(
+                false,
+                "sortie dans une piste : PlayTrackPreview2Ex refuse".into(),
+            );
+            r.delete_track(&g);
+            r.set_master_mute(false);
+            return;
+        }
+        match a.play(3, c, 0, 0, true, 1.0) {
+            // Le lancement ne doit pas ramener le port a la sortie.
+            Some(v) if a.port_route(3).as_deref() == Some(g.as_str()) => {
+                self.route = Some((g, v, 0, Instant::now()))
+            }
+            Some(v) => {
+                a.stop(v, 0.0);
+                self.say(
+                    false,
+                    "sortie dans une piste : le lancement a deroute le port".into(),
+                );
+                r.delete_track(&g);
+                r.set_master_mute(false);
+            }
+            None => {
+                self.say(false, "sortie dans une piste : voix refusee".into());
+                r.delete_track(&g);
+            }
+        }
+    }
+
+    /// Rend vrai quand c'est fini.
+    fn check_route(&mut self, a: &mut AudioHost) -> bool {
+        let Some(r) = crate::REAPER.get() else {
+            return true;
+        };
+        let Some((g, v, step, t)) = self.route.clone() else {
+            return true;
+        };
+        if t.elapsed() < Duration::from_millis(700) {
+            return false;
+        }
+        match step {
+            0 => {
+                // Le son est-il passe par nous ET par la piste ?
+                let [l, rr] = a.port_levels(3);
+                let tp = r.track_peak(&g);
+                let blocks = a.stats().blocks;
+                // Sans carte son ouverte, rien ne tourne : on le dit.
+                let ok = (l > 0.01 && tp > 0.01) || blocks == 0;
+                self.say(
+                    ok,
+                    format!(
+                        "une colonne joue dans une piste : crete du port {l:.3}/{rr:.3}, crete de la piste {tp:.3}{}",
+                        if blocks == 0 { " (aucun bloc audio : carte son fermee)" } else { "" }
+                    ),
+                );
+                // Silence, puis la piste effacee EN JOUANT.
+                a.set(v, cp_engine::Param::Gain, 0.0);
+                r.delete_track(&g);
+                self.route = Some((g, v, 1, Instant::now()));
+                false
+            }
+            _ => {
+                a.poll();
+                let back = a.port_route(3).is_none();
+                let alive = a.voice(v).is_some();
+                self.say(
+                    back && a.stats().routes_lost >= 1,
+                    format!(
+                        "la piste effacee en jouant : le port revient a la sortie materielle ({back}), {} piste(s) perdue(s), la voix vit encore ({alive}), REAPER tient",
+                        a.stats().routes_lost
+                    ),
+                );
+                a.stop(v, 0.0);
+                a.route_port(3, None);
+                r.set_master_mute(false);
+                self.route = None;
+                true
+            }
+        }
     }
 
     /// Les cuissons finies : rend vrai quand il n'en reste plus.
@@ -464,6 +573,12 @@ impl SelfTest {
             }
             Phase::Stretch => {
                 if self.check_stretch(a) {
+                    self.start_route(a);
+                    self.phase = Phase::Route;
+                }
+            }
+            Phase::Route => {
+                if self.check_route(a) {
                     self.phase = Phase::Insert;
                 }
             }
@@ -1170,7 +1285,7 @@ impl SelfTest {
     pub fn wants_audio(&self) -> bool {
         matches!(
             self.phase,
-            Phase::Wait | Phase::Decoding | Phase::Playing | Phase::Stretch
+            Phase::Wait | Phase::Decoding | Phase::Playing | Phase::Stretch | Phase::Route
         )
     }
 

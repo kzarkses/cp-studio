@@ -13,7 +13,7 @@ use core::ffi::{c_char, c_void};
 
 /// Version du contrat. Un entier : jamais de mineure (le piege du double de
 /// l'ancien moteur, ou `1.10` valait `1.1`).
-pub const ABI: u32 = 8;
+pub const ABI: u32 = 9;
 
 /// Le symbole exporte par le module.
 pub const ENTRY_SYMBOL: &[u8] = b"cp_module_entry\0";
@@ -237,6 +237,12 @@ pub struct AudioApi {
     /// duree exacte ; rend un ticket (comme `load`, lu par `poll`), 0 si
     /// refuse. ABI 8.
     pub stretch: extern "C" fn(clip: u32, start: i64, end: i64, tempo: f64, shift: f64) -> u32,
+    /// Fait jouer un port DANS une piste (GUID UTF-8 ; `len` = 0 : la sortie
+    /// materielle 1/2). 1 si fait. ABI 9.
+    pub route: extern "C" fn(port: u32, guid: *const u8, len: usize) -> i32,
+    /// Les cretes d'un port (gauche, droite) depuis la derniere lecture,
+    /// ecrites dans `out[0..2]` ; 1 si le port existe. ABI 9.
+    pub levels: extern "C" fn(port: u32, out: *mut f32) -> i32,
 }
 
 /// Ce que le module offre au chargeur. Tous les appels se font sur le fil

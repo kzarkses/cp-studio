@@ -117,6 +117,8 @@ pub struct Stats {
     pub clips: usize,
     pub bytes: usize,
     pub decoding: usize,
+    /// Ports revenus a la sortie materielle (leur piste avait disparu).
+    pub routes_lost: u32,
 }
 
 impl Stats {
@@ -168,6 +170,8 @@ pub struct AudioHost {
     /// au lancement : s'il change (peripherique change, ou taux inconnu au
     /// demarrage), on relance les apercus, sinon REAPER reechantillonnerait.
     preview_srate: f64,
+    /// Ports revenus a la sortie materielle : leur piste avait disparu.
+    routes_lost: u32,
 }
 
 impl AudioHost {
@@ -204,6 +208,7 @@ impl AudioHost {
             hook,
             max_frames: usize::MAX,
             preview_srate: 0.0,
+            routes_lost: 0,
         }
     }
 
@@ -241,7 +246,12 @@ impl AudioHost {
                     let src = feed();
                     p.preview = Some(Preview::new(r, src));
                 }
-                let ok = p.preview.as_mut().is_some_and(|pv| pv.play_hardware(0));
+                // Un apercu qui joue deja (sur la sortie, ou DANS une piste)
+                // reste ou il est.
+                let ok = p
+                    .preview
+                    .as_mut()
+                    .is_some_and(|pv| pv.is_playing() || pv.play_hardware(0));
                 if ok {
                     self.preview_srate = core_srate;
                 }
@@ -254,6 +264,61 @@ impl AudioHost {
                 true
             }
         }
+    }
+
+    /// Fait jouer un port DANS une piste (son GUID) : la colonne passe par
+    /// ses effets, son volume, ses envois. Rien : la sortie materielle 1/2.
+    pub fn route_port(&mut self, port: usize, track: Option<&str>) -> bool {
+        if !self.ensure_port(port) {
+            return false;
+        }
+        let Some(r) = self.reaper.clone() else {
+            return track.is_none();
+        };
+        let Some(pv) = self.ports[port].preview.as_mut() else {
+            return false;
+        };
+        match track {
+            Some(g) => pv.play_track(&r, g),
+            None => pv.play_hardware(0),
+        }
+    }
+
+    /// La piste ou joue un port (son GUID).
+    pub fn port_route(&self, port: usize) -> Option<String> {
+        self.ports
+            .get(port)?
+            .preview
+            .as_ref()?
+            .routed()
+            .map(str::to_string)
+    }
+
+    /// Les cretes d'un port (gauche, droite) depuis la derniere lecture, pour
+    /// les vumetres.
+    pub fn port_levels(&self, port: usize) -> [f32; 2] {
+        self.ports
+            .get(port)
+            .map_or([0.0; 2], |p| p.stats.take_peaks())
+    }
+
+    /// Une piste de sortie effacee (ou deplacee dans un autre projet) : le
+    /// port revient a la sortie materielle. Rend le nombre de ports rendus.
+    fn check_routes(&mut self) -> usize {
+        let Some(r) = self.reaper.clone() else {
+            return 0;
+        };
+        let mut k = 0;
+        for p in &mut self.ports {
+            if let Some(pv) = p.preview.as_mut() {
+                if !pv.track_alive(&r) {
+                    pv.play_hardware(0);
+                    k += 1;
+                }
+            }
+        }
+        self.routes_lost += k as u32;
+        k
     }
 
     fn port_source(&self, port: usize) -> Option<&PortSource> {
@@ -581,6 +646,7 @@ impl AudioHost {
     /// Le battement du fil principal : les decodages finis entrent au vivier,
     /// les voix finies sont rendues, la memoire liberable est liberee.
     pub fn poll(&mut self) {
+        self.check_routes();
         while let Some(m) = self.decoder.try_msg() {
             match m {
                 decode::Msg::Thumb { path, src, data } => {
@@ -738,6 +804,7 @@ impl AudioHost {
             clips: self.pool.loaded_count(),
             bytes: self.pool.bytes_resident(),
             decoding: self.decoding,
+            routes_lost: self.routes_lost,
             ..Stats::default()
         };
         for (i, p) in self.ports.iter().enumerate() {
