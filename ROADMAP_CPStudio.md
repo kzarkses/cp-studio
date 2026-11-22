@@ -490,6 +490,17 @@ Ce que Cedric a tranché le 2026-11-22 :
   où il y a de la place). Il lit l'entrée de la carte son dans le crochet audio
   du chargeur.
 
+Ce que Cedric a tranché le 2026-11-22 après-midi (construit le même jour) :
+- **La transcription se fait quand il la demande** : la baguette d'une prise,
+  l'action, ou un bouton de transcription automatique (coupé par défaut).
+- **Une fois transcrit, le MIDI fait foi.** Il s'éloigne de l'audio, et c'est
+  voulu : une note effacée dans le MIDI disparaît de la tab et ne revient pas
+  (ni fantôme, ni décodage) ; rien ne se retranscrit tout seul.
+- **Les prises se déplacent comme dans l'arrangement** : on voit l'item (son
+  onde, son MIDI, sa tab) bouger, son début se cale par le magnétisme de
+  REAPER, Ctrl copie.
+- **Des fichiers audio se déposent dans Guitar Tab** depuis le navigateur.
+
 ### L'éditeur de clips revient (demande de Cedric, 2026-11-22)
 
 **Ce qu'on avait.** CP_Editor (Lua) était complet, très fonctionnel, et Cedric
@@ -561,6 +572,16 @@ chaque note, et un test le tient.
   par sa piste. Le double-clic sur le MIDI de Guitar Tab l'ouvre.
 - L'auto-test du vrai REAPER passe : transposition écrite, canaux gardés,
   annulation.
+- Premier retour de Cedric (2026-11-22 après-midi), corrigé le même jour :
+  - glisser une note l'envoyait en C9 : la vue suivait les notes pendant le
+    geste. La vue verticale est désormais une caméra : tout le clavier défile,
+    la hauteur des rangs ne change que sur demande, le cadrage se fait à
+    l'ouverture et sur demande (son pavé « - »), jamais pendant un geste ;
+  - **ses raccourcis de l'éditeur MIDI de REAPER, tels quels** : les défauts
+    de REAPER (lus dans sa section 32060) puis son `reaper-kb.ini` ;
+  - la table souris de REAPER complétée (clic droit = menu, Ctrl glisser sur
+    la grille = copie, Maj+Win / Ctrl+Win, accords) ;
+  - l'écoute des notes : un bouton.
 - Reste :
   - les couches CC et pitchbend (l'ancien éditeur n'en avait pas, décidé) ;
   - la probabilité (cases de la Session, à venir) ;
