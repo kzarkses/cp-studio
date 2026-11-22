@@ -7,15 +7,20 @@
 //! en PNG.
 //!
 //! - Le « feeling » de REAPER : la table de modificateurs souris de Cedric
-//!   (reprise de l'ancien CP_Editor) et sa molette (verticale, Alt = temps,
-//!   Maj = zoom, Ctrl = hauteur des rangs ; bouton du milieu = la main).
-//! - Centre sur les notes : « Fit » cadre les notes (2 rangs de marge, le
-//!   reste du clavier replie en deux bandes) ; « Notes » ne garde que les
-//!   rangs joues.
+//!   (relevee dans son REAPER, ROADMAP_Editeur.md §2), ses raccourcis de
+//!   l'editeur MIDI ([`keys`] : les defauts de REAPER et son reaper-kb.ini,
+//!   rendus en actions par [`Ed::command`]) et sa molette.
+//! - La vue verticale est une CAMERA : tout le clavier defile, la hauteur des
+//!   rangs ne change que sur demande (Ctrl + molette). Elle se cadre sur les
+//!   notes a l'ouverture d'un item et sur demande, jamais pendant un geste ;
+//!   un geste qui sort de la vue la fait defiler (au bord).
+//! - « Notes » ne garde que les rangs joues ; la liste est figee pendant un
+//!   geste.
 //! - Pas de phrase a l'ecran : les explications sont des infobulles
 //!   ([`Ed::label`]).
 
 mod draw;
+pub mod keys;
 #[cfg(test)]
 mod tests;
 
@@ -27,7 +32,7 @@ use cp_ui::{Button, Ev, Mods, vk};
 /// Les rangs montres.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Rows {
-    /// La vue cadre les notes ; le reste du clavier se replie.
+    /// Tout le clavier, qui defile (cadre sur les notes a l'ouverture).
     Fit,
     /// Seulement les rangs joues.
     Notes,
@@ -97,6 +102,37 @@ pub fn grid_name(g: f64) -> &'static str {
         .map_or("grid", |x| x.0)
 }
 
+/// La grille d'une action « Grid: Set to ... » de l'editeur MIDI (noires).
+fn grid_of(cmd: u32) -> Option<f64> {
+    Some(match cmd {
+        40204 | 41015 => 4.0,
+        40203 | 41014 => 2.0,
+        40201 | 41013 => 1.0,
+        40197 | 41012 => 0.5,
+        40192 | 41011 => 0.25,
+        40190 | 41010 => 0.125,
+        41020 | 41009 => 0.0625,
+        41019 | 41008 => 0.03125,
+        40205 | 41016 => 8.0,
+        40207 | 41017 => 16.0,
+        40202 => 4.0 / 3.0,
+        40199 => 2.0 / 3.0,
+        40193 => 1.0 / 3.0,
+        40191 => 1.0 / 6.0,
+        40189 => 1.0 / 12.0,
+        _ => return None,
+    })
+}
+
+/// Allonge les notes choisies (REAPER : rien sans selection).
+fn lengthen(r: &mut Roll, d: f64) -> usize {
+    let k = r.sel_count();
+    if k > 0 {
+        r.resize_sel(d);
+    }
+    k
+}
+
 /// Un item MIDI ouvert.
 #[derive(Clone, Debug, Default)]
 pub struct Midi {
@@ -160,8 +196,6 @@ pub enum Hit {
     /// La barre de velocite d'une note.
     Vel(u64),
     VelLane,
-    FoldTop,
-    FoldBottom,
     VScroll,
     HScroll,
     // La barre
@@ -174,6 +208,8 @@ pub enum Hit {
     Transform,
     VelToggle,
     Follow,
+    /// Entendre les notes qu'on touche.
+    Hear,
     Help,
     // Le clip audio
     Wave,
@@ -225,6 +261,15 @@ pub enum Act {
     },
     /// Ouvrir l'item dans l'editeur MIDI de REAPER.
     OpenReaper,
+    /// Clic droit : le menu des notes, sous la souris.
+    ContextMenu {
+        x: f32,
+        y: f32,
+    },
+    /// Une action de la fenetre principale de REAPER (le transport).
+    Main(u32),
+    /// Fermer l'editeur (« File: Close window »).
+    Close,
     /// Le clip audio : poser ses valeurs (pendant le geste, sans annulation),
     /// puis un pas d'annulation a la fin.
     AudioLive,
@@ -251,9 +296,6 @@ pub struct Lay {
     /// La zone des rangs (ou de l'onde) : son haut et sa hauteur.
     pub gy: f32,
     pub gh: f32,
-    pub fold_top: bool,
-    pub fold_bot: bool,
-    pub fold_h: f32,
     /// La couche de velocite.
     pub vel_y: f32,
     pub vel_h: f32,
@@ -268,7 +310,8 @@ pub struct Lay {
 
 #[derive(Clone, Debug)]
 enum Drag {
-    /// Un appui pas encore decide (clic ou glisser).
+    /// Un appui pas encore decide (clic ou glisser) : sur une note (`id`) ou
+    /// sur la grille vide.
     Press {
         x0: f32,
         y0: f32,
@@ -279,18 +322,36 @@ enum Drag {
     Move {
         x0: f32,
         y0: f32,
+        /// La noire sous la souris a l'appui (le geste se compte en noires :
+        /// le defilement au bord ne le fausse pas).
+        qp: f64,
         base: Vec<Note>,
-        /// Le debut et le rang de la note saisie.
+        /// La note saisie (l'arpege s'ecarte autour d'elle).
+        id: u64,
+        /// Le debut de la note saisie, et le rang de reference de la souris.
         anchor_q: f64,
         anchor_p: i32,
+        /// La hauteur de la note saisie (celle qu'on entend).
+        pitch0: i32,
         snap: bool,
         /// 0 libre, 1 temps seul, 2 hauteur seule, 3 a decider.
         axis: u8,
         copy: bool,
+        /// Les hauteurs hors de la gamme (REAPER : « ignoring scale/key »).
+        free: bool,
+        /// Ecarter les debuts selon la hauteur (« arpeggiate »).
+        arp: bool,
         heard: i32,
     },
+    /// Peindre des notes et des accords : une case par pas de grille, et
+    /// chaque hauteur traversee dans un meme pas fait un accord.
+    Chords {
+        cells: Vec<(f64, i32)>,
+        /// La derniere case : (pas, hauteur).
+        at: Option<(f64, i32)>,
+    },
     Edge {
-        x0: f32,
+        qp: f64,
         base: Vec<Note>,
         id: u64,
         left: bool,
@@ -306,9 +367,11 @@ enum Drag {
     Erase {
         any: bool,
     },
+    /// Le lasso : son coin de depart dans le contenu (noire, et ordonnee
+    /// dans les rangs), son coin courant a l'ecran.
     Marquee {
-        x0: f32,
-        y0: f32,
+        q0: f64,
+        cy0: f32,
         x1: f32,
         y1: f32,
         add: bool,
@@ -351,18 +414,22 @@ enum Drag {
     },
 }
 
-/// L'aide : les touches et les gestes (l'infobulle du « ? »).
-pub const HELP: &str = "Notes\n\
-Click: select   \u{00b7}   Ctrl: toggle   \u{00b7}   Shift: range   \u{00b7}   Alt: erase\n\
+/// L'aide : les gestes (l'infobulle du « ? »). Les touches sont celles de
+/// l'editeur MIDI de REAPER.
+pub const HELP: &str = "Notes, as in REAPER\n\
+Click: select   \u{00b7}   Shift: range   \u{00b7}   Ctrl: toggle   \u{00b7}   Alt: erase\n\
+Shift+Alt: the measure   \u{00b7}   Ctrl+Alt: and the later notes\n\
+Shift+Win: double length   \u{00b7}   Ctrl+Win: halve\n\
 Drag: move   \u{00b7}   Shift: no snap   \u{00b7}   Ctrl: copy   \u{00b7}   Shift+Ctrl: one axis\n\
-Edges: length   \u{00b7}   Ctrl: this note only   \u{00b7}   Alt: stretch the group\n\
-Empty grid: click = new note, drag = its length   \u{00b7}   Alt drag: erase\n\
-Ctrl+Alt drag: paint a line   \u{00b7}   right drag: lasso   \u{00b7}   right click: delete\n\
+Shift+Ctrl+Alt drag: pitch out of the scale   \u{00b7}   Ctrl+Win drag: arpeggiate\n\
+Edges: length   \u{00b7}   Ctrl: this note only   \u{00b7}   Alt: stretch\n\
 \n\
-Keys\n\
-\u{2191}\u{2193} semitone   \u{00b7}   Shift: octave   \u{00b7}   Ctrl: scale step   \u{00b7}   \u{2190}\u{2192} nudge\n\
-Alt+arrows: next note (heard)   \u{00b7}   Q quantize   \u{00b7}   Ctrl+D duplicate\n\
-Ctrl+C / X / V   \u{00b7}   Del   \u{00b7}   Ctrl+A   \u{00b7}   Home: fit   \u{00b7}   F: follow\n\
+Empty grid\n\
+Click or drag: a new note   \u{00b7}   Ctrl: cursor, drag copies the selection\n\
+Alt: erase   \u{00b7}   Ctrl+Alt drag: a line   \u{00b7}   Shift+Ctrl+Alt drag: notes and chords\n\
+Right drag: lasso   \u{00b7}   right click: menu\n\
+\n\
+Keys: your REAPER MIDI editor shortcuts\n\
 \n\
 View\n\
 Wheel: scroll   \u{00b7}   Alt+wheel: time   \u{00b7}   Shift+wheel: zoom   \u{00b7}   Ctrl+wheel: row height\n\
@@ -393,20 +460,33 @@ pub struct Ed {
     pub status: String,
     pub lay: Lay,
     pub scale: f32,
-    /// Les rangs replies qu'on a rouverts : (au-dessus, au-dessous).
-    extra: (i32, i32),
-    /// La hauteur des rangs choisie (Ctrl + molette) ; sinon ils remplissent.
-    row_h: Option<f32>,
+    /// Entendre la note qu'on touche (par la piste de l'item).
+    pub hear: bool,
+    /// La hauteur d'un rang (px a 96 DPI) : elle ne change que sur demande
+    /// (Ctrl + molette, un cadrage).
+    pub row_h: f32,
+    /// Le cadrage vertical a faire des que la hauteur de la vue est connue.
+    want_fit: bool,
+    /// ... ou seulement ramener les notes a l'ecran si aucune n'y est.
+    want_reveal: bool,
     /// Les rangs montres, du haut vers le bas.
     pub(crate) rows: Vec<i32>,
     pub(crate) boxes: Vec<HBox>,
     pub(crate) hover: Hit,
     drag: Option<Drag>,
+    /// La derniere position de la souris (le defilement au bord, les actions
+    /// « sous la souris »).
+    mouse: (f32, f32, Mods),
     last_len: f64,
     last_vel: i32,
     last_chan: i32,
     dirty: bool,
 }
+
+/// La hauteur d'un rang par defaut, et ses bornes (px a 96 DPI).
+pub const ROW_H: f32 = 14.0;
+const ROW_MIN: f32 = 5.0;
+const ROW_MAX: f32 = 40.0;
 
 impl Default for Ed {
     fn default() -> Self {
@@ -439,12 +519,15 @@ impl Ed {
             status: String::new(),
             lay: Lay::default(),
             scale: 1.0,
-            extra: (0, 0),
-            row_h: None,
+            hear: true,
+            row_h: ROW_H,
+            want_fit: true,
+            want_reveal: false,
             rows: Vec::new(),
             boxes: Vec::new(),
             hover: Hit::None,
             drag: None,
+            mouse: (0.0, 0.0, Mods::default()),
             last_len: 0.25,
             last_vel: 100,
             last_chan: 0,
@@ -506,6 +589,11 @@ impl Ed {
         self.clip = Clip::Midi(m);
         if fresh {
             self.fit();
+        } else {
+            // Le meme item relu (un geste ecrit, une annulation, une
+            // modification ailleurs) : la camera ne bouge pas, sauf si plus
+            // aucune note n'est a l'ecran.
+            self.want_reveal = true;
         }
         self.drag = None;
         self.dirty = true;
@@ -553,11 +641,11 @@ impl Ed {
         }
     }
 
-    /// Le cadrage : tout l'item dans la largeur, les rangs remis a la vue.
+    /// Le cadrage : tout l'item dans la largeur ; en hauteur, les notes au
+    /// milieu (fait au prochain dessin, quand la hauteur de la vue est
+    /// connue). Seulement a l'ouverture d'un item et sur demande.
     pub fn fit(&mut self) {
-        self.extra = (0, 0);
-        self.row_h = None;
-        self.vscroll = 0.0;
+        self.want_fit = true;
         if let Some((a, b)) = self.span() {
             let w = if self.lay.sw > 10.0 {
                 self.lay.sw
@@ -588,32 +676,109 @@ impl Ed {
         (self.lay.sw / self.lay.ppq.max(1e-3)) as f64
     }
 
-    /// Les rangs : du plus aigu au plus grave.
+    /// Les rangs : du plus aigu au plus grave. Tout le clavier, ou (mode
+    /// Notes) les hauteurs jouees. Ne depend des notes qu'en mode Notes, et
+    /// la vue ne les recalcule pas pendant un geste.
     pub(crate) fn compute_rows(&self) -> Vec<i32> {
         let Some(m) = self.midi() else {
             return Vec::new();
         };
-        let mut used: Vec<i32> = m.roll.notes.iter().map(|n| n.pitch).collect();
-        used.sort_unstable();
-        used.dedup();
-        if self.rows_mode == Rows::Notes && !used.is_empty() {
+        if self.rows_mode == Rows::Notes && !m.roll.notes.is_empty() {
+            let mut used: Vec<i32> = m.roll.notes.iter().map(|n| n.pitch).collect();
+            used.sort_unstable();
+            used.dedup();
             used.reverse();
             return used;
         }
-        let (lo, hi) = match (used.first(), used.last()) {
-            (Some(&a), Some(&b)) => (a - 2, b + 2),
-            _ => (48, 72),
+        (0..=127).rev().collect()
+    }
+
+    /// Les hauteurs extremes des notes (ou de la selection), ou rien.
+    fn note_span(&self, sel_only: bool) -> Option<(i32, i32)> {
+        let m = self.midi()?;
+        let it = m.roll.notes.iter().filter(|n| !sel_only || n.sel);
+        let (lo, hi) = it.fold((i32::MAX, i32::MIN), |(a, b), n| {
+            (a.min(n.pitch), b.max(n.pitch))
+        });
+        (lo <= hi).then_some((lo, hi))
+    }
+
+    /// Le cadrage vertical, la hauteur de la vue etant connue : les rangs de
+    /// `lo` a `hi` (et deux de marge) remplissent la vue, dans les bornes de
+    /// hauteur ; l'ensemble est centre.
+    pub(crate) fn frame_rows(&mut self, lo: i32, hi: i32) {
+        let s = self.scale.max(0.5);
+        let gh = self.lay.gh;
+        if gh <= 10.0 || self.rows.is_empty() {
+            return;
+        }
+        let (a, b) = (
+            self.row_of(hi + 2).or(self.row_of(hi)),
+            self.row_of(lo - 2).or(self.row_of(lo)),
+        );
+        let (a, b) = match (a, b) {
+            (Some(a), Some(b)) => (a.min(b), a.max(b)),
+            _ => (0, self.rows.len() - 1),
         };
-        let (mut lo, mut hi) = (lo - self.extra.1, hi + self.extra.0);
-        // Au moins une octave.
-        while hi - lo < 12 {
-            hi += 1;
-            if hi - lo < 12 {
-                lo -= 1;
+        let n = (b - a + 1).max(12) as f32;
+        let rh = (gh / n).clamp(ROW_MIN * s, 22.0 * s);
+        self.row_h = rh / s;
+        self.lay.rh = rh;
+        self.lay.content_h = self.rows.len() as f32 * rh;
+        let mid = (a + b + 1) as f32 * 0.5 * rh;
+        self.vscroll = (mid - gh * 0.5).clamp(0.0, self.max_vscroll());
+        self.dirty = true;
+    }
+
+    /// Apres le calcul de la vue : le cadrage demande, ou les notes ramenees
+    /// a l'ecran si aucune n'y est (sans changer la hauteur des rangs).
+    pub(crate) fn apply_camera(&mut self) {
+        if self.lay.gh <= 10.0 || self.midi().is_none() {
+            return;
+        }
+        if std::mem::take(&mut self.want_fit) {
+            self.want_reveal = false;
+            let (lo, hi) = self.note_span(false).unwrap_or((54, 66));
+            self.frame_rows(lo, hi);
+            return;
+        }
+        if std::mem::take(&mut self.want_reveal) {
+            let Some(m) = self.midi() else { return };
+            let any = m.roll.notes.iter().any(|n| {
+                self.row_of(n.pitch).is_some_and(|i| {
+                    let y = self.row_y(i);
+                    y + self.lay.rh > self.lay.gy && y < self.lay.gy + self.lay.gh
+                })
+            });
+            if !any && !m.roll.notes.is_empty() {
+                self.reveal(None);
             }
         }
-        let (lo, hi) = (lo.max(0), hi.min(127));
-        (lo..=hi).rev().collect()
+    }
+
+    /// Fait defiler (sans zoomer) pour montrer les notes (ou la selection).
+    fn reveal(&mut self, sel: Option<bool>) {
+        let Some((lo, hi)) = self.note_span(sel.unwrap_or(false)) else {
+            return;
+        };
+        let (Some(a), Some(b)) = (self.row_of(hi), self.row_of(lo)) else {
+            return;
+        };
+        let rh = self.lay.rh.max(1.0);
+        let (ya, yb) = (a.min(b) as f32 * rh, (a.max(b) + 1) as f32 * rh);
+        let gh = self.lay.gh;
+        let v = self.vscroll;
+        let nv = if yb - ya > gh {
+            (ya + yb) * 0.5 - gh * 0.5
+        } else if ya < v {
+            ya - rh
+        } else if yb > v + gh {
+            yb - gh + rh
+        } else {
+            v
+        };
+        self.vscroll = nv.clamp(0.0, self.max_vscroll());
+        self.dirty = true;
     }
 
     pub(crate) fn row_y(&self, idx: usize) -> f32 {
@@ -787,13 +952,7 @@ impl Ed {
         }
         match &self.clip {
             Clip::Midi(_) => {
-                if l.fold_top && y >= l.gy - l.fold_h && y < l.gy {
-                    return Hit::FoldTop;
-                }
                 let gb = l.gy + l.gh;
-                if l.fold_bot && y >= gb && y < gb + l.fold_h {
-                    return Hit::FoldBottom;
-                }
                 if y >= l.gy && y < gb {
                     if x >= l.sx + l.sw {
                         return if self.max_vscroll() > 0.0 {
@@ -964,8 +1123,9 @@ impl Ed {
             // La hauteur des rangs, autour du rang pointe.
             if self.midi().is_some() {
                 let before = (y - l.gy + self.vscroll) / l.rh.max(1.0);
-                let rh = (l.rh * 1.15f32.powf(dy)).clamp(4.0 * self.scale, 72.0 * self.scale);
-                self.row_h = Some(rh / self.scale);
+                let rh =
+                    (l.rh * 1.15f32.powf(dy)).clamp(ROW_MIN * self.scale, ROW_MAX * self.scale);
+                self.row_h = rh / self.scale;
                 self.lay.rh = rh;
                 self.lay.content_h = self.rows.len() as f32 * rh;
                 self.vscroll = (before * rh - (y - l.gy)).clamp(0.0, self.max_vscroll());
@@ -985,6 +1145,7 @@ impl Ed {
         let h = self.hit(x, y);
         self.dirty = true;
         if b == Button::Right {
+            // Clic droit : le menu ; glisser : le lasso (comme REAPER).
             return match h {
                 Hit::Note { id, .. } => {
                     self.drag = Some(Drag::Press {
@@ -997,12 +1158,12 @@ impl Ed {
                     Vec::new()
                 }
                 Hit::Grid => {
-                    self.drag = Some(Drag::Marquee {
+                    self.drag = Some(Drag::Press {
                         x0: x,
                         y0: y,
-                        x1: x,
-                        y1: y,
-                        add: m.ctrl,
+                        id: None,
+                        mods: m,
+                        right: true,
                     });
                     Vec::new()
                 }
@@ -1053,14 +1214,6 @@ impl Ed {
                 self.drag = Some(Drag::Range { q0: q });
                 vec![Act::Seek(q)]
             }
-            Hit::FoldTop => {
-                self.extra.0 += 12;
-                Vec::new()
-            }
-            Hit::FoldBottom => {
-                self.extra.1 += 12;
-                Vec::new()
-            }
             Hit::VScroll => {
                 self.drag = Some(Drag::VScroll {
                     y0: y,
@@ -1098,9 +1251,17 @@ impl Ed {
                     Rows::Fit => Rows::Notes,
                     Rows::Notes => Rows::Fit,
                 };
-                self.row_h = None;
-                self.vscroll = 0.0;
+                // Un changement de vue demande : on recadre.
+                self.want_fit = true;
                 Vec::new()
+            }
+            Hit::Hear => {
+                self.hear = !self.hear;
+                if self.hear {
+                    Vec::new()
+                } else {
+                    vec![Act::AuditionOff]
+                }
             }
             Hit::Quantize => self.quantize(),
             Hit::VelToggle => {
@@ -1175,6 +1336,9 @@ impl Ed {
     }
 
     fn audition(&self, pitch: i32, hold: bool) -> Vec<Act> {
+        if !self.hear {
+            return Vec::new();
+        }
         let (chan, vel) = self
             .midi()
             .and_then(|m| m.roll.notes.iter().find(|n| n.pitch == pitch))
@@ -1188,7 +1352,7 @@ impl Ed {
     }
 
     fn down_note(&mut self, x: f32, y: f32, id: u64, part: Part, m: Mods) -> Vec<Act> {
-        let bar = self.bar_qn();
+        let qp = self.qn_of(x);
         let Some(md) = self.midi_mut() else {
             return Vec::new();
         };
@@ -1202,7 +1366,7 @@ impl Ed {
             }
             let base = md.roll.notes.clone();
             self.drag = Some(Drag::Edge {
-                x0: x,
+                qp,
                 base,
                 id,
                 left: part == Part::Left,
@@ -1212,25 +1376,22 @@ impl Ed {
             });
             return Vec::new();
         }
-        if m.alt && m.shift {
-            md.roll.select_measure(n.qn0, bar);
-            return Vec::new();
-        }
-        if m.alt && m.ctrl {
-            md.roll.select_from(n.qn0);
-            return Vec::new();
-        }
-        if m.alt {
+        // Alt seul : effacer (un clic efface la note, glisser efface ce qu'on
+        // traverse).
+        if m.alt && !m.shift && !m.ctrl && !m.win {
             md.roll.delete(id);
             self.drag = Some(Drag::Erase { any: true });
             return Vec::new();
         }
-        if !m.ctrl && !m.shift && !n.sel {
+        // Sans modificateur, une note pas choisie l'est tout de suite : la
+        // glisser deplace elle seule.
+        if m == Mods::default() && !n.sel {
             md.roll.select_only(id);
         }
         self.last_vel = n.vel;
         self.last_chan = n.chan;
         self.last_len = n.len;
+        // Le clic et le glisser font deux choses differentes : on attend.
         self.drag = Some(Drag::Press {
             x0: x,
             y0: y,
@@ -1244,8 +1405,10 @@ impl Ed {
     fn down_grid(&mut self, x: f32, y: f32, m: Mods) -> Vec<Act> {
         let q = self.qn_of(x);
         let p = self.pitch_at(y);
-        if m.ctrl && m.alt {
-            let q0 = self.snap_floor(q, !m.shift);
+        let (s, c, a) = (m.shift, m.ctrl, m.alt);
+        // Ctrl+Alt : une ligne de notes.
+        if c && a && !s {
+            let q0 = self.snap_floor(q, true);
             self.drag = Some(Drag::Paint {
                 q0,
                 p0: p,
@@ -1254,38 +1417,211 @@ impl Ed {
             });
             return Vec::new();
         }
-        if m.alt {
+        // Alt seul : tout deselectionner ; glisser efface.
+        if a && !s && !c {
             if let Some(md) = self.midi_mut() {
                 md.roll.clear_sel();
             }
             self.drag = Some(Drag::Erase { any: false });
             return Vec::new();
         }
-        if m.ctrl {
-            if let Some(md) = self.midi_mut() {
-                md.roll.clear_sel();
-            }
-            return vec![Act::Seek(q.max(0.0))];
+        // Ctrl, Maj+Alt, Maj+Ctrl+Alt : le clic et le glisser different.
+        if c || a {
+            self.drag = Some(Drag::Press {
+                x0: x,
+                y0: y,
+                id: None,
+                mods: m,
+                right: false,
+            });
+            return Vec::new();
         }
-        // Une note neuve dans la case du pointeur ; glisser regle sa longueur
-        // (et sa hauteur, tant qu'elle est neuve).
-        let q0 = self.snap_floor(q, !m.shift).max(0.0);
+        // Une note neuve dans la case du pointeur (Maj : sans magnetisme) ;
+        // glisser regle sa longueur, et sa hauteur tant qu'elle est neuve.
+        let Some(id) = self.insert_note(q, p, !s) else {
+            return Vec::new();
+        };
+        let q0 = self
+            .midi()
+            .and_then(|md| md.roll.get(id))
+            .map_or(q, |n| n.qn0);
+        self.drag = Some(Drag::Insert { id, q0, heard: p });
+        self.audition(p, true)
+    }
+
+    /// Une note neuve, choisie seule : rend son identifiant.
+    fn insert_note(&mut self, q: f64, p: i32, snap: bool) -> Option<u64> {
+        let q0 = self.snap_floor(q, snap).max(0.0);
         let len = if self.snap {
             self.grid.max(self.last_len.min(self.grid * 4.0))
         } else {
             self.last_len
         };
         let (chan, vel) = (self.last_chan, self.last_vel);
+        let md = self.midi_mut()?;
+        let id = md.roll.insert(q0, len, p, chan, vel);
+        md.roll.select_only(id);
+        Some(id)
+    }
+
+    /// Le geste decide sur une note : selon les modificateurs de l'appui.
+    #[allow(clippy::too_many_arguments)]
+    fn start_note_drag(
+        &mut self,
+        x0: f32,
+        y0: f32,
+        id: u64,
+        m: Mods,
+        x: f32,
+        y: f32,
+        mods: Mods,
+    ) -> Vec<Act> {
+        // (magnetisme, axe, copie, hors gamme, arpege)
+        let g = match (m.shift, m.ctrl, m.alt, m.win) {
+            (false, false, false, _) => (true, 0, false, false, false),
+            (true, false, false, _) => (false, 0, false, false, false),
+            (false, true, false, false) => (true, 0, true, false, false),
+            (true, true, false, false) => (true, 3, false, false, false),
+            (true, true, true, false) => (true, 2, false, true, false),
+            (false, true, false, true) => (true, 0, false, false, true),
+            (true, true, false, true) => (false, 0, false, false, true),
+            // Maj+Alt, Ctrl+Alt : des clics, rien a glisser.
+            _ => {
+                self.drag = None;
+                return vec![Act::AuditionOff];
+            }
+        };
+        let (snap, axis, copy, free, arp) = g;
+        let qp = self.qn_of(x0);
         let Some(md) = self.midi_mut() else {
             return Vec::new();
         };
-        let id = md.roll.insert(q0, len, p, chan, vel);
-        md.roll.select_only(id);
-        self.drag = Some(Drag::Insert { id, q0, heard: p });
-        self.audition(p, true)
+        let Some(n) = md.roll.get(id).copied() else {
+            return Vec::new();
+        };
+        if !n.sel {
+            md.roll.add_sel(id);
+        }
+        if copy {
+            md.roll.stamp_sel();
+        }
+        let base = md.roll.notes.clone();
+        self.drag = Some(Drag::Move {
+            x0,
+            y0,
+            qp,
+            base,
+            id,
+            anchor_q: n.qn0,
+            anchor_p: n.pitch,
+            pitch0: n.pitch,
+            snap,
+            axis,
+            copy,
+            free,
+            arp,
+            heard: n.pitch,
+        });
+        self.on_move(x, y, mods)
+    }
+
+    /// Le geste decide sur la grille vide.
+    #[allow(clippy::too_many_arguments)]
+    fn start_grid_drag(
+        &mut self,
+        x0: f32,
+        y0: f32,
+        m: Mods,
+        x: f32,
+        y: f32,
+        mods: Mods,
+    ) -> Vec<Act> {
+        let (s, c, a) = (m.shift, m.ctrl, m.alt);
+        if s && c && a {
+            // Des notes et des accords.
+            self.drag = Some(Drag::Chords {
+                cells: Vec::new(),
+                at: None,
+            });
+            self.chords_add(x0, y0);
+            return self.on_move(x, y, mods);
+        }
+        if a {
+            // Maj+Alt : effacer.
+            if let Some(md) = self.midi_mut() {
+                md.roll.clear_sel();
+            }
+            self.drag = Some(Drag::Erase { any: false });
+            return self.on_move(x, y, mods);
+        }
+        // Ctrl : la selection copiee, menee par la souris ; l'ecart entre
+        // l'appui et la premiere note reste, son debut se cale.
+        let qp = self.qn_of(x0);
+        let p_at = self.pitch_at(y0);
+        let Some(md) = self.midi_mut() else {
+            return Vec::new();
+        };
+        let Some(f) = md
+            .roll
+            .notes
+            .iter()
+            .filter(|n| n.sel)
+            .min_by(|a, b| a.qn0.total_cmp(&b.qn0))
+            .copied()
+        else {
+            self.drag = None;
+            return Vec::new();
+        };
+        md.roll.stamp_sel();
+        let base = md.roll.notes.clone();
+        self.drag = Some(Drag::Move {
+            x0,
+            y0,
+            qp,
+            base,
+            id: f.id,
+            anchor_q: f.qn0,
+            anchor_p: p_at,
+            pitch0: f.pitch,
+            snap: !s,
+            axis: 0,
+            copy: true,
+            free: false,
+            arp: false,
+            heard: f.pitch,
+        });
+        self.on_move(x, y, mods)
+    }
+
+    /// Peindre des notes et des accords : la case du pointeur, et dans un
+    /// meme pas toutes les hauteurs traversees.
+    fn chords_add(&mut self, x: f32, y: f32) {
+        let q = self.snap_floor(self.qn_of(x), true).max(0.0);
+        let p = self.pitch_at(y);
+        let notes_mode = self.rows_mode == Rows::Notes;
+        let shown = self.rows.clone();
+        let Some(Drag::Chords { cells, at }) = &mut self.drag else {
+            return;
+        };
+        let from = at.filter(|c| (c.0 - q).abs() < 1e-9).map(|c| c.1);
+        let span: Vec<i32> = match from {
+            Some(f) if f <= p => (f..=p).collect(),
+            Some(f) => (p..=f).collect(),
+            None => vec![p],
+        };
+        for pp in span {
+            if notes_mode && !shown.contains(&pp) {
+                continue;
+            }
+            if !cells.iter().any(|c| (c.0 - q).abs() < 1e-9 && c.1 == pp) {
+                cells.push((q, pp));
+            }
+        }
+        *at = Some((q, p));
     }
 
     fn on_move(&mut self, x: f32, y: f32, mods: Mods) -> Vec<Act> {
+        self.mouse = (x, y, mods);
         let Some(d) = self.drag.clone() else {
             let h = self.hit(x, y);
             if h != self.hover {
@@ -1308,51 +1644,33 @@ impl Ed {
                 }
                 if right {
                     self.drag = Some(Drag::Marquee {
-                        x0,
-                        y0,
+                        q0: self.qn_of(x0),
+                        cy0: y0 - self.lay.gy + self.vscroll,
                         x1: x,
                         y1: y,
                         add: m.ctrl,
                     });
                     return Vec::new();
                 }
-                let Some(id) = id else { return Vec::new() };
-                let copy = m.ctrl && !m.shift;
-                let Some(md) = self.midi_mut() else {
-                    return Vec::new();
-                };
-                let Some(n) = md.roll.get(id).copied() else {
-                    return Vec::new();
-                };
-                if !n.sel {
-                    md.roll.add_sel(id);
+                match id {
+                    Some(id) => self.start_note_drag(x0, y0, id, m, x, y, mods),
+                    None => self.start_grid_drag(x0, y0, m, x, y, mods),
                 }
-                if copy {
-                    md.roll.stamp_sel();
-                }
-                let base = md.roll.notes.clone();
-                self.drag = Some(Drag::Move {
-                    x0,
-                    y0,
-                    base,
-                    anchor_q: n.qn0,
-                    anchor_p: n.pitch,
-                    snap: !m.shift || (m.shift && m.ctrl),
-                    axis: if m.shift && m.ctrl { 3 } else { 0 },
-                    copy,
-                    heard: n.pitch,
-                });
-                self.on_move(x, y, mods)
             }
             Drag::Move {
                 x0,
                 y0,
+                qp,
                 base,
+                id,
                 anchor_q,
                 anchor_p,
+                pitch0,
                 snap,
                 axis,
                 copy,
+                free,
+                arp,
                 heard,
             } => {
                 let mut axis = axis;
@@ -1362,13 +1680,11 @@ impl Ed {
                         axis = if dx >= dy { 1 } else { 2 };
                     }
                 }
-                let raw = anchor_q + ((x - x0) / self.lay.ppq.max(1e-3)) as f64;
+                // En noires (pas en pixels) : le defilement au bord garde la
+                // note sous la souris.
+                let raw = anchor_q + (self.qn_of(x) - qp);
                 let mut dq = self.snap_q(raw, snap) - anchor_q;
                 let mut dp = self.pitch_at(y) - anchor_p;
-                if self.rows_mode == Rows::Notes {
-                    // Les rangs ne sont pas contigus : on vise un rang joue.
-                    dp = self.pitch_at(y) - anchor_p;
-                }
                 match axis {
                     1 => dp = 0,
                     2 => dq = 0.0,
@@ -1378,21 +1694,35 @@ impl Ed {
                     }
                     _ => {}
                 }
-                let now = anchor_p + dp;
+                if arp {
+                    dp = 0;
+                }
+                let now = (pitch0 + dp).clamp(0, 127);
                 let Some(md) = self.midi_mut() else {
                     return Vec::new();
                 };
                 md.roll.notes = base.clone();
-                md.roll.move_sel(dq, dp);
+                if arp {
+                    md.roll.arpeggiate(id, dq);
+                } else if free {
+                    md.roll.move_sel_free(dq, dp);
+                } else {
+                    md.roll.move_sel(dq, dp);
+                }
                 self.drag = Some(Drag::Move {
                     x0,
                     y0,
+                    qp,
                     base,
+                    id,
                     anchor_q,
                     anchor_p,
+                    pitch0,
                     snap,
                     axis,
                     copy,
+                    free,
+                    arp,
                     heard: now,
                 });
                 if now != heard {
@@ -1401,7 +1731,7 @@ impl Ed {
                 Vec::new()
             }
             Drag::Edge {
-                x0,
+                qp,
                 base,
                 id,
                 left,
@@ -1409,7 +1739,7 @@ impl Ed {
                 solo,
                 stretch,
             } => {
-                let dq_raw = ((x - x0) / self.lay.ppq.max(1e-3)) as f64;
+                let dq_raw = self.qn_of(x) - qp;
                 let Some(n) = base.iter().find(|n| n.id == id).copied() else {
                     return Vec::new();
                 };
@@ -1419,9 +1749,8 @@ impl Ed {
                     .iter()
                     .map(|b| b.end())
                     .fold(f64::NEG_INFINITY, f64::max);
-                let grid_ok = snap;
-                let target_end = self.snap_q(n.end() + dq_raw, grid_ok);
-                let target_start = self.snap_q(n.qn0 + dq_raw, grid_ok);
+                let target_end = self.snap_q(n.end() + dq_raw, snap);
+                let target_start = self.snap_q(n.qn0 + dq_raw, snap);
                 let Some(md) = self.midi_mut() else {
                     return Vec::new();
                 };
@@ -1489,10 +1818,10 @@ impl Ed {
                 self.drag = Some(Drag::Erase { any });
                 Vec::new()
             }
-            Drag::Marquee { x0, y0, add, .. } => {
+            Drag::Marquee { q0, cy0, add, .. } => {
                 self.drag = Some(Drag::Marquee {
-                    x0,
-                    y0,
+                    q0,
+                    cy0,
                     x1: x,
                     y1: y,
                     add,
@@ -1503,6 +1832,10 @@ impl Ed {
                 let q1 = self.snap_floor(self.qn_of(x), !mods.shift);
                 let p1 = self.pitch_at(y);
                 self.drag = Some(Drag::Paint { q0, p0, q1, p1 });
+                Vec::new()
+            }
+            Drag::Chords { .. } => {
+                self.chords_add(x, y);
                 Vec::new()
             }
             Drag::Vel { .. } => {
@@ -1562,6 +1895,68 @@ impl Ed {
         }
     }
 
+    /// Le battement : pendant un geste, la souris hors de la grille fait
+    /// defiler la vue (comme REAPER), et le geste suit. Rien d'autre ne
+    /// bouge la camera pendant un geste.
+    pub fn tick(&mut self) -> Vec<Act> {
+        let vertical = matches!(
+            self.drag,
+            Some(
+                Drag::Move { .. }
+                    | Drag::Insert { .. }
+                    | Drag::Marquee { .. }
+                    | Drag::Paint { .. }
+                    | Drag::Chords { .. }
+                    | Drag::Erase { .. }
+            )
+        );
+        let horizontal =
+            vertical || matches!(self.drag, Some(Drag::Edge { .. } | Drag::Range { .. }));
+        if !horizontal || self.midi().is_none() {
+            return Vec::new();
+        }
+        let (x, y, m) = self.mouse;
+        let l = self.lay;
+        let s = self.scale.max(0.5);
+        let speed = |d: f32, max: f32| d.signum() * (d.abs() * 0.35).clamp(2.0 * s, max * s);
+        let mut moved = false;
+        if vertical {
+            let d = if y < l.gy {
+                y - l.gy
+            } else if y > l.gy + l.gh {
+                y - (l.gy + l.gh)
+            } else {
+                0.0
+            };
+            if d != 0.0 {
+                let v = (self.vscroll + speed(d, 30.0)).clamp(0.0, self.max_vscroll());
+                if (v - self.vscroll).abs() > 0.01 {
+                    self.vscroll = v;
+                    moved = true;
+                }
+            }
+        }
+        let d = if x < l.sx {
+            x - l.sx
+        } else if x > l.sx + l.sw {
+            x - (l.sx + l.sw)
+        } else {
+            0.0
+        };
+        if d != 0.0 {
+            let dq = (speed(d, 40.0) / l.ppq.max(1e-3)) as f64;
+            let ns = (self.scroll + dq).max(0.0);
+            if (ns - self.scroll).abs() > 1e-9 {
+                self.scroll = ns;
+                moved = true;
+            }
+        }
+        if !moved {
+            return Vec::new();
+        }
+        self.dirty = true;
+        self.on_move(x, y, m)
+    }
     /// La velocite sous la souris ; un groupe choisi garde ses ecarts.
     fn vel_drag(&mut self, y: f32) {
         let l = self.lay;
@@ -1616,35 +2011,106 @@ impl Ed {
     }
 
     fn on_up(&mut self, x: f32, y: f32, b: Button, _mods: Mods) -> Vec<Act> {
+        self.mouse.0 = x;
+        self.mouse.1 = y;
         let Some(d) = self.drag.take() else {
             return Vec::new();
         };
         self.dirty = true;
         let _ = b;
         match d {
+            // Un clic sur une note, selon les modificateurs (REAPER).
             Drag::Press {
                 id: Some(id),
                 mods: m,
                 right,
+                x0,
                 ..
             } => {
+                let bar = self.bar_qn();
+                let q_mouse = self.qn_of(x0).max(0.0);
                 let Some(md) = self.midi_mut() else {
                     return Vec::new();
                 };
+                let Some(n) = md.roll.get(id).copied() else {
+                    return vec![Act::AuditionOff];
+                };
                 if right {
-                    md.roll.delete(id);
-                    return vec![Act::Commit("CP Editor: delete note")];
+                    if !n.sel {
+                        md.roll.select_only(id);
+                    }
+                    return vec![Act::AuditionOff, Act::ContextMenu { x, y }];
                 }
-                if m.ctrl {
-                    md.roll.toggle(id);
-                } else if m.shift {
-                    md.roll.select_range_to(id);
-                } else {
-                    md.roll.select_only(id);
+                let mut out = vec![Act::AuditionOff];
+                match (m.shift, m.ctrl, m.alt, m.win) {
+                    // Choisir la note et y mettre le curseur.
+                    (false, false, false, false) => {
+                        md.roll.select_only(id);
+                        out.push(Act::Seek(n.qn0));
+                    }
+                    (true, false, false, false) => md.roll.select_range_to(id),
+                    (false, true, false, false) => md.roll.toggle(id),
+                    // ... le curseur sous la souris, sans magnetisme.
+                    (true, true, false, false) => {
+                        md.roll.select_only(id);
+                        out.push(Act::Seek(q_mouse));
+                    }
+                    (true, false, true, false) => {
+                        md.roll.select_measure(n.qn0, bar);
+                    }
+                    (false, true, true, false) => {
+                        md.roll.select_from(n.qn0);
+                    }
+                    // Doubler (Maj+Win) ou diviser (Ctrl+Win) la longueur.
+                    (s, c, false, true) if s != c => {
+                        if !n.sel {
+                            md.roll.select_only(id);
+                        }
+                        let k = if s { 2.0 } else { 0.5 };
+                        if md.roll.scale_len(k) > 0 {
+                            out.push(Act::Commit(if s {
+                                "CP Editor: double length"
+                            } else {
+                                "CP Editor: halve length"
+                            }));
+                        }
+                    }
+                    _ => {}
                 }
-                vec![Act::AuditionOff]
+                out
             }
-            Drag::Press { .. } => Vec::new(),
+            // Un clic sur la grille vide.
+            Drag::Press {
+                id: None,
+                mods: m,
+                right,
+                x0,
+                y0,
+            } => {
+                if right {
+                    return vec![Act::ContextMenu { x, y }];
+                }
+                let q = self.qn_of(x0);
+                let p = self.pitch_at(y0);
+                if m.ctrl && !m.alt {
+                    // Tout deselectionner, le curseur sous la souris (sans
+                    // magnetisme).
+                    if let Some(md) = self.midi_mut() {
+                        md.roll.clear_sel();
+                    }
+                    return vec![Act::Seek(q.max(0.0))];
+                }
+                if m.alt {
+                    // Maj+Alt : une note sans magnetisme ; Maj+Ctrl+Alt : une
+                    // note.
+                    if self.insert_note(q, p, m.ctrl).is_some() {
+                        let mut v = self.audition(p, false);
+                        v.push(Act::Commit("CP Editor: insert note"));
+                        return v;
+                    }
+                }
+                Vec::new()
+            }
             Drag::Move { base, copy, .. } => {
                 let same = self.midi().is_some_and(|m| m.roll.notes == base);
                 let mut v = vec![Act::AuditionOff];
@@ -1672,11 +2138,12 @@ impl Ed {
                     Vec::new()
                 }
             }
-            Drag::Marquee { x0, y0, add, .. } => {
-                let (qa, qb) = (self.qn_of(x0), self.qn_of(x));
-                let (pa, pb) = (self.pitch_at(y0), self.pitch_at(y));
+            Drag::Marquee { q0, cy0, add, .. } => {
+                let qb = self.qn_of(x);
+                let pa = self.pitch_at(self.lay.gy + cy0 - self.vscroll);
+                let pb = self.pitch_at(y);
                 if let Some(md) = self.midi_mut() {
-                    md.roll.select_box(qa, qb, pa, pb, add);
+                    md.roll.select_box(q0, qb, pa, pb, add);
                 }
                 Vec::new()
             }
@@ -1705,6 +2172,22 @@ impl Ed {
                 }
                 vec![Act::Commit("CP Editor: paint notes")]
             }
+            Drag::Chords { cells, .. } => {
+                let g = if self.grid > 0.0 { self.grid } else { 0.25 };
+                let (chan, vel) = (self.last_chan, self.last_vel);
+                let Some(md) = self.midi_mut() else {
+                    return Vec::new();
+                };
+                if cells.is_empty() {
+                    return Vec::new();
+                }
+                md.roll.clear_sel();
+                for (q, p) in cells {
+                    let id = md.roll.insert(q, g, p, chan, vel);
+                    md.roll.add_sel(id);
+                }
+                vec![Act::Commit("CP Editor: paint chords")]
+            }
             Drag::Vel { base, .. } => {
                 if self.midi().is_some_and(|m| m.roll.notes == base) {
                     Vec::new()
@@ -1716,7 +2199,6 @@ impl Ed {
                 if self.range.is_some_and(|(a, b)| b - a < 1e-6) {
                     self.range = None;
                 }
-                let _ = y;
                 Vec::new()
             }
             Drag::Audio { what, .. } => vec![Act::AudioCommit(match what {
@@ -2028,6 +2510,366 @@ impl Ed {
     }
 
     // -----------------------------------------------------------------------
+    // Les actions de l'editeur MIDI de REAPER (ses raccourcis, tels quels)
+    // -----------------------------------------------------------------------
+
+    /// Une action de la section « MIDI Editor » de REAPER (son numero), ou
+    /// rien si l'editeur ne la connait pas.
+    pub fn command(&mut self, cmd: u32) -> Option<Vec<Act>> {
+        self.dirty = true;
+        // Le transport et la vue, sans item aussi.
+        let main = |c: u32| Some(vec![Act::Main(c)]);
+        match cmd {
+            40016 => return main(40044), // Transport : lecture/arret
+            1140 => return main(1007),   // lecture
+            1142 => return main(1016),   // arret
+            40017 => return main(40073), // lecture/pause
+            1141 => return main(1008),   // pause
+            1139 => return main(1068),   // boucle
+            1005 => return main(40026),  // enregistrer le projet
+            40420 => return main(40605), // la liste des actions
+            40013 => return Some(vec![Act::Undo]),
+            40014 => return Some(vec![Act::Redo]),
+            2 => return Some(vec![Act::Close]),
+            40041 => {
+                self.hear = !self.hear;
+                return Some(if self.hear {
+                    Vec::new()
+                } else {
+                    vec![Act::AuditionOff]
+                });
+            }
+            40750 => {
+                self.follow = !self.follow;
+                return Some(Vec::new());
+            }
+            1014 => {
+                self.snap = !self.snap;
+                return Some(Vec::new());
+            }
+            1012 | 1011 => {
+                let x = self.lay.sx + self.lay.sw * 0.5;
+                let q = self.qn_of(x);
+                let k = if cmd == 1012 { 1.25 } else { 0.8 };
+                self.zoom_at(self.zoom * k, q, x);
+                return Some(Vec::new());
+            }
+            40111 | 40112 => {
+                let l = self.lay;
+                let y = l.gy + l.gh * 0.5;
+                let before = (y - l.gy + self.vscroll) / l.rh.max(1.0);
+                let k = if cmd == 40111 { 1.15 } else { 1.0 / 1.15 };
+                let rh = (l.rh * k).clamp(ROW_MIN * self.scale, ROW_MAX * self.scale);
+                self.row_h = rh / self.scale;
+                self.lay.rh = rh;
+                self.lay.content_h = self.rows.len() as f32 * rh;
+                self.vscroll = (before * rh - (y - l.gy)).clamp(0.0, self.max_vscroll());
+                return Some(Vec::new());
+            }
+            40138 | 40139 => {
+                let d = self.lay.rh * 4.0 * if cmd == 40138 { -1.0 } else { 1.0 };
+                self.vscroll = (self.vscroll + d).clamp(0.0, self.max_vscroll());
+                return Some(Vec::new());
+            }
+            40140 | 40141 => {
+                let d = self.view_qn() * 0.2 * if cmd == 40140 { -1.0 } else { 1.0 };
+                self.scroll = (self.scroll + d).max(0.0);
+                return Some(Vec::new());
+            }
+            40466 => {
+                self.fit();
+                return Some(Vec::new());
+            }
+            _ => {}
+        }
+        if let Some(g) = grid_of(cmd) {
+            self.set_grid(g);
+            return Some(Vec::new());
+        }
+        let (g, bar) = (self.grid.max(1.0 / 64.0), self.bar_qn());
+        let cursor = self.playhead.unwrap_or(0.0);
+        let span = self.span();
+        let px = 1.0 / self.lay.ppq.max(1e-3) as f64;
+        let (mx, my) = (self.mouse.0, self.mouse.1);
+        let mouse_q = self.qn_of(mx);
+        let mouse_p = self.pitch_at(my);
+        // La vue et le curseur.
+        match cmd {
+            40036 | 40037 => {
+                let (a, b) = span?;
+                let q = if cmd == 40036 { a } else { b };
+                let v = self.view_qn();
+                if q < self.scroll || q > self.scroll + v {
+                    self.scroll = (q - v * 0.05).max(0.0);
+                }
+                return Some(vec![Act::Seek(q)]);
+            }
+            40151 | 40150 => {
+                let v = self.view_qn();
+                self.scroll = (cursor - v * 0.3).max(0.0);
+                return Some(Vec::new());
+            }
+            40047 | 40048 => {
+                let q = (cursor / g).round() * g + if cmd == 40048 { g } else { -g };
+                return Some(vec![Act::Seek(q.max(0.0))]);
+            }
+            40682 | 40683 => {
+                let q = (cursor / bar).floor() * bar + if cmd == 40682 { bar } else { -bar };
+                return Some(vec![Act::Seek(q.max(0.0))]);
+            }
+            40684 => return Some(vec![Act::Seek((cursor / bar).floor() * bar)]),
+            40185 | 40186 => {
+                let d = if cmd == 40186 { px } else { -px };
+                return Some(vec![Act::Seek((cursor + d).max(0.0))]);
+            }
+            40451 => return Some(vec![Act::Seek(((cursor / bar).floor() + 1.0) * bar)]),
+            40725 => {
+                self.fit_selection();
+                return Some(Vec::new());
+            }
+            _ => {}
+        }
+        self.midi()?;
+        if matches!(cmd, 40413 | 40414) {
+            let k = if cmd == 40413 { vk::RIGHT } else { vk::LEFT };
+            return Some(self.walk(k, false));
+        }
+        if matches!(cmd, 40440 | 40639 | 40872 | 40873) {
+            let m = self.midi()?;
+            let sel = m.roll.notes.iter().filter(|n| n.sel);
+            let q = if matches!(cmd, 40440 | 40872) {
+                sel.map(|n| n.qn0).fold(f64::INFINITY, f64::min)
+            } else {
+                sel.map(|n| n.end()).fold(f64::NEG_INFINITY, f64::max)
+            };
+            return Some(if q.is_finite() {
+                vec![Act::Seek(q)]
+            } else {
+                Vec::new()
+            });
+        }
+        let (strength, swing) = (self.strength, self.swing);
+        let last = (self.last_chan, self.last_vel, self.last_len);
+        let range = self.range;
+        let (grid_raw, snap_on) = (self.grid, self.snap);
+        let md = self.midi_mut()?;
+        let r = &mut md.roll;
+        let (n, label): (usize, &'static str) = match cmd {
+            40667 | 40002 => (r.delete_sel(), "CP Editor: delete notes"),
+            40006 | 40003 => {
+                r.select_all();
+                (0, "")
+            }
+            40214 => {
+                r.clear_sel();
+                (0, "")
+            }
+            40501 => {
+                r.invert_sel();
+                (0, "")
+            }
+            41140 | 41723 => {
+                r.select_measure(cursor, bar);
+                (0, "")
+            }
+            40746 | 40877 | 40875 | 40876 => {
+                if let Some((a, b)) = range {
+                    r.select_in(a, b, false);
+                }
+                (0, "")
+            }
+            40010 | 40733 | 40731 => {
+                r.copy();
+                (0, "")
+            }
+            40012 | 40734 | 40732 => (r.cut(), "CP Editor: cut"),
+            40011 | 40429 | 40889 | 40890 => (r.paste(cursor), "CP Editor: paste"),
+            40882 | 40883 | 40886 | 40887 | 40888 => {
+                let d = r.dup_offset(bar, g);
+                (r.duplicate(d, 0), "CP Editor: duplicate")
+            }
+            40884 => (r.duplicate(0.0, 12), "CP Editor: duplicate"),
+            40885 => (r.duplicate(0.0, -12), "CP Editor: duplicate"),
+            // Avec une gamme, REAPER reste dans la gamme ; « ignoring
+            // scale/key » non.
+            40177 => (r.transpose_scale(1), "CP Editor: transpose"),
+            40178 => (r.transpose_scale(-1), "CP Editor: transpose"),
+            41026 => (r.transpose(1), "CP Editor: transpose"),
+            41027 => (r.transpose(-1), "CP Editor: transpose"),
+            40179 => (r.transpose(12), "CP Editor: transpose"),
+            40180 => (r.transpose(-12), "CP Editor: transpose"),
+            40183 => (r.nudge(-g), "CP Editor: nudge"),
+            40184 => (r.nudge(g), "CP Editor: nudge"),
+            40181 => (r.nudge(-px), "CP Editor: nudge"),
+            40182 => (r.nudge(px), "CP Editor: nudge"),
+            40446 => (lengthen(r, g), "CP Editor: length"),
+            40447 => (lengthen(r, -g), "CP Editor: length"),
+            40444 => (lengthen(r, px), "CP Editor: length"),
+            40445 => (lengthen(r, -px), "CP Editor: length"),
+            40773 => (r.scale_len(2.0), "CP Editor: length"),
+            40774 => (r.scale_len(0.5), "CP Editor: length"),
+            40633 => (r.set_len(grid_raw.max(MIN_LEN)), "CP Editor: length"),
+            40462 => (r.vel_add(1), "CP Editor: velocity"),
+            40463 => (r.vel_add(10), "CP Editor: velocity"),
+            40464 => (r.vel_add(-1), "CP Editor: velocity"),
+            40465 => (r.vel_add(-10), "CP Editor: velocity"),
+            40055 => (r.mute_sel(None), "CP Editor: mute"),
+            40057 => (r.mute_sel(Some(true)), "CP Editor: mute"),
+            40058 => (r.mute_sel(Some(false)), "CP Editor: unmute"),
+            40046 => (r.split_at(cursor), "CP Editor: split"),
+            40052 => (r.split_at(mouse_q), "CP Editor: split"),
+            40641 => (r.split_grid(g), "CP Editor: split"),
+            40456 => (r.glue(), "CP Editor: join notes"),
+            40765 | 40766 => (r.legato(), "CP Editor: legato"),
+            40905..=40908 => (r.invert_pitch(), "CP Editor: invert"),
+            40019 | 40902 | 40904 => (r.reverse(), "CP Editor: reverse"),
+            40469 | 40729 | 40728 | 40406 | 40727 | 41768 | 40009 => {
+                (r.quantize(g, strength, swing), "CP Editor: quantize")
+            }
+            41769..=41773 => {
+                let q = [1.0 / 16.0, 0.125, 0.25, 0.5, 1.0][(cmd - 41769) as usize];
+                (r.quantize(q, strength, swing), "CP Editor: quantize")
+            }
+            40457 => (r.humanize(2, g * 0.12, 10), "CP Editor: humanize"),
+            40790 | 40791 => {
+                let mut k = 0;
+                for n in r.notes.iter_mut().filter(|n| n.sel) {
+                    let end = n.end();
+                    if cmd == 40790 && cursor < end - MIN_LEN {
+                        n.qn0 = cursor.max(0.0);
+                        n.len = end - n.qn0;
+                        k += 1;
+                    } else if cmd == 40791 && cursor > n.qn0 + MIN_LEN {
+                        n.len = cursor - n.qn0;
+                        k += 1;
+                    }
+                }
+                r.sort();
+                (k, "CP Editor: trim")
+            }
+            40051 | 1000 | 40001 => {
+                let (q, p) = if cmd == 40001 {
+                    (mouse_q, mouse_p)
+                } else {
+                    let p = r.notes.iter().find(|n| n.sel).map_or(60, |n| n.pitch);
+                    (cursor, p)
+                };
+                let q0 = if snap_on { (q / g).floor() * g } else { q };
+                let id = r.insert(q0.max(0.0), last.2.max(MIN_LEN), p, last.0, last.1);
+                r.select_only(id);
+                (1, "CP Editor: insert note")
+            }
+            40754 => {
+                let Some((a, b)) = range else {
+                    return Some(Vec::new());
+                };
+                let (s0, s1) = r
+                    .notes
+                    .iter()
+                    .filter(|n| n.sel)
+                    .fold((f64::INFINITY, f64::NEG_INFINITY), |(x, y), n| {
+                        (x.min(n.qn0), y.max(n.end()))
+                    });
+                if s1 > s0 {
+                    let k = (b - a) / (s1 - s0);
+                    r.nudge(a - s0);
+                    r.stretch_sel(a, k);
+                    (1, "CP Editor: fit to time selection")
+                } else {
+                    (0, "")
+                }
+            }
+            _ => return None,
+        };
+        let audit = matches!(cmd, 40177 | 40178 | 41026 | 41027 | 40179 | 40180);
+        let p = r.notes.iter().find(|x| x.sel).map(|x| x.pitch);
+        let mut v = self.commit_if(n, label);
+        if audit {
+            // La transposition s'entend, et la selection reste a l'ecran.
+            self.reveal(Some(true));
+            if let Some(p) = p {
+                v.extend(self.audition(p, false));
+            }
+        }
+        Some(v)
+    }
+
+    /// Ce que veut dire une action personnalisee ou un script (par son nom).
+    pub fn named_cmd(&mut self, n: keys::Named) -> Vec<Act> {
+        self.dirty = true;
+        let (g, bar) = (self.grid.max(1.0 / 64.0), self.bar_qn());
+        let (mx, my) = (self.mouse.0, self.mouse.1);
+        match n {
+            keys::Named::Fit => {
+                self.fit();
+                Vec::new()
+            }
+            keys::Named::PlayFromItemStart => match self.span() {
+                Some((a, _)) => vec![Act::Seek(a), Act::Main(1007)],
+                None => Vec::new(),
+            },
+            keys::Named::Duplicate => {
+                let Some(md) = self.midi_mut() else {
+                    return Vec::new();
+                };
+                let d = md.roll.dup_offset(bar, g);
+                let k = md.roll.duplicate(d, 0);
+                self.commit_if(k, "CP Editor: duplicate")
+            }
+            keys::Named::DeleteUnderMouse => {
+                let Some((id, _)) = self.note_at(mx, my) else {
+                    return Vec::new();
+                };
+                let Some(md) = self.midi_mut() else {
+                    return Vec::new();
+                };
+                let k = md.roll.delete(id) as usize;
+                self.commit_if(k, "CP Editor: delete note")
+            }
+            keys::Named::Split => {
+                // La note sous la souris, a la souris ; sinon les choisies au
+                // curseur.
+                let q = self.qn_of(mx);
+                let under = self.note_at(mx, my).map(|x| x.0);
+                let cursor = self.playhead.unwrap_or(0.0);
+                let Some(md) = self.midi_mut() else {
+                    return Vec::new();
+                };
+                let k = match under {
+                    Some(id) => {
+                        md.roll.select_only(id);
+                        md.roll.split_at(q)
+                    }
+                    None => md.roll.split_at(cursor),
+                };
+                self.commit_if(k, "CP Editor: split")
+            }
+        }
+    }
+
+    /// Cadre la selection (REAPER : « zoom to selected notes »).
+    fn fit_selection(&mut self) {
+        let Some(m) = self.midi() else { return };
+        let sel: Vec<&Note> = m.roll.notes.iter().filter(|n| n.sel).collect();
+        if sel.is_empty() {
+            self.fit();
+            return;
+        }
+        let a = sel.iter().map(|n| n.qn0).fold(f64::INFINITY, f64::min);
+        let b = sel
+            .iter()
+            .map(|n| n.end())
+            .fold(f64::NEG_INFINITY, f64::max);
+        let (lo, hi) = self.note_span(true).unwrap_or((60, 60));
+        let w = self.lay.sw.max(100.0);
+        let len = (b - a).max(0.25);
+        self.zoom = ((w / self.scale.max(0.5)) / (len as f32 * 1.1)).clamp(4.0, 1600.0);
+        self.lay.ppq = self.zoom * self.scale;
+        self.scroll = (a - len * 0.05).max(0.0);
+        self.frame_rows(lo, hi);
+    }
+
+    // -----------------------------------------------------------------------
     // Les infobulles
     // -----------------------------------------------------------------------
 
@@ -2056,8 +2898,7 @@ impl Ed {
                 let n = self.midi()?.roll.get(id)?;
                 format!("Velocity {}", n.vel)
             }
-            Hit::FoldTop => "Rows above \u{2014} click to open".into(),
-            Hit::FoldBottom => "Rows below \u{2014} click to open".into(),
+            Hit::Hear => format!("Hear the notes ({})", if self.hear { "on" } else { "off" }),
             Hit::Snap => format!("Snap to grid ({})", if self.snap { "on" } else { "off" }),
             Hit::GridMenu => "Grid".into(),
             Hit::ScaleMenu => "Key and scale (out-of-scale rows are tinted)".into(),
@@ -2067,8 +2908,8 @@ impl Ed {
                 self.colors.next().name()
             ),
             Hit::Rows => match self.rows_mode {
-                Rows::Fit => "Rows: fit to the notes (click: only the rows that play)".into(),
-                Rows::Notes => "Rows: only the rows that play (click: fit)".into(),
+                Rows::Fit => "All the rows (click: only the rows that play)".into(),
+                Rows::Notes => "Only the rows that play (click: all the rows)".into(),
             },
             Hit::Quantize => format!(
                 "Quantize (Q) \u{00b7} {} % \u{00b7} swing {} %",
@@ -2100,7 +2941,17 @@ impl Ed {
     /// Le marquee en cours (pour le dessin) : x0, y0, x1, y1.
     pub(crate) fn marquee(&self) -> Option<(f32, f32, f32, f32)> {
         match self.drag {
-            Some(Drag::Marquee { x0, y0, x1, y1, .. }) => Some((x0, y0, x1, y1)),
+            Some(Drag::Marquee {
+                q0, cy0, x1, y1, ..
+            }) => Some((self.x_of(q0), self.lay.gy + cy0 - self.vscroll, x1, y1)),
+            _ => None,
+        }
+    }
+
+    /// Les cases peintes en cours (notes et accords).
+    pub(crate) fn chord_cells(&self) -> Option<&[(f64, i32)]> {
+        match &self.drag {
+            Some(Drag::Chords { cells, .. }) => Some(cells),
             _ => None,
         }
     }
@@ -2115,10 +2966,6 @@ impl Ed {
 
     pub(crate) fn hscroll_hot(&self) -> bool {
         matches!(self.drag, Some(Drag::HScroll { .. }))
-    }
-
-    pub(crate) fn row_h_fixed(&self) -> Option<f32> {
-        self.row_h
     }
 
     pub(crate) fn audio_drag_hit(&self) -> Option<Hit> {

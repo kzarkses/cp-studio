@@ -151,6 +151,15 @@ fn note_xy(v: &Ed, p: i32, q: f64) -> (u64, f32, f32) {
     (n.id, x + w * 0.5, y + h * 0.5)
 }
 
+/// Chaque note a son rang dans la vue.
+fn all_notes_on_screen(v: &Ed) -> bool {
+    v.midi().unwrap().roll.notes.iter().all(|n| {
+        let i = v.row_of(n.pitch).unwrap();
+        let y = v.row_y(i);
+        y >= v.lay.gy - 0.5 && y + v.lay.rh <= v.lay.gy + v.lay.gh + 0.5
+    })
+}
+
 fn chans(v: &Ed) -> Vec<(i32, i32)> {
     let mut c: Vec<(i32, i32)> = v
         .midi()
@@ -170,11 +179,12 @@ fn l_editeur_se_dessine() {
     let mut b = Bench::new(1280, 760);
     let mut v = riff();
     b.shot(&mut v, "1_fit");
-    // Fit : les notes de 40 a 74, deux rangs de marge, le reste replie.
-    assert_eq!(v.rows.first(), Some(&76));
-    assert_eq!(v.rows.last(), Some(&38));
-    assert!(v.lay.fold_top && v.lay.fold_bot);
+    // Tout le clavier, cadre sur les notes (40 a 74) a l'ouverture.
+    assert_eq!(v.rows.first(), Some(&127));
+    assert_eq!(v.rows.last(), Some(&0));
+    assert!(all_notes_on_screen(&v));
     assert!(v.rect_of(Hit::Help).is_some() && v.rect_of(Hit::Rows).is_some());
+    assert!(v.rect_of(Hit::Hear).is_some());
     // Seulement les rangs joues.
     let (x, y) = {
         let r = v.rect_of(Hit::Rows).unwrap();
@@ -184,7 +194,7 @@ fn l_editeur_se_dessine() {
     up(&mut v, x, y, Button::Left, m0());
     b.shot(&mut v, "2_notes");
     assert_eq!(v.rows.len(), 16);
-    assert!(!v.lay.fold_top);
+    assert!(all_notes_on_screen(&v));
     // Les infobulles portent les mots.
     assert!(v.label(Hit::Help).unwrap().contains("Middle drag"));
     // Rien d'ouvert : un ecran vide.
@@ -284,12 +294,13 @@ fn poser_allonger_effacer() {
     let a = up(&mut v, x, y, Button::Left, alt);
     assert!(a.contains(&Act::Commit("CP Editor: erase notes")));
     assert!(!v.midi().unwrap().roll.notes.iter().any(|n| n.pitch == 69));
-    // Clic droit sur une note : la supprimer.
+    // Clic droit sur une note : le menu (comme REAPER), la note choisie.
     b.draw(&mut v);
-    let (_, x, y) = note_xy(&v, 71, 29.5);
+    let (id, x, y) = note_xy(&v, 71, 29.5);
     down(&mut v, x, y, Button::Right, m0());
     let a = up(&mut v, x, y, Button::Right, m0());
-    assert_eq!(a, vec![Act::Commit("CP Editor: delete note")]);
+    assert!(a.contains(&Act::ContextMenu { x, y }), "{a:?}");
+    assert!(v.midi().unwrap().roll.get(id).unwrap().sel);
     b.shot(&mut v, "3_gestes");
 }
 
@@ -399,18 +410,236 @@ fn naviguer_comme_dans_reaper() {
         mods: m0(),
     });
     assert!(v.vscroll > vs);
-    // Home : tout recadre.
-    key(&mut v, vk::HOME, m0());
+    // Le cadrage demande : les notes reviennent toutes a l'ecran.
+    v.vscroll = 0.0;
     b.draw(&mut v);
-    assert!(v.lay.content_h <= v.lay.gh + 0.5);
-    // La bande repliee du haut s'ouvre d'une octave.
-    let r0 = v.rows.len();
-    let y = v.lay.gy - v.lay.fold_h * 0.5;
-    assert_eq!(v.hit(mx, y), Hit::FoldTop);
-    down(&mut v, mx, y, Button::Left, m0());
-    up(&mut v, mx, y, Button::Left, m0());
+    assert!(!all_notes_on_screen(&v));
+    v.fit();
     b.draw(&mut v);
-    assert_eq!(v.rows.len(), r0 + 12);
+    assert!(all_notes_on_screen(&v));
+}
+
+/// Le defaut du 2026-11-22 : glisser une note vers le haut l'envoyait en C9
+/// (la vue se recadrait sur la note pendant le geste, qui remontait encore).
+/// La camera ne bouge plus pendant un geste ; au bord, elle defile.
+#[test]
+fn glisser_ne_recadre_pas() {
+    let mut b = Bench::new(1280, 760);
+    let mut v = riff();
+    b.draw(&mut v);
+    let (rh, vs) = (v.lay.rh, v.vscroll);
+    let (id, x, y) = note_xy(&v, 74, 30.5);
+    down(&mut v, x, y, Button::Left, m0());
+    // Trois rangs plus haut, image apres image.
+    for k in 1..=6 {
+        mv(&mut v, x, y - rh * 0.5 * k as f32, m0());
+        b.draw(&mut v);
+    }
+    assert_eq!(v.midi().unwrap().roll.get(id).unwrap().pitch, 77);
+    assert_eq!((v.lay.rh, v.vscroll), (rh, vs), "la vue n'a pas bouge");
+    // Au-dessus de la grille : la vue defile, la note suit, sans zoom.
+    let ya = v.lay.gy - 30.0;
+    mv(&mut v, x, ya, m0());
+    for _ in 0..10 {
+        v.tick();
+        b.draw(&mut v);
+    }
+    let p = v.midi().unwrap().roll.get(id).unwrap().pitch;
+    assert!(v.vscroll < vs && p > 77 && p < 127, "{p}");
+    assert_eq!(v.lay.rh, rh);
+    let a = up(&mut v, x, ya, Button::Left, m0());
+    assert!(a.contains(&Act::Commit("CP Editor: move notes")));
+    // Relu (le meme item) : la camera reste ou elle est.
+    let m = v.midi().unwrap().clone();
+    let vs2 = v.vscroll;
+    v.open_midi(m, false);
+    b.draw(&mut v);
+    assert_eq!(v.vscroll, vs2);
+}
+
+/// La table souris de REAPER (ROADMAP_Editeur.md §2) au-dela du clic et du
+/// glisser simples.
+#[test]
+fn la_table_souris_de_reaper() {
+    let mut b = Bench::new(1280, 760);
+    let mut v = riff();
+    b.draw(&mut v);
+    // Un clic : la note choisie, le curseur a son debut.
+    let (id, x, y) = note_xy(&v, 64, 25.0);
+    down(&mut v, x, y, Button::Left, m0());
+    let a = up(&mut v, x, y, Button::Left, m0());
+    assert!(a.contains(&Act::Seek(25.0)), "{a:?}");
+    // Maj+Win : double la longueur ; Ctrl+Win : la divise.
+    let sw = Mods {
+        shift: true,
+        win: true,
+        ..m0()
+    };
+    down(&mut v, x, y, Button::Left, sw);
+    let a = up(&mut v, x, y, Button::Left, sw);
+    assert!(a.contains(&Act::Commit("CP Editor: double length")));
+    assert!((v.midi().unwrap().roll.get(id).unwrap().len - 2.0).abs() < 1e-9);
+    let cw = Mods {
+        ctrl: true,
+        win: true,
+        ..m0()
+    };
+    down(&mut v, x, y, Button::Left, cw);
+    up(&mut v, x, y, Button::Left, cw);
+    assert!((v.midi().unwrap().roll.get(id).unwrap().len - 1.0).abs() < 1e-9);
+    // Ctrl + glisser sur la grille vide : la selection copiee, une mesure
+    // plus loin.
+    let n0 = v.midi().unwrap().roll.notes.len();
+    let (gx, gy) = (
+        v.x_of(26.1),
+        v.row_y(v.row_of(48).unwrap()) + v.lay.rh * 0.5,
+    );
+    assert_eq!(v.hit(gx, gy), Hit::Grid);
+    let ctrl = Mods { ctrl: true, ..m0() };
+    down(&mut v, gx, gy, Button::Left, ctrl);
+    let gx2 = gx + v.lay.ppq * 4.0;
+    mv(&mut v, gx2, gy, ctrl);
+    let a = up(&mut v, gx2, gy, Button::Left, ctrl);
+    assert!(a.contains(&Act::Commit("CP Editor: copy notes")), "{a:?}");
+    let r = &v.midi().unwrap().roll;
+    assert_eq!(r.notes.len(), n0 + 1);
+    assert!(
+        r.notes
+            .iter()
+            .any(|n| n.pitch == 64 && (n.qn0 - 29.0).abs() < 1e-9 && n.chan == 0)
+    );
+    // Un clic Ctrl sur la grille : rien de choisi, le curseur sous la souris.
+    b.draw(&mut v);
+    down(&mut v, gx, gy, Button::Left, ctrl);
+    let a = up(&mut v, gx, gy, Button::Left, ctrl);
+    assert!(matches!(a.as_slice(), [Act::Seek(_)]));
+    assert_eq!(v.midi().unwrap().roll.sel_count(), 0);
+    // Maj+Ctrl+Alt glisser : un accord (trois rangs dans le meme pas).
+    let sca = Mods {
+        shift: true,
+        ctrl: true,
+        alt: true,
+        win: false,
+    };
+    let (px, py) = (
+        v.x_of(30.05),
+        v.row_y(v.row_of(42).unwrap()) + v.lay.rh * 0.5,
+    );
+    down(&mut v, px, py, Button::Left, sca);
+    let py2 = py - v.lay.rh * 2.0;
+    mv(&mut v, px + 6.0, py2, sca);
+    let a = up(&mut v, px + 6.0, py2, Button::Left, sca);
+    assert!(a.contains(&Act::Commit("CP Editor: paint chords")), "{a:?}");
+    let chord: Vec<i32> = v
+        .midi()
+        .unwrap()
+        .roll
+        .notes
+        .iter()
+        .filter(|n| n.sel)
+        .map(|n| n.pitch)
+        .collect();
+    assert_eq!(chord, vec![42, 43, 44]);
+    // Clic droit sur la grille : le menu.
+    down(&mut v, gx, gy, Button::Right, m0());
+    let a = up(&mut v, gx, gy, Button::Right, m0());
+    assert!(matches!(a.as_slice(), [Act::ContextMenu { .. }]));
+    // L'ecoute coupee : plus d'Audition.
+    v.hear = false;
+    b.draw(&mut v);
+    let (_, x, y) = note_xy(&v, 64, 25.0);
+    let a = down(&mut v, x, y, Button::Left, m0());
+    assert!(!a.iter().any(|x| matches!(x, Act::Audition { .. })));
+    up(&mut v, x, y, Button::Left, m0());
+}
+
+/// Les raccourcis : les defauts de REAPER, puis reaper-kb.ini (les lignes de
+/// Cedric), puis l'action rendue en operation.
+#[test]
+fn les_raccourcis_de_reaper() {
+    use crate::keys::{Bind, KeyMap, Named, named};
+    // Trois defauts (la vraie liste vient de REAPER).
+    let defs = [(0x802E, 40667, 1), (0x8026, 40138, 1), (0x51, 40469, 1)];
+    let ini = concat!(
+        "KEY 1 32806 40177 32060\t\t # MIDI Editor : HAUT : OVERRIDE DEFAULT : Edit: Move notes up one semitone\n",
+        "KEY 1 81 40009 32060\t\t # MIDI Editor : Q : OVERRIDE DEFAULT : Quantize...\n",
+        "KEY 255 248 40432 32060\t\t # MIDI Editor : Mousewheel\n",
+        "KEY 1 8 0 32060\n",
+        "KEY 9 68 _RS7d3c_fbfb 32060\t\t # MIDI Editor : Ctrl+D : Script\n",
+        "KEY 1 90 _f988 32060\t\t # MIDI Editor : Z : Custom: Delete note under mouse cursor\n",
+        "KEY 1 90 40001 0\n",
+        "SCR 4 32060 RS7d3c_fbfb \"Custom: zaibuyidao_Duplicate Musical.lua\" \"x/y.lua\"\n",
+        "ACT 0 32060 \"f988\" \"Custom: Delete note under mouse cursor\" 40001 40002\n",
+    );
+    let km = KeyMap::build(&defs, ini);
+    assert_eq!(km.get(vk::DELETE, true, m0()), Some(&Bind::Cmd(40667)));
+    assert_eq!(
+        km.get(vk::UP, true, m0()),
+        Some(&Bind::Cmd(40177)),
+        "remplace le defaut"
+    );
+    assert_eq!(km.get(0x51, false, m0()), Some(&Bind::Cmd(40009)));
+    assert_eq!(km.get(vk::UP, false, m0()), None, "le pave numerique");
+    let d = km.get(0x44, false, Mods { ctrl: true, ..m0() }).cloned();
+    assert_eq!(
+        d,
+        Some(Bind::Named(
+            "Custom: zaibuyidao_Duplicate Musical.lua".into()
+        ))
+    );
+    let z = km.get(0x5A, false, m0()).cloned();
+    assert_eq!(
+        z,
+        Some(Bind::Named("Custom: Delete note under mouse cursor".into()))
+    );
+    assert_eq!(
+        named("Custom: zaibuyidao_Duplicate Musical.lua"),
+        Some(Named::Duplicate)
+    );
+    assert_eq!(
+        named(
+            "Script: FTC_MeMagic (2-3) Horizontally zoom to item + Vertically zoom to all notes in item.lua"
+        ),
+        Some(Named::Fit)
+    );
+    // Les actions, sur le riff.
+    let mut b = Bench::new(1280, 760);
+    let mut v = riff();
+    b.draw(&mut v);
+    let sel = |v: &Ed| -> Vec<i32> {
+        v.midi()
+            .unwrap()
+            .roll
+            .notes
+            .iter()
+            .filter(|n| n.sel)
+            .map(|n| n.pitch)
+            .collect()
+    };
+    let s0 = sel(&v);
+    let a = v.command(40177).unwrap();
+    assert!(a.contains(&Act::Commit("CP Editor: transpose")));
+    assert_eq!(sel(&v), s0.iter().map(|p| p + 1).collect::<Vec<_>>());
+    assert_eq!(v.command(40016), Some(vec![Act::Main(40044)]));
+    v.command(40197);
+    assert!((v.grid - 0.5).abs() < 1e-9);
+    assert!(
+        v.command(40055)
+            .unwrap()
+            .contains(&Act::Commit("CP Editor: mute"))
+    );
+    assert!(
+        v.midi()
+            .unwrap()
+            .roll
+            .notes
+            .iter()
+            .filter(|n| n.sel)
+            .all(|n| n.mute)
+    );
+    assert_eq!(v.command(99999), None);
+    let a = v.named_cmd(Named::Duplicate);
+    assert!(a.contains(&Act::Commit("CP Editor: duplicate")));
 }
 
 #[test]

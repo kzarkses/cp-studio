@@ -14,6 +14,7 @@ use cp_abi::{
     PLACE_ARRANGE, PLACE_HELD, VIEW_DOCK, VIEW_FLOAT, VIEW_PLACED, WM_CP_ACCEL, WM_CP_FRAME,
 };
 use cp_editview::cp_roll::{NAMES, Roll, SCALES, Scale};
+use cp_editview::keys::{self, Bind, KeyMap};
 use cp_editview::{Act, Audio, Clip, Colors, Ed, GRIDS, Hit, Midi, Rows};
 use cp_gfx::{Canvas, Surface};
 use cp_sys::audio::Audition;
@@ -63,6 +64,14 @@ pub(crate) struct EPart {
     pub pending: Option<String>,
     /// Les reglages gardes, tels qu'enregistres.
     saved: String,
+    /// Les raccourcis de l'editeur MIDI de REAPER (lus a l'ouverture).
+    keys: Option<KeyMap>,
+    /// REAPER a donne les raccourcis par defaut de son editeur MIDI.
+    keys_defaults: bool,
+    /// La touche dont on a pris l'appui (on prend aussi son relachement).
+    key_down: Option<u32>,
+    /// Les actions de REAPER qu'on ne reprend pas encore, deja signalees.
+    missing: std::collections::HashSet<String>,
 }
 
 impl EPart {
@@ -82,6 +91,7 @@ impl EPart {
         }
         ed.snap = get("ed_snap") != "0";
         ed.vel_lane = get("ed_vel") != "0";
+        ed.hear = get("ed_hear") != "0";
         EPart {
             ed,
             win: None,
@@ -94,6 +104,10 @@ impl EPart {
             aud_off: None,
             pending: None,
             saved: String::new(),
+            keys: None,
+            keys_defaults: false,
+            key_down: None,
+            missing: std::collections::HashSet::new(),
         }
     }
 }
@@ -101,7 +115,7 @@ impl EPart {
 /// Les reglages de la vue, en une ligne (pour savoir s'ils ont change).
 fn prefs(ed: &Ed) -> String {
     format!(
-        "{}|{}|{}|{}|{}",
+        "{}|{}|{}|{}|{}|{}",
         ed.colors.key(),
         if ed.rows_mode == Rows::Notes {
             "notes"
@@ -110,7 +124,8 @@ fn prefs(ed: &Ed) -> String {
         },
         ed.grid,
         ed.snap as u8,
-        ed.vel_lane as u8
+        ed.vel_lane as u8,
+        ed.hear as u8
     )
 }
 
@@ -342,6 +357,9 @@ impl App {
                         self.ed_place_menu_at(h, sx, sy);
                     }
                 }
+                Act::ContextMenu { x, y } => self.ed_transform_menu(x, y),
+                Act::Main(c) => r.main_on_command(c as i32),
+                Act::Close => self.queue(WinOp::EdClose),
                 Act::OpenReaper => {
                     if let Some(g) = self.ed.ed.item().map(str::to_string) {
                         if r.select_only_item(&g) {
@@ -558,6 +576,15 @@ impl App {
                 self.ed_keep("ed_grid", &g);
                 self.ed_keep("ed_snap", s);
                 self.ed_keep("ed_vel", v);
+                let h = if self.ed.ed.hear { "1" } else { "0" };
+                self.ed_keep("ed_hear", h);
+            }
+        }
+        // Un geste qui sort de la vue : elle defile au bord, le geste suit.
+        if self.ed.ed.dragging() {
+            let acts = self.ed.ed.tick();
+            if !acts.is_empty() {
+                self.ed_act(acts);
             }
         }
         // La forme d'onde du clip, a la resolution de la vue.
@@ -700,6 +727,7 @@ impl App {
             tip_text: String::new(),
         });
         self.ed.since_sync = 1000;
+        self.ed_keymap();
         if self.ed.pending.is_none() && self.ed.ed.item().is_none() {
             self.ed.pending = r.selected_item_guid();
         }
@@ -840,6 +868,109 @@ impl App {
         );
     }
 
+    /// Les raccourcis de l'editeur MIDI de REAPER : les defauts de REAPER et
+    /// reaper-kb.ini, lus une fois. Une copie est ecrite dans
+    /// %TEMP%/cp_editor_keys.txt (pour verifier ce qui est repris).
+    fn ed_keymap(&mut self) {
+        if self.ed.keys.is_some() {
+            return;
+        }
+        let r = self.r;
+        let defs = r.section_default_keys(keys::SECTION as i32);
+        let ini = r
+            .resource_path()
+            .and_then(|p| std::fs::read(p.join("reaper-kb.ini")).ok())
+            .map(|b| String::from_utf8_lossy(&b).into_owned())
+            .unwrap_or_default();
+        let km = KeyMap::build(&defs, &ini);
+        let mut lines: Vec<String> = km
+            .iter()
+            .map(|(&(f, k), b)| match b {
+                Bind::Cmd(c) => format!(
+                    "{f:3} {k:6} {c:6} {}",
+                    r.section_command_text(keys::SECTION as i32, *c as i32)
+                ),
+                Bind::Named(n) => format!("{f:3} {k:6}        {n}"),
+            })
+            .collect();
+        lines.sort();
+        let _ = std::fs::write(
+            std::env::temp_dir().join("cp_editor_keys.txt"),
+            lines.join("\r\n"),
+        );
+        self.host.info(&format!(
+            "Editeur : {} raccourcis de l'editeur MIDI de REAPER ({} par defaut)",
+            km.len(),
+            defs.len()
+        ));
+        self.ed.keys_defaults = !defs.is_empty();
+        self.ed.keys = Some(km);
+    }
+
+    /// Une touche : l'action que REAPER y lie dans son editeur MIDI. Rend
+    /// vrai si l'editeur la prend ; une touche libre va a REAPER (comme son
+    /// editeur MIDI la passe a la fenetre principale).
+    fn ed_key(&mut self, vk: u32, ext: bool, md: cp_ui::Mods) -> bool {
+        self.ed_keymap();
+        let km = self.ed.keys.as_ref().filter(|k| !k.is_empty());
+        let Some(km) = km else {
+            // Pas de table (REAPER ne l'a pas donnee) : les touches de base.
+            if !self.ed.ed.wants_key(vk, md) {
+                return false;
+            }
+            self.ed_feed(Ev::Key {
+                vk,
+                mods: md,
+                text: None,
+            });
+            return true;
+        };
+        let Some(bind) = km.get(vk, ext, md).cloned() else {
+            // Sans les defauts de REAPER (seulement reaper-kb.ini), une touche
+            // libre irait a la fenetre principale (Suppr y efface des items) :
+            // les touches de base restent a l'editeur.
+            if !self.ed.keys_defaults && self.ed.ed.wants_key(vk, md) {
+                self.ed_feed(Ev::Key {
+                    vk,
+                    mods: md,
+                    text: None,
+                });
+                return true;
+            }
+            return false;
+        };
+        let acts = match &bind {
+            Bind::Cmd(c) => self.ed.ed.command(*c),
+            Bind::Named(n) => keys::named(n).map(|x| self.ed.ed.named_cmd(x)),
+        };
+        match acts {
+            Some(a) => {
+                self.ed_act(a);
+                self.ed_render(false);
+                true
+            }
+            // « Close window if not docked, otherwise pass to main window ».
+            None if bind == Bind::Cmd(40477) => false,
+            None => {
+                let what = match &bind {
+                    Bind::Cmd(c) => format!(
+                        "{c} {}",
+                        self.r.section_command_text(keys::SECTION as i32, *c as i32)
+                    ),
+                    Bind::Named(n) => n.clone(),
+                };
+                if self.ed.missing.insert(what.clone()) {
+                    self.host.info(&format!(
+                        "Editeur : action REAPER pas encore reprise : {what}"
+                    ));
+                }
+                // Liee dans l'editeur MIDI : REAPER ne la passerait pas a sa
+                // fenetre principale, nous non plus.
+                true
+            }
+        }
+    }
+
     fn ed_feed(&mut self, ev: Ev) {
         let acts = self.ed.ed.event(&ev);
         self.ed_act(acts);
@@ -879,17 +1010,17 @@ impl App {
                     return Some(0);
                 };
                 let vk = k.wp as u32;
-                let wanted = self.ed.ed.wants_key(vk, md);
+                let ext = (k.lp >> 24) & 1 == 1;
                 Some(match k.message {
-                    msg::KEYDOWN | msg::SYSKEYDOWN if wanted => {
-                        self.ed_feed(Ev::Key {
-                            vk,
-                            mods: md,
-                            text: None,
-                        });
+                    msg::KEYDOWN | msg::SYSKEYDOWN => {
+                        let took = self.ed_key(vk, ext, md);
+                        self.ed.key_down = took.then_some(vk);
+                        took as isize
+                    }
+                    msg::KEYUP | msg::SYSKEYUP if self.ed.key_down == Some(vk) => {
+                        self.ed.key_down = None;
                         1
                     }
-                    msg::KEYUP | msg::SYSKEYUP if wanted => 1,
                     _ => 0,
                 })
             }

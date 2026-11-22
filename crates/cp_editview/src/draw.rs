@@ -12,7 +12,6 @@ use crate::{Clip, Colors, Ed, HBox, Hit, Lay, Part, Rows, grid_name};
 const BAR_H: f32 = 36.0;
 const RULER_H: f32 = 24.0;
 const KEYS_W: f32 = 60.0;
-const FOLD_H: f32 = 12.0;
 const VEL_H: f32 = 84.0;
 const HS_H: f32 = 12.0;
 const VS_W: f32 = 10.0;
@@ -68,23 +67,16 @@ impl Ed {
         let vel_y = hs_y - vel_h;
         let area0 = top + ruler_h + 1.0;
         let area1 = if vel_h > 0.0 { vel_y - 3.0 } else { hs_y };
-        self.rows = self.compute_rows();
-        let fold_h = px(FOLD_H);
-        let (lo, hi) = (
-            self.rows.last().copied().unwrap_or(0),
-            self.rows.first().copied().unwrap_or(127),
-        );
-        let fit =
-            self.rows_mode == Rows::Fit || self.midi().is_some_and(|m| m.roll.notes.is_empty());
-        let fold_top = midi && fit && hi < 127;
-        let fold_bot = midi && fit && lo > 0;
-        let gy = area0 + if fold_top { fold_h } else { 0.0 };
-        let gh = (area1 - if fold_bot { fold_h } else { 0.0 } - gy).max(10.0);
+        // Les rangs ne changent jamais pendant un geste (le mode Notes en
+        // depend) : la note glissee reste sous la souris.
+        if !self.dragging() || self.rows.is_empty() {
+            self.rows = self.compute_rows();
+        }
+        let _ = midi;
+        let gy = area0;
+        let gh = (area1 - gy).max(10.0);
         let n = self.rows.len().max(1) as f32;
-        let rh = match self.row_h_fixed() {
-            Some(r) => (r * s).max(3.0),
-            None => (gh / n).clamp(4.0 * s, 44.0 * s),
-        };
+        let rh = (self.row_h * s).max(3.0);
         self.lay = Lay {
             w,
             h,
@@ -95,9 +87,6 @@ impl Ed {
             sw,
             gy,
             gh,
-            fold_top,
-            fold_bot,
-            fold_h,
             vel_y,
             vel_h,
             hs_y,
@@ -108,6 +97,9 @@ impl Ed {
         };
         let maxv = (self.lay.content_h - gh).max(0.0);
         self.vscroll = self.vscroll.clamp(0.0, maxv);
+        if !self.dragging() {
+            self.apply_camera();
+        }
     }
 
     /// Dessine toute la fenetre et retient les cibles de la barre.
@@ -473,7 +465,7 @@ impl Ed {
             }
             Clip::None => {}
         }
-        // A droite : suivre la lecture, l'aide.
+        // A droite : entendre les notes, suivre la lecture, l'aide.
         let mut rx = l.w - s(10.0) - bh;
         self.icon_btn(cv, icons, th, bx, rx, by, bh, Icon::Help, false, Hit::Help);
         rx -= s(4.0) + bh;
@@ -489,6 +481,21 @@ impl Ed {
             self.follow,
             Hit::Follow,
         );
+        if matches!(self.clip, Clip::Midi(_)) {
+            rx -= s(4.0) + bh;
+            self.icon_btn(
+                cv,
+                icons,
+                th,
+                bx,
+                rx,
+                by,
+                bh,
+                Icon::Headphones,
+                self.hear,
+                Hit::Hear,
+            );
+        }
         if !self.status.is_empty() {
             let f = Font::new(0, s(11.0) as u16, 400);
             let mw = rx - s(12.0) - (x + s(40.0));
@@ -669,41 +676,6 @@ impl Ed {
             k += 1;
         }
         cv.pop_clip();
-        // Les bandes repliees (un clic les rouvre).
-        for (show, y, hit, up) in [
-            (l.fold_top, l.gy - l.fold_h, Hit::FoldTop, true),
-            (l.fold_bot, l.gy + l.gh, Hit::FoldBottom, false),
-        ] {
-            if !show {
-                continue;
-            }
-            let hov = self.hover == hit;
-            cv.fill_rect(
-                0.0,
-                y,
-                right,
-                l.fold_h,
-                if hov {
-                    th.hover
-                } else {
-                    th.bg.mix(Color::BLACK, 0.25)
-                },
-            );
-            let cx = l.sx * 0.5;
-            let cy = y + l.fold_h * 0.5;
-            let d = s(3.0);
-            let mut p = Path::new();
-            if up {
-                p.move_to(cx - d, cy + d * 0.5)
-                    .line_to(cx, cy - d * 0.5)
-                    .line_to(cx + d, cy + d * 0.5);
-            } else {
-                p.move_to(cx - d, cy - d * 0.5)
-                    .line_to(cx, cy + d * 0.5)
-                    .line_to(cx + d, cy - d * 0.5);
-            }
-            cv.stroke_path(&p, s(1.5), th.text_dim);
-        }
     }
 
     fn draw_notes(&self, cv: &mut Canvas<'_>, text: &mut TextCache, th: &Theme) {
@@ -782,6 +754,23 @@ impl Ed {
             let (w, h) = ((x1 - x0).abs(), (y1 - y0).abs());
             cv.fill_rect(xa, ya, w, h, th.accent.with_alpha(30));
             cv.stroke_rect(xa, ya, w, h, 1.0, th.accent);
+        }
+        // Les notes et accords peints.
+        if let Some(cells) = self.chord_cells() {
+            let g = if self.grid > 0.0 { self.grid } else { 0.25 };
+            for &(q, p) in cells {
+                if let Some(i) = self.row_of(p) {
+                    let (xa, xb) = (self.x_of(q), self.x_of(q + g));
+                    let y = self.row_y(i);
+                    cv.fill_rect(
+                        xa,
+                        y,
+                        (xb - xa - 1.0).max(1.0),
+                        l.rh,
+                        th.accent.with_alpha(110),
+                    );
+                }
+            }
         }
         // La ligne peinte.
         if let Some((qa, pa, qb, pb)) = self.paint() {
