@@ -5,6 +5,10 @@ desc:CP Guitar Tab Synth
 // Les canaux MIDI sont les cordes (canal 1 = la corde aigue). Avec
 // "One note per string", une note neuve sur une corde coupe la precedente,
 // comme une vraie guitare : un mauvais doigte s'entend.
+// Les bends et les glisses : le pitch bend de chaque canal (etendue de 12
+// demi-tons, celle qu'ecrit Guitar Tab, changee par RPN 0), lisse sur 3 ms ;
+// la pedale legato (CC 68) : une note neuve sur la corde ne la repince pas,
+// elle change sa hauteur (marteaux, tires, glisses).
 // Ecrit SANS ecriture scientifique (EEL2 la refuse).
 
 slider1:sound=0<0,3,1{Guitar,Piano,Sine,Bass}>Sound
@@ -39,6 +43,25 @@ v_gr = 224;
 v_ph = 256;
 v_pe = 320;
 v_pd = 384;
+// Les bends : le rapport de frequence de chaque voix (lisse) et sa periode
+// sans bend ; par canal, le rapport recu, l'etendue, la pedale, le RPN choisi.
+v_br = 448;
+v_p0 = 464;
+ch_ratio = 480;
+ch_range = 496;
+ch_leg = 512;
+rpn_m = 528;
+rpn_l = 544;
+i = 0;
+loop(16,
+  ch_ratio[i] = 1;
+  ch_range[i] = 12;
+  ch_leg[i] = 0;
+  rpn_m[i] = 127;
+  rpn_l[i] = 127;
+  i += 1;
+);
+bsm = 1 - exp(-1 / (0.003 * srate));
 bufbase = 1024;
 evq = bufbase + NV * BUFLEN;
 ne = 0;
@@ -58,12 +81,26 @@ function note_off(ch, nt) local(i) (
   );
 );
 
-function note_on(ch, nt, vel) local(v, i, best, snd, f, len, b, a, lp, k, mean) (
+function note_on(ch, nt, vel) local(v, i, best, snd, f, len, b, a, lp, k, mean, fo) (
   v = -1;
   mono ? (
     i = 0;
     loop(NV, (v_act[i] && v_chan[i] == ch) ? v = i; i += 1;);
   );
+  (v >= 0 && ch_leg[ch]) ? (
+    // Legato : la corde qui sonne change de hauteur, sans etre repincee ; elle
+    // part de la ou elle etait (un bend en cours compris).
+    snd = v_snd[v];
+    f = 440 * 2 ^ (((snd == 3 ? nt - 12 : nt) - 69) / 12);
+    fo = v_freq[v] * v_br[v];
+    v_note[v] = nt;
+    v_freq[v] = f;
+    v_p0[v] = srate / f;
+    v_br[v] = fo / f;
+    v_rel[v] = 0;
+    v_t[v] = 0;
+    v_age[v] = 0;
+  ) : (
   v < 0 ? (
     i = 0;
     loop(NV, (v < 0 && !v_act[i]) ? v = i; i += 1;);
@@ -87,6 +124,8 @@ function note_on(ch, nt, vel) local(v, i, best, snd, f, len, b, a, lp, k, mean) 
   v_snd[v] = snd;
   v_t[v] = 0;
   v_lp[v] = 0;
+  v_p0[v] = srate / f;
+  v_br[v] = ch_ratio[ch];
   (snd == 0 || snd == 3) ? (
     // Karplus-Strong : une corde pincee. Le moyennage a deux points retarde
     // d'un demi-echantillon : la longueur le compense.
@@ -118,14 +157,20 @@ function note_on(ch, nt, vel) local(v, i, best, snd, f, len, b, a, lp, k, mean) 
       k += 1;
     );
   );
+  );
 );
 
-function voice(v) local(out, snd, b, len, pos, rp, i0, i1, fr, s0, s1, y, fb, k, fk, ph, att) (
+function voice(v) local(out, snd, b, len, pos, rp, i0, i1, fr, s0, s1, y, fb, k, fk, ph, att, br) (
   out = 0;
   snd = v_snd[v];
+  // Le bend du canal, lisse.
+  br = v_br[v] + (ch_ratio[v_chan[v]] - v_br[v]) * bsm;
+  v_br[v] = br;
   (snd == 0 || snd == 3) ? (
     b = bufbase + v * BUFLEN;
-    len = v_len[v];
+    len = v_p0[v] / br - 0.5;
+    len > BUFLEN - 2 ? len = BUFLEN - 2;
+    len < 2 ? len = 2;
     pos = v_pos[v];
     rp = pos - len;
     rp < 0 ? rp += BUFLEN;
@@ -149,7 +194,7 @@ function voice(v) local(out, snd, b, len, pos, rp, i0, i1, fr, s0, s1, y, fb, k,
     k = 0;
     loop(4,
       v_pe[v * 4 + k] > 0.00001 ? (
-        fk = v_freq[v] * (k + 1) * (snd == 1 ? 1 + 0.0004 * (k + 1) * (k + 1) : 1);
+        fk = v_freq[v] * br * (k + 1) * (snd == 1 ? 1 + 0.0004 * (k + 1) * (k + 1) : 1);
         ph = v_ph[v * 4 + k] + fk / srate;
         ph >= 1 ? ph -= 1;
         v_ph[v * 4 + k] = ph;
@@ -170,8 +215,15 @@ function voice(v) local(out, snd, b, len, pos, rp, i0, i1, fr, s0, s1, y, fb, k,
   out * v_vel[v] * (0.35 + 0.65 * v_vel[v]);
 );
 
-// La porte du banc d'essai : une note jouee des le depart (0 dans REAPER).
+// La porte du banc d'essai : une note jouee des le depart (0 dans REAPER),
+// un bend du canal 1 (demi-tons), une note liee a la premiere (legato).
+cpbend != 0 ? ch_ratio[0] = 2 ^ (cpbend / 12);
 cptest > 0 ? note_on(0, cptest, 110);
+cplegato > 0 ? (
+  ch_leg[0] = 1;
+  note_on(0, cplegato, 110);
+  ch_leg[0] = 0;
+);
 
 @slider
 gain = 10 ^ (gain_db / 20);
@@ -201,7 +253,18 @@ while (ei < ne && evq[ei * 4] <= scount) (
   vl = evq[ei * 4 + 3];
   (st == 144 && vl > 0) ? note_on(ch, nt, vl) : (
     (st == 128 || (st == 144 && vl == 0)) ? note_off(ch, nt) : (
-      (st == 176 && (nt == 120 || nt == 123)) ? all_off();
+      st == 224 ? (
+        // Pitch bend : poids faible, poids fort.
+        ch_ratio[ch] = 2 ^ ((vl * 128 + nt - 8192) / 8192 * ch_range[ch] / 12);
+      ) : (
+        st == 176 ? (
+          nt == 101 ? rpn_m[ch] = vl;
+          nt == 100 ? rpn_l[ch] = vl;
+          (nt == 6 && rpn_m[ch] == 0 && rpn_l[ch] == 0) ? ch_range[ch] = max(1, vl);
+          nt == 68 ? ch_leg[ch] = vl >= 64;
+          (nt == 120 || nt == 123) ? all_off();
+        );
+      );
     );
   );
   ei += 1;
