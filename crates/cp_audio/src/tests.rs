@@ -429,3 +429,182 @@ fn les_niveaux_d_un_port() {
     // Un port jamais ouvert : rien.
     assert_eq!(h.port_levels(5), [0.0, 0.0]);
 }
+
+// ---------------------------------------------------------------------------
+// La robustesse (A9)
+// ---------------------------------------------------------------------------
+
+/// Un generateur reproductible.
+struct Lcg(u64);
+
+impl Lcg {
+    fn f(&mut self) -> f64 {
+        self.0 = self
+            .0
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(1_442_695_040_888_963_407);
+        (self.0 >> 11) as f64 / (1u64 << 53) as f64
+    }
+    fn n(&mut self, k: usize) -> usize {
+        (self.f() * k as f64) as usize % k.max(1)
+    }
+}
+
+/// Une session de `hours` heures de son, tiree comme REAPER (des blocs de
+/// 1024 sur quatre ports), avec des lancements, des arrets, des reglages et
+/// des clips charges puis liberes au hasard. A la fin : aucune perte
+/// comptee, aucune fuite (le vivier revient a vide), aucune derive (une voix
+/// temoin en boucle a vitesse 1 est ou le compte exact la met), rien de non
+/// fini dans la sortie. Rend le cout mesure par voix.
+fn session(hours: f64, max_voices: usize) -> f64 {
+    let mut h = AudioHost::new(None, 48000.0);
+    // Comme dans REAPER : l'horloge est celle du crochet des le depart.
+    h.core().use_external_clock();
+    let mut r = Lcg(0x5EED);
+    let mk = |r: &mut Lcg, n: usize, nch: usize| -> Vec<f32> {
+        let f = 50.0 + r.f() * 2000.0;
+        (0..n * nch)
+            .map(|i| ((i / nch) as f64 * f * std::f64::consts::TAU / 48000.0).sin() as f32 * 0.3)
+            .collect()
+    };
+    // La temoin : 12 345 frames en boucle a vitesse 1, sur le port 0.
+    let span = 12_345i64;
+    let wit_clip = h
+        .load_samples(mk(&mut r, span as usize, 1), 1, 48000.0)
+        .unwrap();
+    block(&mut h, 0, 1024);
+    let witness = h.play(0, wit_clip, 0, 0, true, 0.0).unwrap();
+    let start_block = h.core().clock_now();
+    let mut clips: Vec<ClipH> = Vec::new();
+    let mut voices: Vec<VoiceH> = Vec::new();
+    let blocks = (hours * 3600.0 * 48000.0 / 1024.0) as usize;
+    let t0 = std::time::Instant::now();
+    let mut voice_blocks = 0u64;
+    let mut out = vec![0.0f64; 1024 * 2];
+    for b in 0..blocks {
+        // Environ deux evenements par seconde de son.
+        if b % 23 == 0 {
+            match r.n(8) {
+                0 | 1 if clips.len() < 24 => {
+                    let n = 2000 + r.n(200_000);
+                    let nch = 1 + r.n(2);
+                    if let Ok(c) =
+                        h.load_samples(mk(&mut r, n, nch), nch, [44100.0, 48000.0, 96000.0][r.n(3)])
+                    {
+                        clips.push(c);
+                    }
+                }
+                2 if !clips.is_empty() => {
+                    let c = clips.swap_remove(r.n(clips.len()));
+                    h.release(c);
+                }
+                3..=5 if !clips.is_empty() && voices.len() < max_voices => {
+                    let c = clips[r.n(clips.len())];
+                    let port = 1 + r.n(3);
+                    if let Some(v) = h.play(port, c, 0, 0, r.f() < 0.5, 0.2) {
+                        h.set(v, Param::Rate, 0.5 + r.f() * 1.5);
+                        h.set(v, Param::Interp, (r.f() < 0.5) as i32 as f64);
+                        h.set(v, Param::Reverse, (r.f() < 0.2) as i32 as f64);
+                        h.set(v, Param::FadeIn, r.f() * 0.01);
+                        voices.push(v);
+                    }
+                }
+                6 if !voices.is_empty() => {
+                    let v = voices.swap_remove(r.n(voices.len()));
+                    h.stop(v, r.f() * 0.05);
+                }
+                _ => {
+                    if let Some(&v) = voices.get(r.n(voices.len().max(1))) {
+                        h.set(v, Param::Pan, r.f() * 2.0 - 1.0);
+                        h.set(v, Param::Gain, r.f() * 0.3);
+                    }
+                }
+            }
+        }
+        let t = h.core().clock_now() as f64 / 48000.0;
+        for port in 0..4 {
+            out.iter_mut().for_each(|x| *x = 0.0);
+            assert_eq!(h.pull(port, t, 2, &mut out), 1024);
+
+            if b % 997 == 0 {
+                assert!(out.iter().all(|x| x.is_finite()), "bloc {b} port {port}");
+            }
+        }
+        h.core().tick(1024);
+        voice_blocks += h.core().active_voices() as u64;
+        if b % 50 == 0 {
+            h.poll();
+            voices.retain(|&v| h.voice(v).is_some());
+        }
+    }
+    let secs = t0.elapsed().as_secs_f64();
+    // La temoin : la ou le compte exact la met.
+    h.poll();
+    let (pos, _) = h.voice(witness).unwrap();
+    let played = h.core().clock_now() - start_block;
+    let want = played.rem_euclid(span) as f64;
+    assert!(
+        (pos - want).abs() < 1e-6 || (pos - want).abs() > span as f64 - 1.0,
+        "derive : {pos} au lieu de {want}"
+    );
+    // Aucune perte comptee.
+    let st = h.stats();
+    assert_eq!(
+        (
+            st.over_pulls,
+            st.under_pulls,
+            st.rewinds,
+            st.skips,
+            st.dropped_commands,
+            st.busy_renders
+        ),
+        (0, 0, 0, 0, 0, 0),
+        "{st:?}"
+    );
+    // Tout arrete, tout libere : le vivier est vide.
+    h.stop(witness, 0.0);
+    for v in voices.drain(..) {
+        h.stop(v, 0.0);
+    }
+    for c in clips.drain(..) {
+        h.release(c);
+    }
+    h.release(wit_clip);
+    for _ in 0..8 {
+        let t = h.core().clock_now() as f64 / 48000.0;
+        for port in 0..4 {
+            h.pull(port, t, 2, &mut out);
+        }
+        h.core().tick(1024);
+        h.poll();
+    }
+    let st = h.stats();
+    assert_eq!(
+        (st.clips, st.bytes, st.active_voices),
+        (0, 0, 0),
+        "fuite : {st:?}"
+    );
+    // Le cout : secondes de calcul par seconde de son et par voix.
+    let audio_s = blocks as f64 * 1024.0 / 48000.0;
+    let mean_voices = voice_blocks as f64 / blocks.max(1) as f64;
+    let per_voice = secs / audio_s / mean_voices.max(1.0) * 100.0;
+    eprintln!(
+        "session de {hours} h : {secs:.1} s de calcul, {mean_voices:.1} voix en moyenne, {per_voice:.3} % d'un coeur par voix"
+    );
+    per_voice
+}
+
+/// Une minute de son tres chargee (jusqu'a 40 voix) : dans la suite des
+/// tests.
+#[test]
+fn une_session_chargee() {
+    session(1.0 / 60.0, 40);
+}
+
+/// Huit heures (l'exigence A9) : `cargo test -p cp_audio --release --
+/// --ignored huit_heures`.
+#[test]
+#[ignore]
+fn huit_heures_de_session() {
+    session(8.0, 6);
+}

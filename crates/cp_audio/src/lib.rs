@@ -184,6 +184,9 @@ impl AudioHost {
             if HOOK_CORE.set(ctl.core().clone()).is_ok() {
                 hook = AudioHook::register(r, on_audio);
             }
+            if hook {
+                ctl.core().use_external_clock();
+            }
         }
         AudioHost {
             reaper,

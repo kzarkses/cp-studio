@@ -399,6 +399,14 @@ impl Core {
 
     /// Avance l'horloge d'un bloc. A APPELER APRES le rendu du bloc (passage
     /// « post ») : l'appeler avant ferait tout partir un bloc trop tot.
+    /// L'horloge viendra de [`Core::tick`] (le crochet audio de REAPER) des
+    /// le premier bloc : aucun port ne sert d'horloge, meme tire avant le
+    /// premier battement (sinon il l'avancerait par morceaux, au milieu du
+    /// bloc, et chaque port compterait une perte au demarrage).
+    pub fn use_external_clock(&self) {
+        self.clock_external.store(true, Relaxed);
+    }
+
     pub fn tick(&self, frames: i32) {
         if frames <= 0 {
             return;
