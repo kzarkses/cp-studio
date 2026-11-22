@@ -1,19 +1,20 @@
-//! La fenetre de CP Guitar Tab, sans Windows ni REAPER : la partition et la
-//! tablature d'une prise, liees (une seule liste de notes, deux dessins),
-//! la detection reglable en direct, et les notes FANTOMES (ce que le reseau a
-//! presque entendu, gardees d'un clic).
+//! La fenetre de CP Guitar Tab, sans Windows ni REAPER : un ARRANGEUR de
+//! guitares. Des pistes hautes, chacune avec ses couches alignees sur les
+//! memes mesures : l'audio enregistre, le MIDI transcrit, la partition et la
+//! tablature. Chaque item garde sa propre tablature (une liste de notes, deux
+//! dessins), sa detection reglable en direct et ses notes FANTOMES.
 //!
-//! Le module tient la prise (l'analyse, l'item MIDI) et execute les [`Act`] :
-//! ecrire le MIDI apres une correction, redecoder quand un reglage change,
-//! deplacer le curseur de REAPER, exporter. Ici : l'etat de la fenetre, le
-//! dessin (`draw.rs`) et les gestes.
+//! Le module tient le projet (les pistes REAPER, les analyses, les items
+//! MIDI), remplit [`Arr::tracks`] et execute les [`Act`]. Ici : l'etat de la
+//! fenetre, le dessin (`draw.rs`), les corrections (`item.rs`) et les gestes.
 //!
-//! L'axe du temps est en NOIRES DU PROJET, proportionnel : la partition, la
-//! tablature, le son et les attaques s'alignent a la verticale.
+//! L'axe du temps est en NOIRES DU PROJET, proportionnel : les couches de
+//! toutes les pistes s'alignent a la verticale.
 
 #![allow(clippy::too_many_arguments)]
 
 pub mod draw;
+mod item;
 #[cfg(test)]
 mod tests;
 
@@ -21,7 +22,7 @@ use std::collections::HashSet;
 use std::time::Instant;
 
 use cp_tab::doc::{TNote, Tech};
-use cp_tab::engrave::{Engraved, engrave};
+use cp_tab::engrave::Engraved;
 use cp_tab::fret::Tuning;
 use cp_ui::{Button, Ev, Mods, vk};
 
@@ -34,7 +35,14 @@ pub const TUNINGS: [(&str, [i32; 6]); 5] = [
     ("Open G", [38, 43, 50, 55, 59, 62]),
 ];
 
-/// Les reglages de la detection (ExtState `gtab_detect`).
+pub fn tuning_of(k: usize) -> Tuning {
+    Tuning {
+        strings: TUNINGS[k.min(TUNINGS.len() - 1)].1.to_vec(),
+        frets: 22,
+    }
+}
+
+/// Les reglages de la detection d'un item.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Detect {
     /// Le seuil d'une attaque, 0..1 : plus bas, plus de notes (et de bruit).
@@ -49,7 +57,7 @@ pub struct Detect {
     pub legato: bool,
     /// Montrer les notes fantomes.
     pub ghosts: bool,
-    /// Rang dans [`TUNINGS`].
+    /// Rang dans [`TUNINGS`] (celui de la piste).
     pub tuning: usize,
 }
 
@@ -69,10 +77,7 @@ impl Default for Detect {
 
 impl Detect {
     pub fn tuning(&self) -> Tuning {
-        Tuning {
-            strings: TUNINGS[self.tuning.min(TUNINGS.len() - 1)].1.to_vec(),
-            frets: 22,
-        }
+        tuning_of(self.tuning)
     }
 
     /// Le seuil d'une note fantome : sous celui des notes gardees.
@@ -121,97 +126,440 @@ impl Detect {
     }
 }
 
-/// Ce que la fenetre montre : la partition et la tablature, l'une ou l'autre.
+/// Le son de la tablature (le synthe de Guitar Tab sur la piste tab).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Mode {
-    Both,
-    Tab,
-    Score,
+pub enum Sound {
+    Guitar,
+    Piano,
+    Sine,
+    Bass,
 }
 
-/// La prise : ce que le module sait d'elle.
-#[derive(Clone, Debug, Default)]
-pub struct Take {
-    /// « 02-210831_1211.wav »
+impl Sound {
+    pub const ALL: [Sound; 4] = [Sound::Guitar, Sound::Piano, Sound::Sine, Sound::Bass];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Sound::Guitar => "Guitar",
+            Sound::Piano => "Piano",
+            Sound::Sine => "Sine",
+            Sound::Bass => "Bass",
+        }
+    }
+
+    pub fn index(self) -> usize {
+        self as usize
+    }
+
+    pub fn from_index(i: usize) -> Sound {
+        Sound::ALL[i.min(3)]
+    }
+}
+
+/// Le synthe de la piste tab, s'il y est (sinon : l'instrument de Cedric).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Synth {
+    pub sound: Sound,
+    /// 0..1.
+    pub tone: f32,
+    /// Secondes.
+    pub sustain: f32,
+    /// Une note par corde : une note neuve coupe la precedente.
+    pub mono: bool,
+}
+
+/// Les couches d'une piste.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Lane {
+    Audio,
+    Midi,
+    Score,
+    Tab,
+}
+
+impl Lane {
+    pub const ALL: [Lane; 4] = [Lane::Audio, Lane::Midi, Lane::Score, Lane::Tab];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Lane::Audio => "Audio",
+            Lane::Midi => "MIDI",
+            Lane::Score => "Score",
+            Lane::Tab => "Tab",
+        }
+    }
+}
+
+/// Les couches montrees : audio, MIDI, partition, tab.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Lanes(pub [bool; 4]);
+
+impl Default for Lanes {
+    /// Decide par Cedric (2026-11-22) : audio, partition et tab ; le MIDI dit
+    /// la meme chose que la tab.
+    fn default() -> Self {
+        Lanes([true, false, true, true])
+    }
+}
+
+impl Lanes {
+    pub fn on(&self, l: Lane) -> bool {
+        self.0[l as usize]
+    }
+
+    pub fn to_text(&self) -> String {
+        self.0.iter().map(|&b| if b { '1' } else { '0' }).collect()
+    }
+
+    pub fn from_text(s: &str) -> Lanes {
+        let mut l = Lanes::default();
+        if s.len() == 4 {
+            for (i, c) in s.chars().enumerate() {
+                l.0[i] = c == '1';
+            }
+        }
+        if !l.0.iter().any(|&b| b) {
+            l.0[Lane::Tab as usize] = true;
+        }
+        l
+    }
+}
+
+/// L'en-tete d'une piste de guitare : ses deux pistes REAPER.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Head {
+    /// Le GUID de la piste audio (le dossier).
+    pub guid: String,
+    pub tab_guid: Option<String>,
+    /// Le numero de la piste dans REAPER (1 = la premiere).
+    pub num: i32,
     pub name: String,
-    /// La piste de l'item audio.
-    pub track: String,
-    pub len_s: f64,
+    pub armed: bool,
+    /// « In 1 », « In 1/2 », « MIDI », « None ».
+    pub input: String,
+    /// 0 eteint, 1 allume, 2 automatique.
+    pub monitor: i32,
+    pub mute: bool,
+    pub solo: bool,
+    pub vol_db: f32,
+    pub tab_vol_db: f32,
+    /// La crete de l'entree ou de la lecture, 0..1.
+    pub meter: f32,
+    pub synth: Option<Synth>,
+    pub tuning: usize,
+    pub lanes: Lanes,
+}
+
+impl Default for Head {
+    fn default() -> Self {
+        Head {
+            guid: String::new(),
+            tab_guid: None,
+            num: 1,
+            name: "Guitar".into(),
+            armed: false,
+            input: "In 1".into(),
+            monitor: 0,
+            mute: false,
+            solo: false,
+            vol_db: 0.0,
+            tab_vol_db: 0.0,
+            meter: 0.0,
+            synth: None,
+            tuning: 0,
+            lanes: Lanes::default(),
+        }
+    }
+}
+
+/// Ou en est la transcription d'un item.
+#[derive(Clone, Debug, PartialEq)]
+pub enum State {
+    /// Transcrit : sa tablature est la.
+    Ready,
+    /// En file d'attente.
+    Waiting,
+    /// Le reseau ecoute (pourcentage).
+    Busy(i32),
+    /// Impossible (le message dit pourquoi).
+    Failed(String),
+}
+
+/// Une prise d'un item (dans l'inspecteur).
+#[derive(Clone, Debug, PartialEq)]
+pub struct TakeInfo {
+    pub name: String,
+    /// Sa tablature existe deja (son analyse est en cache).
+    pub done: bool,
+}
+
+/// Un item audio d'une piste, et sa tablature.
+#[derive(Clone, Debug, Default)]
+pub struct Item {
+    /// Le GUID de l'item audio.
+    pub guid: String,
+    /// Le GUID de la prise active (la cle de sa tablature).
+    pub take: String,
+    /// La cle de son analyse (le son joue : fichier, decalage, longueur,
+    /// vitesse) : une copie de l'item la retrouve.
+    pub akey: String,
+    pub name: String,
     /// L'item, en noires du projet.
     pub qn0: f64,
     pub qn1: f64,
-    /// La barre de mesure ou commence la partition, et son numero (1 = la
-    /// premiere mesure du projet).
+    /// La barre de mesure ou commence sa partition.
     pub origin_qn: f64,
-    pub first_bar: i32,
     pub sig: (i32, i32),
     pub bpm: f64,
-    /// La piste MIDI liee, si elle existe.
-    pub midi: Option<String>,
+    pub takes: Vec<TakeInfo>,
+    pub active: usize,
+    pub state: Option<State>,
+    /// L'item MIDI lie existe.
+    pub midi: bool,
     /// Pour chaque trame de l'analyse : sa position en noires, la crete du
     /// son, l'attaque la plus forte.
     pub frame_qn: Vec<f64>,
     pub env: Vec<f32>,
     pub onset: Vec<f32>,
+    pub doc: Vec<TNote>,
+    pub ghosts: Vec<TNote>,
+    /// Les notes effacees par Cedric (un nouveau decodage ne les ramene pas).
+    pub suppressed: HashSet<(i64, i32)>,
+    pub detect: Detect,
+    /// Notes injouables laissees de cote par le doigte.
+    pub dropped: usize,
+    pub(crate) eng: Engraved,
+    /// La partition est a jour (faux : a refaire au prochain dessin).
+    pub(crate) eng_ok: bool,
+}
+
+/// Une piste de guitare : son en-tete et ses items (dans l'ordre du temps).
+#[derive(Clone, Debug, Default)]
+pub struct Track {
+    pub head: Head,
+    pub items: Vec<Item>,
+}
+
+/// Ce qu'on entend.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Listen {
+    Original,
+    Tab,
+    Both,
+}
+
+impl Listen {
+    pub fn key(self) -> &'static str {
+        match self {
+            Listen::Original => "original",
+            Listen::Tab => "tab",
+            Listen::Both => "both",
+        }
+    }
+
+    pub fn from_key(s: &str) -> Listen {
+        match s {
+            "original" => Listen::Original,
+            "tab" => Listen::Tab,
+            _ => Listen::Both,
+        }
+    }
+}
+
+/// Une prise en train de s'enregistrer, sur une piste.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Rec {
+    pub track: usize,
+    pub qn0: f64,
+    /// La crete de la piste, battement par battement.
+    pub env: Vec<(f64, f32)>,
+}
+
+/// Ce qui est choisi : une piste, un item, une note.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Sel {
+    pub t: usize,
+    pub i: Option<usize>,
+    pub n: Option<usize>,
 }
 
 /// Ce que vise la souris.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Hit {
     None,
-    Note(usize),
-    Ghost(usize),
-    /// Une ligne de la tablature (corde) a une position.
-    TabLine(usize),
     Ruler,
-    Lanes,
-    Overview,
-    Transcribe,
-    Mode(Mode),
+    /// Une note de la tablature ou de la partition.
+    Note {
+        t: usize,
+        i: usize,
+        n: usize,
+    },
+    Ghost {
+        t: usize,
+        i: usize,
+        g: usize,
+    },
+    /// Une ligne de la tablature (corde `s`) dans un item.
+    TabLine {
+        t: usize,
+        i: usize,
+        s: usize,
+    },
+    /// Un item dans une couche.
+    Item {
+        t: usize,
+        i: usize,
+        lane: Lane,
+    },
+    /// Une couche, hors des items.
+    Lane {
+        t: usize,
+        lane: Lane,
+    },
+    Header(usize),
+    Arm(usize),
+    Input(usize),
+    Monitor(usize),
+    Mute(usize),
+    Solo(usize),
+    Fader {
+        t: usize,
+        tab: bool,
+    },
+    SoundPick {
+        t: usize,
+        s: Sound,
+    },
+    LaneToggle {
+        t: usize,
+        lane: Lane,
+    },
+    Tuning(usize),
+    // La barre
+    Listen(Listen),
+    Split,
     ZoomOut,
     ZoomIn,
     Follow,
-    Export,
+    AddTrack,
+    // L'inspecteur
+    Take(usize),
     Slider(u8),
     Check(u8),
     Grid(u32),
-    Tuning,
     KeepGhosts,
     Retranscribe,
+    DeleteItem,
+    Export,
+    SynthSlider(u8),
+    SynthMono,
+    VScroll,
 }
 
-/// Ce que le module doit faire.
+/// Ce que le module doit faire. `t` : la piste, `i` : l'item (rangs dans
+/// [`Arr::tracks`], valables jusqu'au prochain rafraichissement).
 #[derive(Clone, Debug, PartialEq)]
 pub enum Act {
     /// Deplacer le curseur d'edition de REAPER (noires).
     Seek(f64),
-    /// Lecture / arret (Espace).
     Play,
-    /// L'annulation de REAPER (Ctrl+Z).
+    Record,
     Undo,
-    /// La tablature a ete corrigee : l'ecrire dans l'item MIDI.
-    Edited,
-    /// Un reglage a change : redecoder (seulement ce passage, s'il y en a un).
+    /// La tablature d'un item a ete corrigee : l'ecrire dans son item MIDI.
+    Edited {
+        t: usize,
+        i: usize,
+    },
+    /// Un reglage a change : redecoder l'item (seulement ce passage).
     Detect {
+        t: usize,
+        i: usize,
         range: Option<(f64, f64)>,
     },
-    /// L'accordage a change : refaire le doigte.
-    Retune,
-    /// Relancer le reseau sur la prise (ou sur l'item choisi).
-    Transcribe,
-    Export,
+    /// L'accordage de la piste a change : refaire les doigtes.
+    Retune {
+        t: usize,
+    },
+    Transcribe {
+        t: usize,
+        i: usize,
+    },
+    DeleteItem {
+        t: usize,
+        i: usize,
+    },
+    OpenMidi {
+        t: usize,
+        i: usize,
+    },
+    SetTake {
+        t: usize,
+        i: usize,
+        k: usize,
+    },
+    Arm {
+        t: usize,
+    },
+    Monitor {
+        t: usize,
+    },
+    Mute {
+        t: usize,
+    },
+    Solo {
+        t: usize,
+    },
+    InputMenu {
+        t: usize,
+        x: f32,
+        y: f32,
+    },
+    Volume {
+        t: usize,
+        tab: bool,
+        db: f32,
+    },
+    Sound {
+        t: usize,
+        s: Sound,
+    },
+    /// Un reglage du synthe : 1 tone, 2 sustain, 3 une note par corde.
+    Synth {
+        t: usize,
+        p: u8,
+        v: f32,
+    },
+    /// Les couches montrees d'une piste ont change (a retenir).
+    Lanes {
+        t: usize,
+    },
+    /// Ce qu'on entend a change ([`Arr::listen`], [`Arr::split`]).
+    Listen,
+    AddTrack,
+    /// Clic droit sur un en-tete.
+    TrackMenu {
+        t: usize,
+        x: f32,
+        y: f32,
+    },
     /// Clic droit sur la barre : la place de la fenetre.
     ViewMenu {
         x: f32,
         y: f32,
     },
+    Export {
+        t: usize,
+        i: usize,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Drag {
-    /// Une note deplacee : le debut d'origine et la position de la souris.
+    /// Une note deplacee : son debut d'origine et la position de la souris.
     Note {
+        t: usize,
         i: usize,
+        n: usize,
         qn0: f64,
         x0: f32,
         moved: bool,
@@ -221,8 +569,22 @@ enum Drag {
         q0: f64,
     },
     Slider(u8),
-    Overview,
+    SynthSlider(u8),
+    Fader {
+        t: usize,
+        tab: bool,
+    },
+    VScroll {
+        y0: f32,
+        v0: f32,
+    },
 }
+
+/// La selection par cles : la piste, l'item, la note.
+type SelKey = (String, Option<String>, Option<(i64, i32)>);
+
+/// Une cible : un rectangle et ce qu'il est.
+pub type HBox = (f32, f32, f32, f32, Hit);
 
 /// Les zones de la fenetre (calculees au dessin).
 #[derive(Clone, Copy, Debug, Default)]
@@ -230,99 +592,92 @@ pub struct Lay {
     pub w: f32,
     pub h: f32,
     pub bar_h: f32,
-    pub sub_h: f32,
     pub status_h: f32,
     pub panel_w: f32,
-    /// La zone de la partition : x de debut (apres la cle), largeur, y.
-    pub sx: f32,
-    pub sw: f32,
+    pub panel_x: f32,
+    /// Le haut et le bas de la zone des pistes.
     pub top: f32,
     pub bottom: f32,
+    pub head_w: f32,
+    pub ruler_h: f32,
+    /// La colonne des noms de couche, puis le contenu qui defile.
+    pub label_x: f32,
+    pub sx: f32,
+    pub sw: f32,
     /// Pixels par noire.
     pub ppq: f32,
-    pub ruler_y: f32,
-    pub score_y: f32,
-    pub tab_y: f32,
-    pub tab_gap: f32,
-    pub audio_y: f32,
-    pub audio_h: f32,
-    pub onset_y: f32,
-    pub onset_h: f32,
-    pub over_y: f32,
-    pub over_h: f32,
-    pub panel_x: f32,
+    /// La hauteur de toutes les pistes.
+    pub content_h: f32,
 }
 
-pub struct TabView {
-    pub take: Option<Take>,
-    pub doc: Vec<TNote>,
-    pub ghosts: Vec<TNote>,
-    /// Les notes effacees par Cedric (un nouveau decodage ne les ramene pas).
-    pub suppressed: HashSet<(i64, i32)>,
-    pub detect: Detect,
-    pub mode: Mode,
+pub struct Arr {
+    pub tracks: Vec<Track>,
+    pub listen: Listen,
+    /// En « Both » : l'original a gauche, la tab a droite.
+    pub split: bool,
+    /// La mesure du projet (barres a partir de la noire 0).
+    pub sig: (i32, i32),
+    pub bpm: f64,
     /// Pixels par noire a 96 DPI.
     pub zoom: f32,
-    /// La noire au bord gauche de la partition.
+    /// La noire au bord gauche.
     pub scroll: f64,
+    /// Le defilement vertical des pistes (px).
+    pub vscroll: f32,
     pub follow: bool,
     pub playhead: Option<f64>,
     pub playing: bool,
-    pub sel: Option<usize>,
+    pub rec: Vec<Rec>,
+    pub sel: Option<Sel>,
     pub range: Option<(f64, f64)>,
-    /// Ce qui se passe (« Transcribing 45 % », « Recording… »).
+    /// Ce qui se passe (« Transcribing 45 % »).
     pub busy: Option<String>,
     pub status: String,
-    /// Notes injouables laissees de cote par le doigte.
-    pub dropped: usize,
-    /// Ce que dit le pied du panneau (le reseau, son temps).
-    pub net_note: String,
     pub lay: Lay,
     pub scale: f32,
-    eng: Engraved,
-    eng_dirty: bool,
-    boxes: Vec<(f32, f32, f32, f32, Hit)>,
-    hover: Hit,
+    pub(crate) boxes: Vec<HBox>,
+    pub(crate) hover: Hit,
     drag: Option<Drag>,
     /// Le premier chiffre d'une case tapee (pour « 12 »), et quand.
     digit: Option<(i32, Instant)>,
+    /// La selection retenue par cles (GUID de l'item, cle de la note) pour
+    /// la retrouver apres un rafraichissement des pistes.
+    sel_key: Option<SelKey>,
     dirty: bool,
 }
 
-impl Default for TabView {
+impl Default for Arr {
     fn default() -> Self {
-        TabView::new()
+        Arr::new()
     }
 }
 
-impl TabView {
-    pub fn new() -> TabView {
-        TabView {
-            take: None,
-            doc: Vec::new(),
-            ghosts: Vec::new(),
-            suppressed: HashSet::new(),
-            detect: Detect::default(),
-            mode: Mode::Both,
-            zoom: 72.0,
+impl Arr {
+    pub fn new() -> Arr {
+        Arr {
+            tracks: Vec::new(),
+            listen: Listen::Both,
+            split: false,
+            sig: (4, 4),
+            bpm: 120.0,
+            zoom: 56.0,
             scroll: 0.0,
+            vscroll: 0.0,
             follow: true,
             playhead: None,
             playing: false,
+            rec: Vec::new(),
             sel: None,
             range: None,
             busy: None,
             status: String::new(),
-            dropped: 0,
-            net_note: String::new(),
             lay: Lay::default(),
             scale: 1.0,
-            eng: Engraved::default(),
-            eng_dirty: true,
             boxes: Vec::new(),
             hover: Hit::None,
             drag: None,
             digit: None,
+            sel_key: None,
             dirty: true,
         }
     }
@@ -335,48 +690,9 @@ impl TabView {
         std::mem::take(&mut self.dirty)
     }
 
-    /// Une nouvelle tablature (decodage, relecture du MIDI) : la partition
-    /// est a refaire.
-    pub fn set_doc(&mut self, doc: Vec<TNote>) {
-        let keep = self.sel.and_then(|i| self.doc.get(i)).map(TNote::key);
-        self.doc = doc;
-        self.sel = keep.and_then(|k| self.doc.iter().position(|t| t.key() == k));
-        self.eng_dirty = true;
-        self.dirty = true;
-    }
-
-    pub fn set_take(&mut self, t: Take) {
-        let fresh = self
-            .take
-            .as_ref()
-            .is_none_or(|o| o.name != t.name || o.qn0 != t.qn0);
-        if fresh {
-            self.scroll = t.origin_qn;
-            self.sel = None;
-            self.range = None;
-        }
-        self.take = Some(t);
-        self.eng_dirty = true;
-        self.dirty = true;
-    }
-
-    /// La partition (refaite si la tablature a change).
-    pub fn engraved(&mut self) -> &Engraved {
-        if self.eng_dirty {
-            let (origin, sig) = self
-                .take
-                .as_ref()
-                .map_or((0.0, (4, 4)), |t| (t.origin_qn, t.sig));
-            self.eng = engrave(&self.doc, origin, sig, self.detect.grid);
-            self.eng_dirty = false;
-        }
-        &self.eng
-    }
-
     /// Les noires d'une mesure.
     pub fn bar_qn(&self) -> f64 {
-        let (n, d) = self.take.as_ref().map_or((4, 4), |t| t.sig);
-        n.max(1) as f64 * 4.0 / d.max(1) as f64
+        self.sig.0.max(1) as f64 * 4.0 / self.sig.1.max(1) as f64
     }
 
     pub fn x_of(&self, qn: f64) -> f32 {
@@ -387,16 +703,86 @@ impl TabView {
         self.scroll + ((x - self.lay.sx) / self.lay.ppq.max(1e-3)) as f64
     }
 
-    /// La noire visible a droite.
+    /// Les noires visibles.
     pub fn view_qn(&self) -> f64 {
         (self.lay.sw / self.lay.ppq.max(1e-3)) as f64
     }
 
-    /// Une position calee sur la grille.
-    fn snap(&self, qn: f64) -> f64 {
-        let g = self.detect.grid.max(1) as f64;
-        let o = self.take.as_ref().map_or(0.0, |t| t.origin_qn);
-        o + ((qn - o) * g).round() / g
+    pub fn item(&self, t: usize, i: usize) -> Option<&Item> {
+        self.tracks.get(t)?.items.get(i)
+    }
+
+    pub fn item_mut(&mut self, t: usize, i: usize) -> Option<&mut Item> {
+        self.tracks.get_mut(t)?.items.get_mut(i)
+    }
+
+    /// L'item choisi.
+    pub fn sel_item(&self) -> Option<(usize, usize)> {
+        let s = self.sel?;
+        Some((s.t, s.i?))
+    }
+
+    /// La piste choisie (sinon la premiere).
+    pub fn sel_track(&self) -> Option<usize> {
+        self.sel
+            .map(|s| s.t)
+            .filter(|&t| t < self.tracks.len())
+            .or((!self.tracks.is_empty()).then_some(0))
+    }
+
+    /// Choisit (et retient par cles, pour un rafraichissement).
+    pub fn select(&mut self, s: Option<Sel>) {
+        if s != self.sel {
+            self.sel = s;
+            self.digit = None;
+            self.dirty = true;
+        }
+        self.sel_key = s.map(|s| {
+            let tg = self
+                .tracks
+                .get(s.t)
+                .map(|t| t.head.guid.clone())
+                .unwrap_or_default();
+            let it = s.i.and_then(|i| self.item(s.t, i));
+            (
+                tg,
+                it.map(|x| x.guid.clone()),
+                s.n.and_then(|n| it?.doc.get(n)).map(TNote::key),
+            )
+        });
+        // La note choisie reste a l'ecran.
+        if let Some(q) = s
+            .and_then(|s| self.item(s.t, s.i?)?.doc.get(s.n?))
+            .map(|n| n.qn0)
+        {
+            let v = self.view_qn();
+            if v > 0.0 && (q < self.scroll || q > self.scroll + v * 0.9) {
+                self.scroll = q - v * 0.2;
+            }
+        }
+    }
+
+    /// Apres un rafraichissement des pistes par le module : retrouve la
+    /// selection par ses cles.
+    pub fn reselect(&mut self) {
+        let Some((tg, ig, nk)) = self.sel_key.clone() else {
+            self.sel = None;
+            return;
+        };
+        let Some(t) = self.tracks.iter().position(|x| x.head.guid == tg) else {
+            self.sel = None;
+            return;
+        };
+        let i = ig.and_then(|g| self.tracks[t].items.iter().position(|x| x.guid == g));
+        let n = match (i, nk) {
+            (Some(i), Some(k)) => self.tracks[t].items[i]
+                .doc
+                .iter()
+                .position(|x| x.key() == k),
+            _ => None,
+        };
+        self.sel = Some(Sel { t, i, n });
+        self.dirty = true;
     }
 
     /// Le battement : la tete de lecture suit, la page tourne.
@@ -423,185 +809,181 @@ impl TabView {
             .map_or(Hit::None, |b| b.4)
     }
 
-    fn push(&mut self, x: f32, y: f32, w: f32, h: f32, hit: Hit) {
-        self.boxes.push((x, y, w, h, hit));
+    /// Ou est une cible a l'ecran (tests, auto-test).
+    pub fn rect_of(&self, h: Hit) -> Option<(f32, f32, f32, f32)> {
+        self.boxes
+            .iter()
+            .rev()
+            .find(|b| b.4 == h)
+            .map(|b| (b.0, b.1, b.2, b.3))
     }
 
     // -----------------------------------------------------------------------
-    // Les corrections
+    // Les corrections : sur la note choisie de l'item choisi
     // -----------------------------------------------------------------------
 
-    fn edited(&mut self) -> Option<Act> {
-        self.eng_dirty = true;
+    fn edited(&mut self, t: usize, i: usize) -> Option<Act> {
+        if let Some(it) = self.item_mut(t, i) {
+            it.touch();
+        }
         self.dirty = true;
-        Some(Act::Edited)
+        Some(Act::Edited { t, i })
     }
 
-    /// Change la case de la note choisie (meme corde, autre hauteur).
+    fn with_note<R>(
+        &mut self,
+        f: impl FnOnce(&mut Item, usize) -> Option<R>,
+    ) -> Option<(usize, usize, R)> {
+        let s = self.sel?;
+        let (i, n) = (s.i?, s.n?);
+        let r = f(self.item_mut(s.t, i)?, n)?;
+        Some((s.t, i, r))
+    }
+
     pub fn set_fret(&mut self, fret: i32) -> Option<Act> {
-        let t = self.detect.tuning();
-        let i = self.sel?;
-        let n = self.doc.get_mut(i)?;
-        let open = *t.strings.get(n.string)?;
-        if !(0..=t.frets).contains(&fret) {
-            return None;
-        }
-        n.fret = fret;
-        n.pitch = open + fret;
-        n.locked = true;
-        self.edited()
+        let (t, i, _) = self.with_note(|it, n| it.set_fret(n, fret))?;
+        self.edited(t, i)
     }
 
-    /// La meme note sur la corde voisine (`dir` +1 : plus aigue).
     pub fn change_string(&mut self, dir: i32) -> Option<Act> {
-        let t = self.detect.tuning();
-        let i = self.sel?;
-        let n = self.doc.get(i)?;
-        let mut s = n.string as i32 + dir;
-        while s >= 0 && (s as usize) < t.strings.len() {
-            let f = n.pitch - t.strings[s as usize];
-            if (0..=t.frets).contains(&f) {
-                let n = &mut self.doc[i];
-                n.string = s as usize;
-                n.fret = f;
-                n.locked = true;
-                return self.edited();
-            }
-            s += dir;
-        }
-        None
+        let (t, i, _) = self.with_note(|it, n| it.change_string(n, dir))?;
+        self.edited(t, i)
     }
 
     pub fn set_tech(&mut self, tech: Tech) -> Option<Act> {
-        let i = self.sel?;
-        let n = self.doc.get_mut(i)?;
-        n.tech = if n.tech == tech { Tech::Plain } else { tech };
-        n.locked = true;
-        self.edited()
+        let (t, i, _) = self.with_note(|it, n| it.set_tech(n, tech))?;
+        self.edited(t, i)
     }
 
-    pub fn delete_selected(&mut self) -> Option<Act> {
-        let i = self.sel?;
-        if i >= self.doc.len() {
-            return None;
-        }
-        let n = self.doc.remove(i);
-        self.suppressed.insert(n.key());
-        self.sel = if self.doc.is_empty() {
-            None
-        } else {
-            Some(i.min(self.doc.len() - 1))
-        };
-        self.edited()
+    pub fn delete_note(&mut self) -> Option<Act> {
+        let (t, i, next) = self.with_note(|it, n| it.delete_note(n))?;
+        let s = Some(Sel {
+            t,
+            i: Some(i),
+            n: next,
+        });
+        self.select(s);
+        self.edited(t, i)
     }
 
-    /// Une note neuve, tenue, sur une corde, a une position (calee).
-    pub fn add_note(&mut self, qn: f64, string: usize, fret: i32) -> Option<Act> {
-        let t = self.detect.tuning();
-        let open = *t.strings.get(string)?;
-        let q0 = self.snap(qn);
-        let n = TNote {
-            qn0: q0,
-            qn1: q0 + 2.0 / self.detect.grid.max(1) as f64,
-            pitch: open + fret,
-            string,
-            fret,
-            vel: 96,
-            tech: Tech::Plain,
-            locked: true,
-        };
-        let k = n.key();
-        self.doc.push(n);
-        cp_tab::doc::sort(&mut self.doc);
-        self.sel = self.doc.iter().position(|x| x.key() == k);
-        self.edited()
+    pub fn add_note(
+        &mut self,
+        t: usize,
+        i: usize,
+        qn: f64,
+        string: usize,
+        fret: i32,
+    ) -> Option<Act> {
+        let n = self.item_mut(t, i)?.add_note(qn, string, fret)?;
+        self.select(Some(Sel {
+            t,
+            i: Some(i),
+            n: Some(n),
+        }));
+        self.edited(t, i)
     }
 
-    /// Garde une note fantome : elle entre dans la tablature, tenue.
-    pub fn keep_ghost(&mut self, gi: usize) -> Option<Act> {
-        if gi >= self.ghosts.len() {
-            return None;
-        }
-        let mut n = self.ghosts.remove(gi);
-        n.locked = true;
-        let k = n.key();
-        self.suppressed.remove(&k);
-        self.doc.push(n);
-        cp_tab::doc::sort(&mut self.doc);
-        self.sel = self.doc.iter().position(|x| x.key() == k);
-        self.edited()
+    pub fn keep_ghost(&mut self, t: usize, i: usize, g: usize) -> Option<Act> {
+        let n = self.item_mut(t, i)?.keep_ghost(g)?;
+        self.select(Some(Sel {
+            t,
+            i: Some(i),
+            n: Some(n),
+        }));
+        self.edited(t, i)
     }
 
-    /// Garde toutes les notes fantomes du passage choisi (ou toutes).
     pub fn keep_ghosts(&mut self) -> Option<Act> {
+        let (t, i) = self.sel_item()?;
         let r = self.range;
-        let inside = |t: &TNote| r.is_none_or(|(a, b)| t.qn0 >= a && t.qn0 < b);
-        let (keep, rest): (Vec<TNote>, Vec<TNote>) = std::mem::take(&mut self.ghosts)
-            .into_iter()
-            .partition(inside);
-        self.ghosts = rest;
-        if keep.is_empty() {
+        if self.item_mut(t, i)?.keep_ghosts(r) == 0 {
             return None;
         }
-        for mut n in keep {
-            n.locked = true;
-            self.suppressed.remove(&n.key());
-            self.doc.push(n);
-        }
-        cp_tab::doc::sort(&mut self.doc);
-        self.edited()
-    }
-
-    /// Deplace la note choisie de `cells` cases de grille.
-    fn move_note(&mut self, i: usize, qn0: f64) -> bool {
-        let Some(n) = self.doc.get_mut(i) else {
-            return false;
-        };
-        let len = n.qn1 - n.qn0;
-        if (n.qn0 - qn0).abs() < 1e-9 {
-            return false;
-        }
-        n.qn0 = qn0;
-        n.qn1 = qn0 + len;
-        n.locked = true;
-        self.eng_dirty = true;
-        true
+        self.edited(t, i)
     }
 
     // -----------------------------------------------------------------------
     // Les gestes
     // -----------------------------------------------------------------------
 
-    fn select(&mut self, i: Option<usize>) {
-        if i != self.sel {
-            self.sel = i;
-            self.digit = None;
-            self.dirty = true;
-        }
-        if let Some(n) = i.and_then(|i| self.doc.get(i)) {
-            // La note choisie reste a l'ecran.
-            let v = self.view_qn();
-            if n.qn0 < self.scroll || n.qn0 > self.scroll + v * 0.9 {
-                self.scroll = n.qn0 - v * 0.2;
-            }
-        }
-    }
-
-    fn set_slider(&mut self, k: u8, x: f32) -> Option<Act> {
+    fn slider_value(&self, k: u8, x: f32, synth: bool) -> f32 {
         let l = self.lay;
         let x0 = l.panel_x + 120.0 * self.scale;
         let w = (l.w - x0 - 64.0 * self.scale).max(10.0);
-        let t = ((x - x0) / w).clamp(0.0, 1.0);
+        let _ = (k, synth);
+        ((x - x0) / w).clamp(0.0, 1.0)
+    }
+
+    fn set_slider(&mut self, k: u8, x: f32) -> Option<Act> {
+        let tv = self.slider_value(k, x, false);
+        let (t, i) = self.sel_item()?;
+        let range = self.range;
+        let it = self.item_mut(t, i)?;
         // Les seuils de 0,05 a 0,95 au centieme ; la note la plus courte de
         // 20 a 400 ms.
-        let v = ((0.05 + t * 0.9) * 100.0).round() / 100.0;
+        let v = ((0.05 + tv * 0.9) * 100.0).round() / 100.0;
         match k {
-            0 => self.detect.onset = v,
-            1 => self.detect.frame = v,
-            _ => self.detect.min_ms = (20.0 + t as f64 * 380.0).round(),
+            0 => it.detect.onset = v,
+            1 => it.detect.frame = v,
+            _ => it.detect.min_ms = (20.0 + tv as f64 * 380.0).round(),
         }
         self.dirty = true;
-        Some(Act::Detect { range: self.range })
+        Some(Act::Detect { t, i, range })
+    }
+
+    fn set_synth_slider(&mut self, k: u8, x: f32) -> Option<Act> {
+        let tv = self.slider_value(k, x, true);
+        let t = self.sel_track()?;
+        let sy = self.tracks.get_mut(t)?.head.synth.as_mut()?;
+        let v = match k {
+            1 => {
+                sy.tone = (tv * 100.0).round() / 100.0;
+                sy.tone
+            }
+            _ => {
+                sy.sustain = (0.1 + tv * 5.9).clamp(0.1, 6.0);
+                sy.sustain = (sy.sustain * 10.0).round() / 10.0;
+                sy.sustain
+            }
+        };
+        self.dirty = true;
+        Some(Act::Synth { t, p: k, v })
+    }
+
+    /// La position d'un fader vers des dB (-60 a +12, le bord gauche = -inf).
+    pub fn fader_db(t: f32) -> f32 {
+        if t <= 0.005 {
+            -150.0
+        } else {
+            -60.0 + 72.0 * t.clamp(0.0, 1.0).powf(0.75)
+        }
+    }
+
+    pub fn fader_pos(db: f32) -> f32 {
+        if db <= -60.0 {
+            0.0
+        } else {
+            ((db + 60.0) / 72.0).clamp(0.0, 1.0).powf(1.0 / 0.75)
+        }
+    }
+
+    fn set_fader(&mut self, t: usize, tab: bool, x: f32) -> Option<Act> {
+        let (fx, fw) = draw::fader_span(self, t);
+        let db = Arr::fader_db((x - fx) / fw.max(1.0));
+        let db = (db * 10.0).round() / 10.0;
+        let h = &mut self.tracks.get_mut(t)?.head;
+        if tab {
+            h.tab_vol_db = db;
+        } else {
+            h.vol_db = db;
+        }
+        self.dirty = true;
+        Some(Act::Volume { t, tab, db })
+    }
+
+    fn max_vscroll(&self) -> f32 {
+        let l = self.lay;
+        (l.content_h - (l.bottom - l.top - l.ruler_h)).max(0.0)
     }
 
     /// Un evenement de la fenetre ; rend ce que le module doit faire.
@@ -609,31 +991,49 @@ impl TabView {
         match *ev {
             Ev::Move { x, y, .. } => {
                 match self.drag {
-                    Some(Drag::Note { i, qn0, x0, moved }) => {
+                    Some(Drag::Note {
+                        t,
+                        i,
+                        n,
+                        qn0,
+                        x0,
+                        moved,
+                    }) => {
                         if !moved && (x - x0).abs() < 4.0 * self.scale {
                             return None;
                         }
-                        let q = self.snap(qn0 + ((x - x0) / self.lay.ppq.max(1e-3)) as f64);
                         self.drag = Some(Drag::Note {
+                            t,
                             i,
+                            n,
                             qn0,
                             x0,
                             moved: true,
                         });
-                        if self.move_note(i, q) {
-                            self.dirty = true;
+                        let dq = ((x - x0) / self.lay.ppq.max(1e-3)) as f64;
+                        if let Some(it) = self.item_mut(t, i) {
+                            let q = it.snap(qn0 + dq);
+                            if it.move_note(n, q) {
+                                self.dirty = true;
+                            }
                         }
                         return None;
                     }
                     Some(Drag::Range { q0 }) => {
-                        let q = self.snap(self.qn_of(x));
+                        let q = self.snap_any(self.qn_of(x));
                         self.range = Some((q0.min(q), q0.max(q)));
                         self.dirty = true;
                         return None;
                     }
                     Some(Drag::Slider(k)) => return self.set_slider(k, x),
-                    Some(Drag::Overview) => {
-                        self.overview_to(x);
+                    Some(Drag::SynthSlider(k)) => return self.set_synth_slider(k, x),
+                    Some(Drag::Fader { t, tab }) => return self.set_fader(t, tab, x),
+                    Some(Drag::VScroll { y0, v0 }) => {
+                        let l = self.lay;
+                        let view = (l.bottom - l.top - l.ruler_h).max(1.0);
+                        let k = l.content_h / view;
+                        self.vscroll = (v0 + (y - y0) * k).clamp(0.0, self.max_vscroll());
+                        self.dirty = true;
                         return None;
                     }
                     None => {}
@@ -657,11 +1057,21 @@ impl TabView {
                 let d = self.drag.take();
                 self.dirty = true;
                 match d {
-                    Some(Drag::Note { moved: true, i, .. }) => {
-                        let k = self.doc.get(i).map(TNote::key);
-                        cp_tab::doc::sort(&mut self.doc);
-                        self.sel = k.and_then(|k| self.doc.iter().position(|t| t.key() == k));
-                        self.edited()
+                    Some(Drag::Note {
+                        moved: true,
+                        t,
+                        i,
+                        n,
+                        ..
+                    }) => {
+                        let it = self.item_mut(t, i)?;
+                        let n2 = it.resort(n);
+                        self.select(Some(Sel {
+                            t,
+                            i: Some(i),
+                            n: n2,
+                        }));
+                        self.edited(t, i)
                     }
                     Some(Drag::Range { .. }) => {
                         // Un simple clic sur la regle : pas de passage.
@@ -674,20 +1084,28 @@ impl TabView {
                 }
             }
             Ev::Wheel {
-                dy, dx, mods, x, ..
+                dy, dx, mods, x, y, ..
             } => {
+                let in_tracks = y > self.lay.top + self.lay.ruler_h && x < self.lay.panel_x;
                 if mods.ctrl {
                     let q = self.qn_of(x);
                     let k = if dy > 0.0 { 1.25 } else { 0.8 };
-                    self.zoom = (self.zoom * k).clamp(16.0, 400.0);
+                    self.zoom = (self.zoom * k).clamp(12.0, 400.0);
                     self.lay.ppq = self.zoom * self.scale;
                     // La noire sous la souris reste sous la souris.
                     self.scroll = q - ((x - self.lay.sx) / self.lay.ppq) as f64;
-                } else {
+                } else if dx != 0.0 || mods.shift || mods.alt {
                     let d = if dx != 0.0 { dx } else { -dy };
                     self.scroll += d as f64 * self.view_qn() * 0.15;
+                } else if in_tracks && self.max_vscroll() > 0.0 {
+                    self.vscroll =
+                        (self.vscroll - dy * 60.0 * self.scale).clamp(0.0, self.max_vscroll());
+                } else {
+                    self.scroll -= dy as f64 * self.view_qn() * 0.15;
                 }
-                self.follow_off();
+                if self.playing {
+                    self.follow = false;
+                }
                 self.dirty = true;
                 None
             }
@@ -696,115 +1114,226 @@ impl TabView {
         }
     }
 
-    fn follow_off(&mut self) {
-        // Faire defiler a la main pendant la lecture : on cesse de suivre.
-        if self.playing {
-            self.follow = false;
+    /// Une position calee sur la grille de l'item choisi (sinon la double
+    /// croche).
+    fn snap_any(&self, qn: f64) -> f64 {
+        match self.sel_item().and_then(|(t, i)| self.item(t, i)) {
+            Some(it) => it.snap(qn),
+            None => (qn * 4.0).round() / 4.0,
         }
-    }
-
-    fn overview_to(&mut self, x: f32) {
-        let Some(t) = &self.take else { return };
-        let l = self.lay;
-        let span = (t.qn1 - t.origin_qn).max(1.0);
-        let q = t.origin_qn + ((x - l.sx) / l.sw.max(1.0)) as f64 * span;
-        self.scroll = q - self.view_qn() * 0.5;
-        self.dirty = true;
     }
 
     fn down(&mut self, x: f32, y: f32, b: Button, dbl: bool, _mods: Mods) -> Option<Act> {
         let h = self.hit(x, y);
         self.dirty = true;
         if b == Button::Right {
-            if y < self.lay.bar_h {
-                return Some(Act::ViewMenu { x, y });
-            }
-            return None;
+            return match h {
+                Hit::Header(t)
+                | Hit::Arm(t)
+                | Hit::Input(t)
+                | Hit::Monitor(t)
+                | Hit::Mute(t)
+                | Hit::Solo(t)
+                | Hit::Tuning(t) => Some(Act::TrackMenu { t, x, y }),
+                _ if y < self.lay.bar_h => Some(Act::ViewMenu { x, y }),
+                _ => None,
+            };
         }
         if b != Button::Left {
             return None;
         }
         match h {
-            Hit::Note(i) => {
-                self.select(Some(i));
-                let qn0 = self.doc[i].qn0;
+            Hit::Note { t, i, n } => {
+                self.select(Some(Sel {
+                    t,
+                    i: Some(i),
+                    n: Some(n),
+                }));
+                let qn0 = self.item(t, i)?.doc.get(n)?.qn0;
                 self.drag = Some(Drag::Note {
+                    t,
                     i,
+                    n,
                     qn0,
                     x0: x,
                     moved: false,
                 });
                 None
             }
-            Hit::Ghost(gi) => self.keep_ghost(gi),
-            Hit::TabLine(s) => {
+            Hit::Ghost { t, i, g } => self.keep_ghost(t, i, g),
+            Hit::TabLine { t, i, s } => {
                 if dbl {
-                    self.add_note(self.qn_of(x), s, 0)
+                    let q = self.qn_of(x);
+                    self.add_note(t, i, q, s, 0)
                 } else {
-                    self.select(None);
-                    Some(Act::Seek(self.snap(self.qn_of(x))))
+                    self.select(Some(Sel {
+                        t,
+                        i: Some(i),
+                        n: None,
+                    }));
+                    let q = self.item(t, i)?.snap(self.qn_of(x));
+                    Some(Act::Seek(q))
                 }
             }
+            Hit::Item { t, i, lane } => {
+                self.select(Some(Sel {
+                    t,
+                    i: Some(i),
+                    n: None,
+                }));
+                if dbl && lane == Lane::Midi {
+                    return Some(Act::OpenMidi { t, i });
+                }
+                Some(Act::Seek(self.qn_of(x)))
+            }
+            Hit::Lane { t, .. } => {
+                self.select(Some(Sel {
+                    t,
+                    i: None,
+                    n: None,
+                }));
+                Some(Act::Seek(self.qn_of(x)))
+            }
             Hit::Ruler => {
-                let q = self.snap(self.qn_of(x));
+                let q = self.snap_any(self.qn_of(x));
                 self.range = None;
                 self.drag = Some(Drag::Range { q0: q });
                 Some(Act::Seek(q))
             }
-            Hit::Lanes => {
-                self.select(None);
-                Some(Act::Seek(self.qn_of(x)))
-            }
-            Hit::Overview => {
-                self.drag = Some(Drag::Overview);
-                self.overview_to(x);
+            Hit::Header(t) => {
+                self.select(Some(Sel {
+                    t,
+                    i: None,
+                    n: None,
+                }));
                 None
             }
-            Hit::Transcribe | Hit::Retranscribe => Some(Act::Transcribe),
-            Hit::Mode(m) => {
-                self.mode = m;
-                None
+            Hit::Arm(t) => Some(Act::Arm { t }),
+            Hit::Input(t) => Some(Act::InputMenu { t, x, y }),
+            Hit::Monitor(t) => Some(Act::Monitor { t }),
+            Hit::Mute(t) => Some(Act::Mute { t }),
+            Hit::Solo(t) => Some(Act::Solo { t }),
+            Hit::Fader { t, tab } => {
+                if dbl {
+                    let hd = &mut self.tracks.get_mut(t)?.head;
+                    if tab {
+                        hd.tab_vol_db = 0.0;
+                    } else {
+                        hd.vol_db = 0.0;
+                    }
+                    return Some(Act::Volume { t, tab, db: 0.0 });
+                }
+                self.drag = Some(Drag::Fader { t, tab });
+                self.set_fader(t, tab, x)
+            }
+            Hit::SoundPick { t, s } => {
+                let sy = self.tracks.get_mut(t)?.head.synth.as_mut();
+                if let Some(sy) = sy {
+                    sy.sound = s;
+                }
+                Some(Act::Sound { t, s })
+            }
+            Hit::LaneToggle { t, lane } => {
+                let l = &mut self.tracks.get_mut(t)?.head.lanes;
+                l.0[lane as usize] = !l.0[lane as usize];
+                if !l.0.iter().any(|&b| b) {
+                    l.0[lane as usize] = true;
+                    return None;
+                }
+                Some(Act::Lanes { t })
+            }
+            Hit::Tuning(t) => {
+                let hd = &mut self.tracks.get_mut(t)?.head;
+                hd.tuning = (hd.tuning + 1) % TUNINGS.len();
+                let k = hd.tuning;
+                for it in &mut self.tracks[t].items {
+                    it.detect.tuning = k;
+                }
+                Some(Act::Retune { t })
+            }
+            Hit::Listen(l) => {
+                self.listen = l;
+                Some(Act::Listen)
+            }
+            Hit::Split => {
+                self.split = !self.split;
+                Some(Act::Listen)
             }
             Hit::ZoomOut => {
-                self.zoom = (self.zoom * 0.8).clamp(16.0, 400.0);
+                self.zoom = (self.zoom * 0.8).clamp(12.0, 400.0);
                 None
             }
             Hit::ZoomIn => {
-                self.zoom = (self.zoom * 1.25).clamp(16.0, 400.0);
+                self.zoom = (self.zoom * 1.25).clamp(12.0, 400.0);
                 None
             }
             Hit::Follow => {
                 self.follow = !self.follow;
                 None
             }
-            Hit::Export => Some(Act::Export),
+            Hit::AddTrack => Some(Act::AddTrack),
+            Hit::Take(k) => {
+                let (t, i) = self.sel_item()?;
+                Some(Act::SetTake { t, i, k })
+            }
             Hit::Slider(k) => {
                 self.drag = Some(Drag::Slider(k));
                 self.set_slider(k, x)
             }
+            Hit::SynthSlider(k) => {
+                self.drag = Some(Drag::SynthSlider(k));
+                self.set_synth_slider(k, x)
+            }
+            Hit::SynthMono => {
+                let t = self.sel_track()?;
+                let sy = self.tracks.get_mut(t)?.head.synth.as_mut()?;
+                sy.mono = !sy.mono;
+                let v = if sy.mono { 1.0 } else { 0.0 };
+                Some(Act::Synth { t, p: 3, v })
+            }
             Hit::Check(k) => {
+                let (t, i) = self.sel_item()?;
+                let range = self.range;
+                let it = self.item_mut(t, i)?;
                 if k == 0 {
-                    self.detect.legato = !self.detect.legato;
-                    Some(Act::Detect { range: self.range })
+                    it.detect.legato = !it.detect.legato;
+                    Some(Act::Detect { t, i, range })
                 } else {
-                    self.detect.ghosts = !self.detect.ghosts;
-                    Some(Act::Detect { range: None })
+                    it.detect.ghosts = !it.detect.ghosts;
+                    Some(Act::Detect { t, i, range: None })
                 }
             }
             Hit::Grid(g) => {
-                if self.detect.grid != g {
-                    self.detect.grid = g;
-                    self.eng_dirty = true;
-                    Some(Act::Detect { range: None })
+                let (t, i) = self.sel_item()?;
+                let it = self.item_mut(t, i)?;
+                if it.detect.grid != g {
+                    it.detect.grid = g;
+                    it.touch();
+                    Some(Act::Detect { t, i, range: None })
                 } else {
                     None
                 }
             }
-            Hit::Tuning => {
-                self.detect.tuning = (self.detect.tuning + 1) % TUNINGS.len();
-                Some(Act::Retune)
-            }
             Hit::KeepGhosts => self.keep_ghosts(),
+            Hit::Retranscribe => {
+                let (t, i) = self.sel_item()?;
+                Some(Act::Transcribe { t, i })
+            }
+            Hit::DeleteItem => {
+                let (t, i) = self.sel_item()?;
+                Some(Act::DeleteItem { t, i })
+            }
+            Hit::Export => {
+                let (t, i) = self.sel_item()?;
+                Some(Act::Export { t, i })
+            }
+            Hit::VScroll => {
+                self.drag = Some(Drag::VScroll {
+                    y0: y,
+                    v0: self.vscroll,
+                });
+                None
+            }
             Hit::None => {
                 self.select(None);
                 None
@@ -816,32 +1345,50 @@ impl TabView {
         self.dirty = true;
         match k {
             vk::SPACE => Some(Act::Play),
-            0x5A if m.ctrl => Some(Act::Undo), // Ctrl+Z
+            0x5A if m.ctrl => Some(Act::Undo),   // Ctrl+Z
+            0x52 if m.ctrl => Some(Act::Record), // Ctrl+R
+            0x52 => {
+                let t = self.sel_track()?;
+                Some(Act::Arm { t })
+            }
             vk::ESCAPE => {
                 self.select(None);
                 self.range = None;
                 None
             }
             vk::LEFT | vk::RIGHT => {
-                if self.doc.is_empty() {
+                let s = self.sel?;
+                let i = s.i?;
+                let it = self.item(s.t, i)?;
+                if it.doc.is_empty() {
                     return None;
                 }
-                let n = self.doc.len();
-                let i = match (self.sel, k == vk::RIGHT) {
+                let n = it.doc.len();
+                let next = match (s.n, k == vk::RIGHT) {
                     (None, _) => {
-                        // La premiere note visible.
-                        let s = self.scroll;
-                        self.doc.iter().position(|t| t.qn0 >= s).unwrap_or(0)
+                        let sc = self.scroll;
+                        it.doc.iter().position(|t| t.qn0 >= sc).unwrap_or(0)
                     }
-                    (Some(i), true) => (i + 1).min(n - 1),
-                    (Some(i), false) => i.saturating_sub(1),
+                    (Some(j), true) => (j + 1).min(n - 1),
+                    (Some(j), false) => j.saturating_sub(1),
                 };
-                self.select(Some(i));
+                self.select(Some(Sel {
+                    t: s.t,
+                    i: Some(i),
+                    n: Some(next),
+                }));
                 None
             }
             vk::UP => self.change_string(1),
             vk::DOWN => self.change_string(-1),
-            vk::DELETE | vk::BACK => self.delete_selected(),
+            vk::DELETE | vk::BACK => {
+                let s = self.sel?;
+                match (s.i, s.n) {
+                    (Some(_), Some(_)) => self.delete_note(),
+                    (Some(i), None) => Some(Act::DeleteItem { t: s.t, i }),
+                    _ => None,
+                }
+            }
             0x48 if !m.ctrl => self.set_tech(Tech::Hammer), // H
             0x50 if !m.ctrl => self.set_tech(Tech::Pull),   // P
             0x30..=0x39 | 0x60..=0x69 => {
@@ -862,37 +1409,36 @@ impl TabView {
 
     /// Les touches que la fenetre traite (les autres vont a REAPER).
     pub fn wants_key(&self, k: u32, m: Mods) -> bool {
-        matches!(
-            k,
-            vk::SPACE
-                | vk::ESCAPE
-                | vk::LEFT
-                | vk::RIGHT
-                | vk::UP
-                | vk::DOWN
-                | vk::DELETE
-                | vk::BACK
-                | 0x30..=0x39
-                | 0x60..=0x69
-        ) || (matches!(k, 0x48 | 0x50) && !m.ctrl)
-            || (k == 0x5A && m.ctrl)
+        let note = self.sel.is_some_and(|s| s.n.is_some());
+        let item = self.sel.is_some_and(|s| s.i.is_some());
+        match k {
+            vk::SPACE | vk::ESCAPE => true,
+            0x5A | 0x52 if m.ctrl => true,
+            0x52 => !m.ctrl && !m.alt,
+            vk::LEFT | vk::RIGHT => item,
+            vk::UP | vk::DOWN => note,
+            vk::DELETE | vk::BACK => item,
+            0x48 | 0x50 => note && !m.ctrl,
+            0x30..=0x39 | 0x60..=0x69 => note,
+            _ => false,
+        }
     }
 
     /// Ce que dit la ligne d'etat de la note choisie.
     pub fn sel_text(&self) -> Option<String> {
-        let n = self.doc.get(self.sel?)?;
-        let t = self.take.as_ref()?;
+        let s = self.sel?;
+        let it = self.item(s.t, s.i?)?;
+        let n = it.doc.get(s.n?)?;
         let bar_qn = self.bar_qn();
-        let rel = n.qn0 - t.origin_qn;
-        let bar = (rel / bar_qn).floor();
-        let beat = rel - bar * bar_qn;
+        let bar = (n.qn0 / bar_qn).floor();
+        let beat = n.qn0 - bar * bar_qn;
         let names = [
             "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B",
         ];
-        let nstr = self.detect.tuning().strings.len();
+        let nstr = it.detect.tuning().strings.len();
         Some(format!(
             "Bar {} · {:.1} · {}{} · string {}, fret {}{}",
-            t.first_bar + bar as i32,
+            bar as i64 + 1,
             beat + 1.0,
             names[n.pitch.rem_euclid(12) as usize],
             n.pitch.div_euclid(12) - 1,
