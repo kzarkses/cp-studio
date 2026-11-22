@@ -143,6 +143,16 @@ impl IconCache {
             let n = size.max(1) as i32;
             let mut s = Surface::new(n, n);
             let k = n as f32 / 24.0;
+            // Lucide trace en 2 sur 24. En petit, une epaisseur fractionnaire
+            // (1,25 px a 15 px) grise deux pixels : c'etait le flou. On trace
+            // en pixels ENTIERS, les points cales sur la grille ; au-dela de
+            // 32 px, le trace exact est deja net.
+            let (w, grid) = if n <= 32 {
+                let w = (2.0 * k).round().max(1.0);
+                (w, Some(if w as i32 % 2 == 1 { 0.5 } else { 0.0 }))
+            } else {
+                (2.0 * k, None)
+            };
             let mut p = Path::new();
             shapes(
                 icon.svg(),
@@ -150,6 +160,7 @@ impl IconCache {
                     k,
                     ox: 0.0,
                     oy: 0.0,
+                    grid,
                 },
                 &mut p,
             );
@@ -158,9 +169,6 @@ impl IconCache {
                 if filled {
                     cv.fill_path(&p, rgb(255, 255, 255));
                 }
-                // Lucide trace en 2 sur 24 ; jamais moins d'un pixel et demi,
-                // sinon une petite icone devient grise.
-                let w = (2.0 * k).max(1.5);
                 cv.stroke_path(&p, w, rgb(255, 255, 255));
             }
             let mask = s.px.iter().map(|&px| (px >> 24) as u8).collect();
@@ -230,6 +238,30 @@ mod tests {
             let ink: u32 = m.iter().map(|&v| v as u32).sum();
             assert!(ink > 255 * 10, "{i:?} presque vide");
             assert!(ink < 255 * (*n * *n) as u32 / 2, "{i:?} trop pleine");
+        }
+    }
+
+    /// Un trait horizontal cale : des pixels pleins (255), pas deux lignes
+    /// a moitie grises.
+    #[test]
+    fn un_trait_cale_est_net() {
+        let mut c = IconCache::default();
+        for size in [12u16, 15, 16, 18, 20] {
+            let (n, m) = c.mask(Icon::Plus, size, false);
+            let n = *n as usize;
+            // La barre horizontale du plus : la ligne la plus encree.
+            let best = (0..n)
+                .map(|y| m[y * n..(y + 1) * n].iter().map(|&v| v as u32).sum::<u32>())
+                .max()
+                .unwrap();
+            let full = (0..n)
+                .find(|&y| m[y * n..(y + 1) * n].iter().map(|&v| v as u32).sum::<u32>() == best)
+                .map(|y| m[y * n..(y + 1) * n].iter().filter(|&&v| v == 255).count())
+                .unwrap();
+            assert!(
+                full >= n / 2,
+                "{size} px : {full} pixels pleins sur la barre"
+            );
         }
     }
 }

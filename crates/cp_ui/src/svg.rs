@@ -79,14 +79,25 @@ pub struct Xf {
     pub k: f32,
     pub ox: f32,
     pub oy: f32,
+    /// Le calage sur les pixels (l'« hinting » d'une police) : chaque point
+    /// tombe sur la grille `n + grid` (0,5 pour un trait d'epaisseur impaire,
+    /// 0 pour une paire), et le trait couvre des pixels entiers au lieu d'en
+    /// griser deux. `None` : les coordonnees exactes.
+    pub grid: Option<f32>,
 }
 
 impl Xf {
+    fn snap(&self, v: f32) -> f32 {
+        match self.grid {
+            Some(g) => (v - g).round() + g,
+            None => v,
+        }
+    }
     fn x(&self, v: f32) -> f32 {
-        self.ox + v * self.k
+        self.snap(self.ox + v * self.k)
     }
     fn y(&self, v: f32) -> f32 {
-        self.oy + v * self.k
+        self.snap(self.oy + v * self.k)
     }
 }
 
