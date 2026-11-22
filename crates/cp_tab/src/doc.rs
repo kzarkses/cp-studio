@@ -396,3 +396,94 @@ pub fn merge(
     sort(&mut out);
     out
 }
+
+/// La tablature d'une prise, gardee dans un fichier a cote de son analyse
+/// (`<GUID de la prise>.cptab`) : les notes, les notes effacees et les
+/// reglages de detection. Les positions sont RELATIVES au debut de l'item
+/// (`at_qn`) : un item deplace garde sa tablature.
+pub fn tab_to_text(
+    doc: &[TNote],
+    suppressed: &HashSet<(i64, i32)>,
+    detect: &str,
+    at_qn: f64,
+) -> String {
+    let base = (at_qn * 960.0).round() as i64;
+    let mut s = String::from("CPTAB 1\n");
+    s += &format!("detect {detect}\n");
+    for t in doc {
+        s += &format!(
+            "n {:.6} {:.6} {} {} {} {} {} {}\n",
+            t.qn0 - at_qn,
+            t.qn1 - at_qn,
+            t.pitch,
+            t.string,
+            t.fret,
+            t.vel,
+            match t.tech {
+                Tech::Plain => 0,
+                Tech::Hammer => 1,
+                Tech::Pull => 2,
+            },
+            t.locked as u8
+        );
+    }
+    let mut sup: Vec<_> = suppressed.iter().collect();
+    sup.sort();
+    for &(q, p) in sup {
+        s += &format!("s {} {p}\n", q - base);
+    }
+    s
+}
+
+/// Le contraire de [`tab_to_text`] : (notes, effacees, reglages).
+pub type TabFile = (Vec<TNote>, HashSet<(i64, i32)>, String);
+
+pub fn tab_from_text(s: &str, at_qn: f64) -> Option<TabFile> {
+    let mut lines = s.lines();
+    if lines.next()?.trim() != "CPTAB 1" {
+        return None;
+    }
+    let base = (at_qn * 960.0).round() as i64;
+    let mut doc = Vec::new();
+    let mut sup = HashSet::new();
+    let mut detect = String::new();
+    for l in lines {
+        if let Some(d) = l.strip_prefix("detect ") {
+            detect = d.to_string();
+            continue;
+        }
+        let v: Vec<&str> = l.split_whitespace().collect();
+        match v.first() {
+            Some(&"n") if v.len() == 9 => {
+                let f = |i: usize| v[i].parse::<f64>().ok();
+                let (Some(a), Some(b), Some(p), Some(st), Some(fr), Some(ve), Some(te), Some(lo)) =
+                    (f(1), f(2), f(3), f(4), f(5), f(6), f(7), f(8))
+                else {
+                    continue;
+                };
+                doc.push(TNote {
+                    qn0: a + at_qn,
+                    qn1: b + at_qn,
+                    pitch: p as i32,
+                    string: st.max(0.0) as usize,
+                    fret: fr as i32,
+                    vel: ve.clamp(1.0, 127.0) as u8,
+                    tech: match te as i32 {
+                        1 => Tech::Hammer,
+                        2 => Tech::Pull,
+                        _ => Tech::Plain,
+                    },
+                    locked: lo != 0.0,
+                });
+            }
+            Some(&"s") if v.len() == 3 => {
+                if let (Ok(q), Ok(p)) = (v[1].parse::<i64>(), v[2].parse::<i32>()) {
+                    sup.insert((q + base, p));
+                }
+            }
+            _ => {}
+        }
+    }
+    sort(&mut doc);
+    Some((doc, sup, detect))
+}

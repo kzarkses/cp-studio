@@ -489,3 +489,43 @@ fn l_analyse_se_relit_du_cache() {
     // Sans contour, le decodage marche (sans bends).
     let _ = crate::make_notes(&back, &crate::NoteParams::default());
 }
+
+#[test]
+fn la_tab_d_une_prise_suit_son_item() {
+    use crate::doc::{TNote, Tech, tab_from_text, tab_to_text};
+    use std::collections::HashSet;
+    let doc = vec![
+        TNote {
+            qn0: 8.0,
+            qn1: 8.5,
+            pitch: 45,
+            string: 1,
+            fret: 0,
+            vel: 90,
+            tech: Tech::Plain,
+            locked: false,
+        },
+        TNote {
+            qn0: 8.5,
+            qn1: 9.0,
+            pitch: 47,
+            string: 1,
+            fret: 2,
+            vel: 80,
+            tech: Tech::Hammer,
+            locked: true,
+        },
+    ];
+    let mut sup = HashSet::new();
+    sup.insert(((9.25f64 * 960.0).round() as i64, 50));
+    let txt = tab_to_text(&doc, &sup, "0.5 0.3", 8.0);
+    // Relue 4 noires plus loin : tout s'est deplace avec l'item.
+    let (d2, s2, det) = tab_from_text(&txt, 12.0).expect("relue");
+    assert_eq!(det, "0.5 0.3");
+    assert_eq!(d2.len(), 2);
+    assert!((d2[0].qn0 - 12.0).abs() < 1e-6 && (d2[1].qn1 - 13.0).abs() < 1e-6);
+    assert_eq!(d2[1].tech, Tech::Hammer);
+    assert!(d2[1].locked && !d2[0].locked);
+    assert!(s2.contains(&((13.25f64 * 960.0).round() as i64, 50)));
+    assert!(tab_from_text("autre chose", 0.0).is_none());
+}
