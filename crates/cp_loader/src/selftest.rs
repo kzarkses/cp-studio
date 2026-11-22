@@ -152,6 +152,10 @@ enum Phase {
     /// Ce que fait REAPER quand le tempo ou la vitesse change en jouant (la
     /// phase d'une clock externe en depend).
     TempoProbe,
+    /// L'etirement EN TEMPS REEL rendu hors ligne (un second moteur, sans
+    /// crochet) avec le vrai elastique : attaques a leur place, depart date
+    /// a l'heure, hauteur, duree.
+    RtStretch,
     /// La suite se passe hors du moteur audio : insertion, interface.
     Insert,
     OpenUi,
@@ -604,6 +608,151 @@ impl SelfTest {
             }
         }
         done
+    }
+
+    /// L'etirement temps reel, rendu hors ligne par un moteur a part (aucun
+    /// son ne sort) : la voix emprunte le vrai elastique de REAPER.
+    fn rt_stretch_offline(&mut self) {
+        let Some(r) = crate::REAPER.get().copied() else {
+            return;
+        };
+        if r.pitch_shift().is_none() {
+            self.say(
+                false,
+                "etirement temps reel : pas d'etireur dans REAPER".into(),
+            );
+            return;
+        }
+        let sr = 48000.0;
+        let mk = || {
+            let mut h = AudioHost::new(None, sr);
+            h.set_shift_factory(Box::new(move || {
+                Box::new(cp_audio::stretch::RtElastique(
+                    r.pitch_shift().expect("etireur"),
+                )) as Box<dyn cp_engine::shift::RtShift>
+            }));
+            h
+        };
+        // Rend `secs` secondes du port 0 (mono : la gauche).
+        let render = |h: &mut AudioHost, secs: f64| -> Vec<f32> {
+            let mut out = Vec::new();
+            let n = (secs * sr) as usize / 256;
+            for _ in 0..n {
+                let t = h.core().clock_now() as f64 / sr;
+                let mut b = vec![0.0f64; 256 * 2];
+                h.pull(0, t, 2, &mut b);
+                h.core().tick(256);
+                out.extend(b.chunks_exact(2).map(|x| x[0] as f32));
+            }
+            out
+        };
+        // Le centre d'energie de chaque salve attendue (a +-10 ms).
+        let centers = |y: &[f32], want: &[i64]| -> Vec<i64> {
+            want.iter()
+                .map(|&at| {
+                    let (mut m0, mut m1) = (0f64, 0f64);
+                    for j in (at - 480).max(0)..(at + 480).min(y.len() as i64) {
+                        let e = (y[j as usize] as f64).powi(2);
+                        m0 += e;
+                        m1 += e * j as f64;
+                    }
+                    if m0 > 1e-9 {
+                        (m1 / m0).round() as i64 - at
+                    } else {
+                        9999
+                    }
+                })
+                .collect()
+        };
+        let stat = |offs: &[i64]| -> (f64, f64) {
+            let mut abs: Vec<i64> = offs.iter().map(|o| o.abs()).collect();
+            abs.sort_unstable();
+            let med = abs.get(abs.len() / 2).copied().unwrap_or(0) as f64 / 48.0;
+            let worst = abs.last().copied().unwrap_or(0) as f64 / 48.0;
+            (med, worst)
+        };
+        let n = 96000usize;
+        let t0 = Instant::now();
+        // 1. Les salves (une toutes les 0,1 s) a tempo 0,8, lancees tout de
+        // suite, puis un depart DATE dans 0,3 s : chaque salve a sa place
+        // etiree, la premiere comprise (l'amorcage de l'etireur).
+        for (label, delay) in [("tout de suite", 0i64), ("date a +0,3 s", 14400)] {
+            let mut h = mk();
+            let Ok(c) = h.load_samples(clicks(n), 2, sr) else {
+                self.say(false, "etirement temps reel : clip refuse".into());
+                return;
+            };
+            let base = h.core().clock_now();
+            let at = (delay > 0).then_some(base + delay);
+            let Some(v) = h.play_at(0, c, 0, 0, false, 1.0, at) else {
+                self.say(false, "etirement temps reel : voix refusee".into());
+                return;
+            };
+            h.set(v, cp_engine::Param::Tempo, 0.8);
+            let y = render(&mut h, 2.0 / 0.8 + 0.5 + delay as f64 / sr);
+            let want: Vec<i64> = (2400..n)
+                .step_by(4800)
+                .map(|k| delay + (k as f64 / 0.8).round() as i64)
+                .collect();
+            let offs = centers(&y, &want);
+            let (med, worst) = stat(&offs);
+            let first = offs.first().copied().unwrap_or(9999) as f64 / 48.0;
+            // La fin : le dernier echantillon audible.
+            let last = y.iter().rposition(|x| x.abs() > 1e-4).unwrap_or(0) as i64 - delay;
+            let end_want = ((n - 2400 + 240) as f64 / 0.8) as i64;
+            crate::log(
+                cp_abi::LOG_INFO,
+                &format!("[selftest] elastique temps reel {label} : ecarts {offs:?}"),
+            );
+            self.say(
+                med <= 1.0 && worst <= 5.0 && first.abs() <= 5.0,
+                format!(
+                    "elastique temps reel x0,8 {label} : premiere attaque a {first:+.2} ms, les autres a {med:.2} ms en mediane, {worst:.2} ms au pire ; dernier son a {:.1} ms de la fin attendue",
+                    (last - end_want) as f64 / 48.0
+                ),
+            );
+        }
+        // 2. La hauteur : un La a 440 Hz, +4 demi-tons a tempo 1.
+        {
+            let mut h = mk();
+            let la: Vec<f32> = (0..n)
+                .flat_map(|i| {
+                    let x = (std::f64::consts::TAU * 440.0 * i as f64 / sr).sin() as f32 * 0.5;
+                    [x, x]
+                })
+                .collect();
+            if let (Ok(c), true) = (h.load_samples(la, 2, sr), true) {
+                if let Some(v) = h.play(0, c, 0, 0, true, 1.0) {
+                    let ratio = 2f64.powf(4.0 / 12.0);
+                    h.set(v, cp_engine::Param::Shift, ratio);
+                    let y = render(&mut h, 1.5);
+                    let (a0, b0) = (y.len() / 3, y.len() - 1);
+                    let ups: Vec<usize> = (a0 + 1..b0)
+                        .filter(|&k| y[k - 1] < 0.0 && y[k] >= 0.0)
+                        .collect();
+                    let hz = if ups.len() > 2 {
+                        (ups.len() - 1) as f64 * sr / (ups[ups.len() - 1] - ups[0]) as f64
+                    } else {
+                        0.0
+                    };
+                    let want_hz = 440.0 * ratio;
+                    let peak = y[a0..].iter().fold(0f32, |m, x| m.max(x.abs()));
+                    self.say(
+                        (hz / want_hz - 1.0).abs() < 0.005 && peak > 0.3,
+                        format!(
+                            "elastique temps reel +4 demi-tons : {hz:.1} Hz (attendu {want_hz:.1}), crete {peak:.2}"
+                        ),
+                    );
+                }
+            }
+        }
+        crate::log(
+            cp_abi::LOG_INFO,
+            &format!(
+                "[selftest] etirement temps reel hors ligne en {:.0} ms",
+                t0.elapsed().as_secs_f64() * 1000.0
+            ),
+        );
     }
 
     /// La sonde : REAPER joue (master muet) ; la vitesse passe a 1,01, puis
@@ -1094,8 +1243,12 @@ impl SelfTest {
             }
             Phase::TempoProbe => {
                 if self.tempo_probe() {
-                    self.phase = Phase::Insert;
+                    self.phase = Phase::RtStretch;
                 }
+            }
+            Phase::RtStretch => {
+                self.rt_stretch_offline();
+                self.phase = Phase::Insert;
             }
             Phase::Insert
             | Phase::OpenUi
@@ -1808,6 +1961,7 @@ impl SelfTest {
                 | Phase::Record
                 | Phase::Stream
                 | Phase::TempoProbe
+                | Phase::RtStretch
         )
     }
 

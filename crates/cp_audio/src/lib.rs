@@ -1151,6 +1151,22 @@ impl AudioHost {
         looped: bool,
         gain: f64,
     ) -> Option<VoiceH> {
+        self.play_at(port, h, start, end, looped, gain, None)
+    }
+
+    /// [`Self::play`], au temps du moteur `at` (une frame absolue ; `None` :
+    /// tout de suite) : un lancement quantifie, a l'echantillon.
+    #[allow(clippy::too_many_arguments)]
+    pub fn play_at(
+        &mut self,
+        port: usize,
+        h: ClipH,
+        start: i64,
+        end: i64,
+        looped: bool,
+        gain: f64,
+        when: Option<i64>,
+    ) -> Option<VoiceH> {
         let clip = self.clip(h)?.0.clone();
         if !self.ensure_port(port) {
             return None;
@@ -1158,7 +1174,7 @@ impl AudioHost {
         // Un clip en flux : sa page de depart est demandee tout de suite ;
         // si elle n'est pas la, le depart attend 50 ms (une page se lit en
         // quelques millisecondes) plutot que de commencer dans le silence.
-        let mut at = At::Now;
+        let mut at = when.map_or(At::Now, At::Frame);
         let clip_pages = clip.paged().cloned();
         if let Some(p) = clip.paged() {
             let s = start.max(0);
@@ -1168,7 +1184,8 @@ impl AudioHost {
                     st.wake();
                 }
                 let core = self.ctl.core();
-                at = At::Frame(core.clock_now() + (0.05 * core.srate().max(1.0)) as i64);
+                let soon = core.clock_now() + (0.05 * core.srate().max(1.0)) as i64;
+                at = At::Frame(when.map_or(soon, |w| w.max(soon)));
             }
         }
         let v = self.ctl.voice_alloc(port)?;
