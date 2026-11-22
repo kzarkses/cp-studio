@@ -16,7 +16,6 @@ use cp_abi::{
 use cp_editview::cp_roll::{NAMES, Roll, SCALES, Scale};
 use cp_editview::keys::{self, Bind, KeyMap};
 use cp_editview::{Act, Audio, Clip, Colors, Ed, GRIDS, Hit, Midi, Rows};
-use cp_gfx::{Canvas, Surface};
 use cp_sys::audio::Audition;
 use cp_sys::items::{EdNote, ItemInfo};
 use cp_sys::module::key_event;
@@ -35,12 +34,10 @@ const IDENT: &str = "cp_studio_editor";
 pub(crate) struct EWin {
     pub hwnd: Hwnd,
     pub place: Place,
-    surf: Surface,
-    present: Vec<u32>,
+    frame: crate::frame::Frame,
     theme: Theme,
     theme_key: Vec<Option<(u8, u8, u8)>>,
     tracking: bool,
-    frames_on: bool,
     closing: bool,
     tip: Option<ui::Tooltip>,
     hover: (Hit, Instant),
@@ -57,6 +54,8 @@ pub(crate) struct EPart {
     info: Option<ItemInfo>,
     last_sel: Option<String>,
     since_sync: u32,
+    /// Le compteur de changements du projet a la derniere relecture.
+    state_seen: i32,
     aud: Option<Audition>,
     /// Une note entendue d'un coup (pas tenue) s'arrete a cette heure.
     aud_off: Option<Instant>,
@@ -100,6 +99,7 @@ impl EPart {
             info: None,
             last_sel: None,
             since_sync: 1000,
+            state_seen: i32::MIN,
             aud: None,
             aud_off: None,
             pending: None,
@@ -273,7 +273,27 @@ impl App {
             })
             .collect();
         let g = m.item.clone();
+        // Les notes appartiennent a leur item (sa propre timeline) : s'il a
+        // bouge dans REAPER depuis la lecture, elles bougent avec lui.
+        let moved = r
+            .item_info(&g)
+            .map(|i| r.time_to_qn(i.pos) - m.qn0)
+            .filter(|d| d.abs() > 1e-9);
+        let notes: Vec<EdNote> = match moved {
+            Some(d) => notes
+                .into_iter()
+                .map(|n| EdNote {
+                    qn0: n.qn0 + d,
+                    qn1: n.qn1 + d,
+                    ..n
+                })
+                .collect(),
+            None => notes,
+        };
         if r.set_ed_notes(&g, &notes, label) {
+            if moved.is_some() {
+                self.ed.pending = Some(g.clone());
+            }
             self.ed.hash = r.midi_hash(&g);
         } else {
             self.ed.ed.status = "The item is gone".into();
@@ -515,9 +535,10 @@ impl App {
         let ps = r.play_state();
         let playing = ps & (play::PLAYING | play::RECORDING) != 0;
         self.ed.since_sync += 1;
-        if self.ed.since_sync >= 10 && !self.ed.ed.busy() {
-            self.ed.since_sync = 0;
-            // La selection de REAPER : l'item choisi s'ouvre ici.
+        // La selection de REAPER, a chaque battement (un clic dans
+        // l'arrangement s'ouvre ici tout de suite ; c'etait un tiers de
+        // seconde).
+        if !self.ed.ed.busy() {
             let sel = r.selected_item_guid();
             if sel != self.ed.last_sel {
                 self.ed.last_sel = sel.clone();
@@ -527,7 +548,35 @@ impl App {
                     }
                 }
             }
-            // L'item ouvert, modifie ailleurs (ou efface).
+        }
+        // L'item ouvert, modifie ailleurs (deplace, rogne, ses notes, efface) :
+        // des que le compteur du projet bouge.
+        let sc = r.state_count();
+        if sc != self.ed.state_seen && !self.ed.ed.busy() {
+            self.ed.state_seen = sc;
+            if let Some(g) = self.ed.ed.item().map(str::to_string) {
+                match r.item_info(&g) {
+                    None => self.ed.ed.close(),
+                    Some(info) => {
+                        // Une note bouge avec son item : la place de l'item
+                        // compte autant que ses notes.
+                        let changed = match &self.ed.ed.clip {
+                            Clip::Midi(_) => {
+                                r.midi_hash(&g) != self.ed.hash
+                                    || self.ed.info.as_ref() != Some(&info)
+                            }
+                            _ => self.ed.info.as_ref() != Some(&info),
+                        };
+                        if changed {
+                            self.ed_load(&g, false);
+                        }
+                    }
+                }
+            }
+        }
+        if self.ed.since_sync >= 10 && !self.ed.ed.busy() {
+            self.ed.since_sync = 0;
+            // L'item ouvert, modifie ailleurs (ou efface) : le filet.
             if let Some(g) = self.ed.ed.item().map(str::to_string) {
                 match r.item_info(&g) {
                     None => self.ed.ed.close(),
@@ -541,10 +590,6 @@ impl App {
                         }
                     }
                 }
-            }
-            if !playing {
-                let q = r.time_to_qn(r.cursor_position());
-                self.ed.ed.set_playhead(Some(q), false);
             }
             // Le theme de REAPER.
             let key: Vec<_> = LOOK.iter().map(|k| r.theme_color(k)).collect();
@@ -598,6 +643,12 @@ impl App {
                 .unwrap_or_else(|| vec![(0.0, 0.0); cols]);
             self.ed.ed.set_peaks(q0, q1, pk);
         }
+        // Le curseur d'edition (montre aussi pendant la lecture) et la tete.
+        let cur = r.time_to_qn(r.cursor_position());
+        self.ed.ed.edit_cursor = Some(cur);
+        if !playing {
+            self.ed.ed.set_playhead(Some(cur), false);
+        }
         self.ed_tip();
         let shown = self.ed.win.as_ref().is_some_and(|w| ui::is_shown(w.hwnd));
         if !shown {
@@ -605,8 +656,9 @@ impl App {
         }
         if playing {
             self.ed_want_frames(true);
-        } else if self.ed.ed.take_dirty() {
-            self.ed.ed.mark();
+        } else if !self.ed.win.as_ref().is_some_and(|w| w.frame.frames_on) {
+            // Horloge arretee : ce qui a change part d'ici ; rien de neuf ne
+            // coute rien.
             self.ed_render(false);
         }
     }
@@ -715,12 +767,10 @@ impl App {
         self.ed.win = Some(EWin {
             hwnd,
             place: self.ed.place,
-            surf: Surface::default(),
-            present: Vec::new(),
+            frame: crate::frame::Frame::default(),
             theme: Theme::reaper(scale, &|k| r.theme_color(k)),
             theme_key: LOOK.iter().map(|k| r.theme_color(k)).collect(),
             tracking: false,
-            frames_on: false,
             closing: false,
             tip: None,
             hover: (Hit::None, Instant::now()),
@@ -818,11 +868,24 @@ impl App {
 
     fn ed_want_frames(&mut self, on: bool) {
         if let Some(w) = &mut self.ed.win {
-            if w.frames_on != on {
-                w.frames_on = on;
+            if on {
+                w.frame.wake();
+            }
+            if w.frame.frames_on != on {
+                w.frame.frames_on = on;
                 self.host.frames(w.hwnd, on);
             }
         }
+    }
+
+    /// Un geste vient de changer la vue : au repos, l'image part tout de
+    /// suite et l'horloge demarre ; sinon la prochaine image la prend.
+    fn ed_kick(&mut self) {
+        let on = self.ed.win.as_ref().is_some_and(|w| w.frame.frames_on);
+        if !on {
+            self.ed_render(false);
+        }
+        self.ed_want_frames(true);
     }
 
     pub(crate) fn ed_render(&mut self, force: bool) {
@@ -841,31 +904,19 @@ impl App {
         if (scale - w.theme.scale).abs() > 0.01 {
             let r = self.r;
             w.theme = Theme::reaper(scale, &|k| r.theme_color(k));
+            self.ed.ed.mark();
         }
-        let resized = w.surf.resize(cw, ch);
-        let dirty = self.ed.ed.take_dirty();
-        if !(dirty || force || resized) {
-            return;
+        if w.frame.resize(cw, ch) || force {
+            self.ed.ed.mark();
         }
-        {
-            let mut cv = Canvas::new(&mut w.surf, &mut self.scratch);
-            self.ed.ed.draw(
-                &mut cv,
-                &mut self.text,
-                &mut self.icons,
-                &w.theme,
-                cw as f32,
-                ch as f32,
-            );
-        }
-        ui::present(
-            w.hwnd,
-            &w.surf.px,
-            cw,
-            ch,
-            &[(0, 0, cw, ch)],
-            &mut w.present,
-        );
+        let damage = self.ed.ed.take_damage();
+        let ed = &mut self.ed.ed;
+        let (text, icons, th) = (&mut self.text, &mut self.icons, &w.theme);
+        w.frame.paint(&damage, &mut self.scratch, |cv| {
+            ed.draw(cv, text, icons, th, cw as f32, ch as f32);
+        });
+        let strokes = self.ed.ed.strokes(&w.theme);
+        w.frame.show(w.hwnd, &damage, &strokes);
     }
 
     /// Les raccourcis de l'editeur MIDI de REAPER : les defauts de REAPER et
@@ -974,7 +1025,7 @@ impl App {
     fn ed_feed(&mut self, ev: Ev) {
         let acts = self.ed.ed.event(&ev);
         self.ed_act(acts);
-        self.ed_render(false);
+        self.ed_kick();
     }
 
     /// Les messages de la fenetre.
@@ -996,11 +1047,10 @@ impl App {
                     r.cursor_position()
                 };
                 self.ed.ed.set_playhead(Some(r.time_to_qn(pos)), playing);
-                if playing {
-                    self.ed.ed.mark();
-                }
+                self.ed.ed.edit_cursor = Some(r.time_to_qn(r.cursor_position()));
                 self.ed_render(false);
-                if !playing {
+                let idle = self.ed.win.as_ref().is_none_or(|w| w.frame.idle());
+                if !playing && idle && !self.ed.ed.dragging() {
                     self.ed_want_frames(false);
                 }
                 Some(0)
@@ -1031,13 +1081,9 @@ impl App {
             }
             msg::PAINT => {
                 drop(win::Paint::begin(hwnd));
-                if let Some(w) = &mut self.ed.win {
-                    let (cw, ch) = (w.surf.w, w.surf.h);
-                    if cw > 0 && ch > 0 {
-                        ui::present(hwnd, &w.surf.px, cw, ch, &[(0, 0, cw, ch)], &mut w.present);
-                    } else {
-                        self.ed_render(true);
-                    }
+                let shown = self.ed.win.as_mut().is_some_and(|w| w.frame.repaint(hwnd));
+                if !shown {
+                    self.ed_render(true);
                 }
                 Some(0)
             }
