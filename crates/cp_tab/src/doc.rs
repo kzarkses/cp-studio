@@ -54,6 +54,9 @@ pub struct TNote {
     pub bend: Vec<(f64, f32)>,
 }
 
+/// Une courbe de hauteur : (noires depuis le debut de la note, demi-tons).
+pub type Curve = Vec<(f64, f32)>;
+
 /// Le bend d'une note, pour l'ecrire : de combien (demi-tons, au demi
 /// pres), quand il atteint sa hauteur, et quand il est relache.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -71,6 +74,65 @@ impl TNote {
             Some(&(t, v)) if t < 1e-6 && v.abs() >= 0.75 => v.round().clamp(-24.0, 24.0) as i8,
             _ => 0,
         }
+    }
+
+    /// Les deux parties de la courbe : la glisse d'approche (jusqu'a son
+    /// arrivee comprise) et le reste (le bend).
+    fn curve_parts(&self) -> (Curve, Curve) {
+        if self.slide_in() == 0 {
+            return (Vec::new(), self.bend.clone());
+        }
+        match self.bend.iter().position(|p| p.0 > 1e-9 && p.1.abs() < 0.3) {
+            Some(k) => (self.bend[..=k].to_vec(), self.bend[k + 1..].to_vec()),
+            None => (self.bend.clone(), Vec::new()),
+        }
+    }
+
+    fn set_curve(&mut self, head: Vec<(f64, f32)>, rest: Vec<(f64, f32)>) {
+        let from = head.last().map_or(-1.0, |p| p.0);
+        let mut v = head;
+        v.extend(rest.into_iter().filter(|p| p.0 > from + 1e-9));
+        if v.iter().all(|p| p.1.abs() < 0.05) {
+            v.clear();
+        }
+        self.bend = v;
+    }
+
+    /// Pose une glisse d'approche de `k` demi-tons (negatif : d'en dessous ;
+    /// 0 : aucune). Le bend reste.
+    pub fn set_slide_in(&mut self, k: i8) {
+        let (_, rest) = self.curve_parts();
+        let len = (self.qn1 - self.qn0).max(1e-3);
+        let head = if k == 0 {
+            Vec::new()
+        } else {
+            vec![(0.0, k as f32), (SLIDE_QN.min(len * 0.3), 0.0)]
+        };
+        self.set_curve(head, rest);
+    }
+
+    /// Pose un bend de `semis` demi-tons (`None` : aucun), relache ou non :
+    /// il monte sur le premier quart de la note, et redescend apres le
+    /// milieu. La glisse d'approche reste.
+    pub fn set_bend(&mut self, semis: Option<f32>, release: bool) {
+        let (head, _) = self.curve_parts();
+        let len = (self.qn1 - self.qn0).max(1e-3);
+        let t0 = head.last().map_or(0.0, |p| p.0);
+        let span = (len - t0).max(1e-3);
+        let up = (span * 0.25).min(0.5);
+        let rest = match semis {
+            None => Vec::new(),
+            Some(a) => {
+                let mut v = vec![(t0, 0.0), (t0 + up, a)];
+                if release {
+                    let r0 = t0 + span * 0.6;
+                    v.push((r0, a));
+                    v.push(((r0 + up).min(t0 + span * 0.95), 0.0));
+                }
+                v
+            }
+        };
+        self.set_curve(head, rest);
     }
 
     /// Le bend, s'il y en a un (apres la glisse d'approche).

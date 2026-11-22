@@ -80,6 +80,27 @@ impl Item {
         None
     }
 
+    /// Passe une note sur une autre corde, a la meme hauteur (si elle s'y
+    /// joue). Vrai si elle a change.
+    pub fn set_string(&mut self, n: usize, s: usize) -> bool {
+        let t = self.detect.tuning();
+        let Some(note) = self.doc.get_mut(n) else {
+            return false;
+        };
+        let Some(&open) = t.strings.get(s) else {
+            return false;
+        };
+        let f = note.pitch - open;
+        if note.string == s || !(0..=t.frets).contains(&f) {
+            return false;
+        }
+        note.string = s;
+        note.fret = f;
+        note.locked = true;
+        self.eng_ok = false;
+        true
+    }
+
     pub fn set_tech(&mut self, n: usize, tech: Tech) -> Option<()> {
         let note = self.doc.get_mut(n)?;
         note.tech = if note.tech == tech { Tech::Plain } else { tech };

@@ -141,6 +141,170 @@ fn arc(cv: &mut Canvas<'_>, x0: f32, y0: f32, x1: f32, y1: f32, bulge: f32, w: f
     cv.stroke_path(&p, w, c);
 }
 
+impl Arr {
+    /// La palette d'une note : ses marques en icones, groupees, celle de la
+    /// note allumee ; une marque qui ne se pose pas est eteinte.
+    fn draw_palette(
+        &self,
+        cv: &mut Canvas<'_>,
+        text: &mut TextCache,
+        th: &Theme,
+        bx: &mut Vec<HBox>,
+        p: crate::Palette,
+    ) {
+        use crate::Mark;
+        let s = |v: f32| th.s(v);
+        let z = s(26.0).round();
+        let wide = |m: Mark| m.semis().is_some();
+        let gap = s(7.0);
+        let pad = s(4.0);
+        let mut w = pad * 2.0;
+        let mut last_g = None;
+        for m in Mark::ALL {
+            if last_g.is_some_and(|g| g != m.group()) {
+                w += gap;
+            }
+            last_g = Some(m.group());
+            w += if wide(m) { (z * 1.35).round() } else { z };
+        }
+        let h = z + pad * 2.0;
+        let l = self.lay;
+        let x = (p.x + s(6.0)).min(l.w - w - s(4.0)).max(0.0).round();
+        let y = if p.y + s(14.0) + h < l.bottom {
+            p.y + s(14.0)
+        } else {
+            (p.y - s(14.0) - h).max(l.top)
+        }
+        .round();
+        cv.fill_rect(x - 1.0, y - 1.0, w + 2.0, h + 2.0, th.seam);
+        cv.fill_rect(x, y, w, h, th.panel);
+        // La note d'avant : monte-t-on vers celle-ci (« H ») ?
+        let rising = self
+            .prev_on_string(p.t, p.i, p.n)
+            .and_then(|j| {
+                let it = self.item(p.t, p.i)?;
+                Some(it.doc.get(p.n)?.pitch > it.doc.get(j)?.pitch)
+            })
+            .unwrap_or(true);
+        let mut bxx = x + pad;
+        let mut last_g = None;
+        for m in Mark::ALL {
+            if last_g.is_some_and(|g| g != m.group()) {
+                cv.fill_rect((bxx + gap * 0.5 - 0.5).round(), y + pad, 1.0, z, th.seam);
+                bxx += gap;
+            }
+            last_g = Some(m.group());
+            let bw = if wide(m) { (z * 1.35).round() } else { z };
+            let on = self.mark_on(p.t, p.i, p.n, m);
+            let ok = self.mark_ok(p.t, p.i, p.n, m);
+            let hov = self.hover == Hit::Mark(m);
+            if on {
+                cv.fill_round_rect(bxx, y + pad, bw, z, s(3.0), th.accent.with_alpha(70));
+            } else if hov && ok {
+                cv.fill_round_rect(bxx, y + pad, bw, z, s(3.0), th.hover);
+            }
+            let c = if !ok {
+                th.text_faint
+            } else if on || hov {
+                th.text
+            } else {
+                th.text_dim
+            };
+            mark_icon(cv, text, th, m, bxx, y + pad, bw, z, c, rising);
+            if ok {
+                push(bx, (x, y, w, h), bxx, y + pad, bw, z, Hit::Mark(m));
+            }
+            bxx += bw;
+        }
+    }
+}
+
+/// L'icone d'une marque, dessinee comme sur la tablature.
+fn mark_icon(
+    cv: &mut Canvas<'_>,
+    text: &mut TextCache,
+    th: &Theme,
+    m: crate::Mark,
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
+    c: Color,
+    rising: bool,
+) {
+    use crate::Mark;
+    let s = |v: f32| th.s(v);
+    let (cx, cy) = (x + w * 0.5, y + h * 0.5);
+    let lw = s(1.3);
+    let dot = |cv: &mut Canvas<'_>, px: f32, py: f32| cv.fill_circle(px, py, s(2.4), c);
+    let fl = Font::new(0, s(9.0) as u16, 700);
+    match m {
+        Mark::Plain => {
+            let r = s(5.0);
+            cv.line(cx - r, cy - r, cx + r, cy + r, lw, c);
+            cv.line(cx - r, cy + r, cx + r, cy - r, lw, c);
+        }
+        Mark::Legato => {
+            dot(cv, cx - s(6.0), cy + s(4.0));
+            dot(cv, cx + s(6.0), cy + s(4.0));
+            arc(cv, cx - s(6.0), cy, cx + s(6.0), cy, -s(3.5), lw, c);
+            let lab = if rising { "H" } else { "P" };
+            text.draw_in(
+                cv,
+                fl,
+                cx - s(6.0),
+                y + s(1.0),
+                s(12.0),
+                s(9.0),
+                lab,
+                c,
+                Align::Center,
+            );
+        }
+        Mark::Slide => {
+            let d = if rising { s(4.0) } else { -s(4.0) };
+            dot(cv, cx - s(7.0), cy + d);
+            dot(cv, cx + s(7.0), cy - d);
+            cv.line(cx - s(4.0), cy + d * 0.7, cx + s(4.0), cy - d * 0.7, lw, c);
+        }
+        Mark::InBelow | Mark::InAbove => {
+            let d = if m == Mark::InBelow { s(5.0) } else { -s(5.0) };
+            dot(cv, cx + s(5.0), cy);
+            cv.line(cx - s(7.0), cy + d, cx + s(1.5), cy, lw, c);
+        }
+        Mark::Release => {
+            let (x0, x1, top, bot) = (cx - s(7.0), cx + s(7.0), cy - s(6.0), cy + s(6.0));
+            let mut p = Path::new();
+            p.move_to(x0, bot)
+                .quad_to(x0, top, cx, top)
+                .quad_to(x1, top, x1, bot - s(3.0));
+            cv.stroke_path(&p, lw, c);
+            arrow_head(cv, x1, bot, s(3.5), false, c);
+        }
+        _ => {
+            // Un bend : la fleche qui monte, et sa valeur.
+            let (x0, x1) = (x + s(5.0), x + s(13.0));
+            let (top, bot) = (cy - s(6.5), cy + s(6.5));
+            let mut p = Path::new();
+            p.move_to(x0, bot).quad_to(x1, bot, x1, top + s(3.0));
+            cv.stroke_path(&p, lw, c);
+            arrow_head(cv, x1, top, s(3.5), true, c);
+            let lab = crate::bend_label(m.semis().unwrap_or(2.0));
+            text.draw_in(
+                cv,
+                fl,
+                x1 + s(1.0),
+                y,
+                x + w - x1 - s(2.0),
+                h,
+                &lab,
+                c,
+                Align::Center,
+            );
+        }
+    }
+}
+
 /// Une pointe de fleche pleine, sa pointe en (x, y), vers le haut ou le bas.
 fn arrow_head(cv: &mut Canvas<'_>, x: f32, y: f32, h: f32, up: bool, c: Color) {
     let d = if up { h } else { -h };
@@ -313,6 +477,10 @@ impl Arr {
         if l.panel_w > 0.0 {
             cv.fill_rect(l.panel_x - 1.0, l.top, 1.0, l.bottom - l.top, th.seam);
             self.draw_panel(cv, text, icons, th, &mut bx);
+        }
+        // La palette d'une note, par-dessus tout.
+        if let Some(p) = self.palette {
+            self.draw_palette(cv, text, th, &mut bx, p);
         }
         self.boxes = bx;
     }

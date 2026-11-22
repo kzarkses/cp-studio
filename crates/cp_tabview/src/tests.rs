@@ -1569,3 +1569,149 @@ fn bends_et_glisses_se_dessinent() {
     assert_eq!(crate::bend_label(3.0), "1\u{00bd}");
     assert_eq!(crate::bend_label(0.5), "\u{00bc}");
 }
+
+/// Le clic droit sur une note ouvre sa palette : un bend, son relachement,
+/// une glisse depuis la note d'avant, une approche s'y posent en un clic ;
+/// Echap la ferme. Alt + clic efface une note ; une note glissee
+/// verticalement dans la tablature change de corde.
+#[test]
+fn la_palette_d_une_note_et_ses_gestes() {
+    use cp_tab::doc::{TNote, Tech};
+    let mut b = Bench::new(1600, 900);
+    let mut v = arranger();
+    v.rec.clear();
+    let q0 = v.tracks[0].items[0].qn0;
+    let note = |q: f64, string: usize, fret: i32| {
+        let open = [40, 45, 50, 55, 59, 64][string];
+        TNote {
+            qn0: q0 + q,
+            qn1: q0 + q + 1.0,
+            pitch: open + fret,
+            string,
+            fret,
+            vel: 96,
+            ..Default::default()
+        }
+    };
+    let d = vec![note(0.0, 3, 5), note(1.0, 3, 7), note(3.0, 4, 3)];
+    v.tracks[0].items[0].set_doc(d);
+    v.tracks[0].items[0].ghosts.clear();
+    b.draw(&mut v);
+    // La case d'une note dans la tablature (la plus basse de ses cibles).
+    let tab_box = |v: &Arr, n: usize| {
+        v.boxes
+            .iter()
+            .filter(|x| x.4 == Hit::Note { t: 0, i: 0, n })
+            .max_by(|a, b| a.1.partial_cmp(&b.1).unwrap())
+            .map(|x| (x.0 + x.2 * 0.5, x.1 + x.3 * 0.5))
+            .expect("la note dans la tab")
+    };
+    let none = Mods::default();
+    let click = |v: &mut Arr, (x, y): (f32, f32), b: Button, mods: Mods| {
+        let a = v.event(&Ev::Down {
+            x,
+            y,
+            b,
+            dbl: false,
+            mods,
+        });
+        let u = v.event(&Ev::Up { x, y, b, mods });
+        a.or(u)
+    };
+    let pick = |v: &mut Arr, b: &mut Bench, n: usize, m: Mark| {
+        let p = tab_box(v, n);
+        click(v, p, Button::Right, Mods::default());
+        assert!(v.palette.is_some(), "la palette ne s'ouvre pas");
+        b.draw(v);
+        let r = v.rect_of(Hit::Mark(m)).expect("la marque");
+        let a = click(
+            v,
+            (r.0 + r.2 * 0.5, r.1 + r.3 * 0.5),
+            Button::Left,
+            Mods::default(),
+        );
+        assert!(v.palette.is_none());
+        b.draw(v);
+        a
+    };
+    assert_eq!(
+        pick(&mut v, &mut b, 1, Mark::Full),
+        Some(Act::Edited { t: 0, i: 0 })
+    );
+    let n1 = || 1usize;
+    assert_eq!(
+        v.tracks[0].items[0].doc[n1()].bend_mark().map(|x| x.amount),
+        Some(2.0)
+    );
+    pick(&mut v, &mut b, 1, Mark::Release);
+    assert!(
+        v.tracks[0].items[0].doc[1]
+            .bend_mark()
+            .unwrap()
+            .release
+            .is_some()
+    );
+    pick(&mut v, &mut b, 1, Mark::Slide);
+    assert_eq!(v.tracks[0].items[0].doc[1].tech, Tech::Slide);
+    pick(&mut v, &mut b, 1, Mark::InBelow);
+    let nb = &v.tracks[0].items[0].doc[1];
+    assert_eq!(nb.slide_in(), -3);
+    assert!(nb.bend_mark().is_some(), "le bend reste : {:?}", nb.bend);
+    // L'approche se pince : la glisse depuis la note d'avant tombe.
+    assert_eq!(nb.tech, Tech::Plain);
+    assert!(nb.locked);
+    // La palette, dessinee (planche), puis Echap la ferme.
+    let p1 = tab_box(&v, 1);
+    click(&mut v, p1, Button::Right, none);
+    b.shot(&mut v, "12_palette");
+    v.event(&Ev::Key {
+        vk: vk::ESCAPE,
+        mods: none,
+        text: None,
+    });
+    assert!(v.palette.is_none());
+    // La note d'apres (si sur la corde de Si, case 3) glissee sur la corde de
+    // Sol : case 7, meme hauteur.
+    b.draw(&mut v);
+    let (x, y) = tab_box(&v, 2);
+    let gy = v
+        .boxes
+        .iter()
+        .find(|x| x.4 == Hit::TabLine { t: 0, i: 0, s: 3 })
+        .map(|x| x.1 + x.3 * 0.5)
+        .expect("la corde de sol");
+    v.event(&Ev::Down {
+        x,
+        y,
+        b: Button::Left,
+        dbl: false,
+        mods: none,
+    });
+    v.event(&Ev::Move {
+        x,
+        y: gy,
+        mods: none,
+    });
+    v.event(&Ev::Up {
+        x,
+        y: gy,
+        b: Button::Left,
+        mods: none,
+    });
+    let c = &v.tracks[0].items[0].doc[2];
+    assert_eq!((c.string, c.fret, c.pitch), (3, 7, 62));
+    // Alt + clic : la premiere note s'efface.
+    b.draw(&mut v);
+    let p = tab_box(&v, 0);
+    let a = click(
+        &mut v,
+        p,
+        Button::Left,
+        Mods {
+            alt: true,
+            ..Mods::default()
+        },
+    );
+    assert_eq!(a, Some(Act::Edited { t: 0, i: 0 }));
+    assert_eq!(v.tracks[0].items[0].doc.len(), 2);
+}

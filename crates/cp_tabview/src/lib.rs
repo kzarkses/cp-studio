@@ -38,7 +38,9 @@ Wheel  scroll   \u{00b7}   Alt+wheel  move in time\n\
 Shift+wheel  zoom   \u{00b7}   Ctrl+wheel  lane height\n\
 Middle drag  move the view (on the ruler, up/down zooms)\n\
 Drag a take  move it (Shift: no snap, Ctrl: copy)   \u{00b7}   drop audio files  new takes\n\
-Double-click the MIDI  editor   \u{00b7}   double-click a string  add a note";
+Double-click the MIDI  editor   \u{00b7}   double-click a string  add a note\n\
+Right-click a note  slides, bends   \u{00b7}   Alt+click a note  delete it\n\
+Drag a note up/down in the tab  another string   \u{00b7}   right drag  select items";
 
 pub const TUNINGS: [(&str, [i32; 6]); 5] = [
     ("Standard E", [40, 45, 50, 55, 59, 64]),
@@ -411,6 +413,8 @@ pub struct Sel {
 pub enum Hit {
     None,
     Ruler,
+    /// Une marque de la palette d'une note.
+    Mark(Mark),
     /// Une note de la tablature ou de la partition.
     Note {
         t: usize,
@@ -671,6 +675,7 @@ enum Drag {
         n: usize,
         qn0: f64,
         x0: f32,
+        y0: f32,
         moved: bool,
     },
     /// Un passage choisi sur la regle.
@@ -718,6 +723,8 @@ enum Drag {
         x1: f32,
         y1: f32,
         moved: bool,
+        /// Commence sur une note : un clic droit sans bouger ouvre sa palette.
+        note: Option<(usize, usize, usize)>,
     },
     /// Une guitare qu'on glisse par son en-tete (comme les pistes de
     /// REAPER) : ou elle irait.
@@ -806,6 +813,8 @@ pub struct Arr {
     /// La hauteur des couches audio et MIDI (Ctrl + molette).
     pub vzoom: f32,
     pub follow: bool,
+    /// La palette d'une note (clic droit), ouverte.
+    pub palette: Option<Palette>,
     /// La vue est celle de l'arrangement de REAPER (le module la tient) : elle
     /// ne tourne jamais la page d'elle-meme, REAPER le fait (son
     /// defilement pendant la lecture), et `follow` montre son reglage.
@@ -881,6 +890,82 @@ impl SnapGrid {
 }
 
 pub use cp_ui::Guide;
+
+/// Ce que propose la palette d'une note (clic droit) : sa facon d'etre jouee.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Mark {
+    /// Note simple : ni liaison, ni glisse, ni bend.
+    Plain,
+    /// Marteau ou tire depuis la note d'avant sur la corde.
+    Legato,
+    /// Glisse depuis la note d'avant sur la corde.
+    Slide,
+    InBelow,
+    InAbove,
+    Half,
+    Full,
+    OneHalf,
+    /// Le bend est relache.
+    Release,
+}
+
+impl Mark {
+    pub const ALL: [Mark; 9] = [
+        Mark::Plain,
+        Mark::Legato,
+        Mark::Slide,
+        Mark::InBelow,
+        Mark::InAbove,
+        Mark::Half,
+        Mark::Full,
+        Mark::OneHalf,
+        Mark::Release,
+    ];
+
+    /// Un bend : ses demi-tons.
+    pub fn semis(self) -> Option<f32> {
+        match self {
+            Mark::Half => Some(1.0),
+            Mark::Full => Some(2.0),
+            Mark::OneHalf => Some(3.0),
+            _ => None,
+        }
+    }
+
+    /// Le groupe (un trait les separe dans la palette).
+    pub fn group(self) -> u8 {
+        match self {
+            Mark::Plain => 0,
+            Mark::Legato | Mark::Slide => 1,
+            Mark::InBelow | Mark::InAbove => 2,
+            _ => 3,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Mark::Plain => "Plain note (no slide, no bend)",
+            Mark::Legato => "Hammer-on / pull-off from the previous note",
+            Mark::Slide => "Slide from the previous note",
+            Mark::InBelow => "Slide in from below",
+            Mark::InAbove => "Slide in from above",
+            Mark::Half => "Bend \u{00bd} tone",
+            Mark::Full => "Bend full tone",
+            Mark::OneHalf => "Bend 1\u{00bd} tones",
+            Mark::Release => "Bend and release",
+        }
+    }
+}
+
+/// La palette ouverte : la note, et ou elle s'ouvre.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Palette {
+    pub t: usize,
+    pub i: usize,
+    pub n: usize,
+    pub x: f32,
+    pub y: f32,
+}
 
 /// Un clic sur Solo, comme dans REAPER : seul (en place), Alt (sans tenir
 /// compte du routage), Ctrl (toutes les pistes), Ctrl + Alt (exclusif).
@@ -995,6 +1080,7 @@ impl Arr {
             vzoom: 1.0,
             follow: true,
             synced: false,
+            palette: None,
             playhead: None,
             playing: false,
             rec: Vec::new(),
@@ -1513,6 +1599,108 @@ impl Arr {
         self.edited(t, i)
     }
 
+    /// La note d'avant sur la meme corde (au plus deux noires avant), d'une
+    /// autre hauteur : celle d'ou part un marteau, un tire ou une glisse.
+    pub fn prev_on_string(&self, t: usize, i: usize, n: usize) -> Option<usize> {
+        let it = self.item(t, i)?;
+        let me = it.doc.get(n)?;
+        let j = it
+            .doc
+            .iter()
+            .enumerate()
+            .filter(|(j, x)| *j != n && x.string == me.string && x.qn0 < me.qn0 - 1e-6)
+            .max_by(|a, b| {
+                a.1.qn0
+                    .partial_cmp(&b.1.qn0)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .map(|x| x.0)?;
+        let p = &it.doc[j];
+        (me.qn0 - p.qn1 <= 2.0 && p.pitch != me.pitch).then_some(j)
+    }
+
+    /// Cette marque est-elle celle de la note ?
+    pub fn mark_on(&self, t: usize, i: usize, n: usize, m: Mark) -> bool {
+        let Some(note) = self.item(t, i).and_then(|it| it.doc.get(n)) else {
+            return false;
+        };
+        let bm = note.bend_mark();
+        match m {
+            Mark::Plain => note.tech == Tech::Plain && note.bend.is_empty(),
+            Mark::Legato => matches!(note.tech, Tech::Hammer | Tech::Pull),
+            Mark::Slide => note.tech == Tech::Slide,
+            Mark::InBelow => note.slide_in() < 0,
+            Mark::InAbove => note.slide_in() > 0,
+            Mark::Release => bm.is_some_and(|b| b.release.is_some()),
+            _ => match (m.semis(), bm) {
+                (Some(a), Some(b)) => (b.amount - a).abs() < 0.3,
+                _ => false,
+            },
+        }
+    }
+
+    /// La marque se pose-t-elle sur cette note ? (une liaison veut une note
+    /// d'avant sur la corde).
+    pub fn mark_ok(&self, t: usize, i: usize, n: usize, m: Mark) -> bool {
+        match m {
+            Mark::Legato | Mark::Slide => self.prev_on_string(t, i, n).is_some(),
+            _ => true,
+        }
+    }
+
+    /// Pose (ou retire, si elle y est) une marque sur une note.
+    pub fn apply_mark(&mut self, t: usize, i: usize, n: usize, m: Mark) -> Option<Act> {
+        let prev = self.prev_on_string(t, i, n);
+        let on = self.mark_on(t, i, n, m);
+        let it = self.item_mut(t, i)?;
+        let mut note = it.doc.get(n)?.clone();
+        let bm = note.bend_mark();
+        match m {
+            Mark::Plain => {
+                note.tech = Tech::Plain;
+                note.bend.clear();
+            }
+            Mark::Legato | Mark::Slide => {
+                let j = prev?;
+                if on {
+                    note.tech = Tech::Plain;
+                } else {
+                    note.tech = match m {
+                        Mark::Slide => Tech::Slide,
+                        _ if note.pitch > it.doc[j].pitch => Tech::Hammer,
+                        _ => Tech::Pull,
+                    };
+                    // Liee : pas de glisse d'approche (elle se pince), et la
+                    // note d'avant sonne jusqu'a celle-ci.
+                    note.set_slide_in(0);
+                    let p = &mut it.doc[j];
+                    p.qn1 = note.qn0;
+                    p.locked = true;
+                }
+            }
+            Mark::InBelow | Mark::InAbove => {
+                // Une approche se pince : la liaison d'avant tombe.
+                let k = if m == Mark::InBelow { -3 } else { 3 };
+                note.set_slide_in(if on { 0 } else { k });
+                if !on {
+                    note.tech = Tech::Plain;
+                }
+            }
+            Mark::Release => {
+                let a = bm.map_or(2.0, |b| b.amount);
+                note.set_bend(Some(a), !on);
+            }
+            _ => {
+                let a = m.semis()?;
+                let rel = bm.is_some_and(|b| b.release.is_some());
+                note.set_bend(if on { None } else { Some(a) }, rel);
+            }
+        }
+        note.locked = true;
+        it.doc[n] = note;
+        self.edited(t, i)
+    }
+
     pub fn set_tech(&mut self, tech: Tech) -> Option<Act> {
         let (t, i, _) = self.with_note(|it, n| it.set_tech(n, tech))?;
         self.edited(t, i)
@@ -1659,6 +1847,28 @@ impl Arr {
 
     /// Un evenement de la fenetre ; rend ce que le module doit faire.
     pub fn event(&mut self, ev: &Ev) -> Option<Act> {
+        // La palette d'une note : un clic sur une marque l'applique, un clic
+        // ailleurs (ou Echap, ou la molette) la ferme.
+        if let Some(p) = self.palette {
+            match *ev {
+                Ev::Down { x, y, b, .. } => {
+                    self.palette = None;
+                    self.dirty = true;
+                    return match (b, self.hit(x, y)) {
+                        (Button::Left, Hit::Mark(m)) => self.apply_mark(p.t, p.i, p.n, m),
+                        _ => None,
+                    };
+                }
+                Ev::Key { vk: vk::ESCAPE, .. } | Ev::Wheel { .. } => {
+                    self.palette = None;
+                    self.dirty = true;
+                    if matches!(ev, Ev::Key { .. }) {
+                        return None;
+                    }
+                }
+                _ => {}
+            }
+        }
         match *ev {
             Ev::Move { x, y, mods } => {
                 self.mouse = (x, y, mods);
@@ -1669,9 +1879,11 @@ impl Arr {
                         n,
                         qn0,
                         x0,
+                        y0,
                         moved,
                     }) => {
-                        if !moved && (x - x0).abs() < 4.0 * self.scale {
+                        let far = (x - x0).abs().max((y - y0).abs()) >= 4.0 * self.scale;
+                        if !moved && !far {
                             return None;
                         }
                         self.drag = Some(Drag::Note {
@@ -1680,12 +1892,25 @@ impl Arr {
                             n,
                             qn0,
                             x0,
+                            y0,
                             moved: true,
                         });
                         let dq = ((x - x0) / self.lay.ppq.max(1e-3)) as f64;
+                        // La corde sous la souris (dans la tablature) : la note y
+                        // passe, a la meme hauteur, si elle s'y joue.
+                        let string = self.boxes.iter().find_map(|b| match b.4 {
+                            Hit::TabLine { t: bt, i: bi, s } if bt == t && bi == i => {
+                                (y >= b.1 && y < b.1 + b.3).then_some(s)
+                            }
+                            _ => None,
+                        });
                         if let Some(it) = self.item_mut(t, i) {
                             let q = it.snap(qn0 + dq);
-                            if it.move_note(n, q) {
+                            let mut changed = it.move_note(n, q);
+                            if let Some(s) = string {
+                                changed |= it.set_string(n, s);
+                            }
+                            if changed {
                                 self.dirty = true;
                             }
                         }
@@ -1697,7 +1922,13 @@ impl Arr {
                         self.dirty = true;
                         return None;
                     }
-                    Some(Drag::Marquee { x0, y0, moved, .. }) => {
+                    Some(Drag::Marquee {
+                        x0,
+                        y0,
+                        moved,
+                        note,
+                        ..
+                    }) => {
                         let moved = moved || (x - x0).abs().max((y - y0).abs()) >= 3.0;
                         self.drag = Some(Drag::Marquee {
                             x0,
@@ -1705,6 +1936,7 @@ impl Arr {
                             x1: x,
                             y1: y,
                             moved,
+                            note,
                         });
                         if moved {
                             self.dirty = true;
@@ -1899,11 +2131,28 @@ impl Arr {
                 self.dirty = true;
                 match d {
                     Some(Drag::Marquee {
+                        moved: false,
+                        note: Some((t, i, n)),
+                        x0,
+                        y0,
+                        ..
+                    }) => {
+                        self.palette = Some(Palette {
+                            t,
+                            i,
+                            n,
+                            x: x0,
+                            y: y0,
+                        });
+                        None
+                    }
+                    Some(Drag::Marquee {
                         x0,
                         y0,
                         x1,
                         y1,
                         moved: true,
+                        ..
                     }) => {
                         let items = self.marquee_hits((x0, y0, x1, y1));
                         let pick = Pick::of(mods);
@@ -2094,7 +2343,19 @@ impl Arr {
                 | Hit::Tuning(t) => Some(Act::TrackMenu { t, x, y }),
                 _ if y < self.lay.bar_h => Some(Act::ViewMenu { x, y }),
                 _ => {
-                    // Dans les pistes : le lasso, comme dans l'arrangement.
+                    // Dans les pistes : le lasso, comme dans l'arrangement ;
+                    // sur une note, sans bouger : sa palette.
+                    let note = match h {
+                        Hit::Note { t, i, n } => {
+                            self.select(Some(Sel {
+                                t,
+                                i: Some(i),
+                                n: Some(n),
+                            }));
+                            Some((t, i, n))
+                        }
+                        _ => None,
+                    };
                     let l = self.lay;
                     if x >= l.sx
                         && x < l.sx + l.sw
@@ -2107,6 +2368,7 @@ impl Arr {
                             x1: x,
                             y1: y,
                             moved: false,
+                            note,
                         });
                     }
                     None
@@ -2123,6 +2385,10 @@ impl Arr {
                     i: Some(i),
                     n: Some(n),
                 }));
+                // Alt + clic : la note s'efface (comme dans l'editeur MIDI).
+                if mods.alt {
+                    return self.delete_note();
+                }
                 let qn0 = self.item(t, i)?.doc.get(n)?.qn0;
                 self.drag = Some(Drag::Note {
                     t,
@@ -2130,6 +2396,7 @@ impl Arr {
                     n,
                     qn0,
                     x0: x,
+                    y0: y,
                     moved: false,
                 });
                 None
@@ -2383,7 +2650,8 @@ impl Arr {
                 });
                 None
             }
-            Hit::Help => None,
+            // La palette les prend avant (voir `event`).
+            Hit::Help | Hit::Mark(_) => None,
             Hit::None => {
                 self.select(None);
                 None
@@ -2466,6 +2734,7 @@ impl Arr {
                 x1,
                 y1,
                 moved: true,
+                ..
             }) => Some((x0.min(x1), y0.min(y1), x0.max(x1), y0.max(y1))),
             _ => None,
         }
@@ -2545,6 +2814,7 @@ impl Arr {
             }
         };
         Some(match h {
+            Hit::Mark(m) => m.label().into(),
             Hit::Note { t, i, n } => {
                 let it = self.item(t, i)?;
                 let nt = it.doc.get(n)?;
