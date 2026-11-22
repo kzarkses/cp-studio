@@ -55,10 +55,10 @@ pub struct MidiInputs {
 
 impl MidiInputs {
     pub fn new(r: &Reaper) -> MidiInputs {
+        type Get = unsafe extern "C" fn(i32) -> *mut c_void;
         // SAFETY: midi_Input* GetMidiInput(int idx).
-        MidiInputs {
-            get: unsafe { r.api::<unsafe extern "C" fn(i32) -> *mut c_void>(c"GetMidiInput") },
-        }
+        let get = unsafe { r.api::<Get>(c"GetMidiInput") };
+        MidiInputs { get }
     }
 
     /// Les tests : un objet `midi_Input` fabrique ailleurs, rendu par `get`.
