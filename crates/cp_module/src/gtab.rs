@@ -442,7 +442,6 @@ impl App {
         let _ = std::fs::create_dir_all(&dir);
         let path = free_path(&dir, &clean_name(&name));
         let written = std::fs::write(&path, xml.as_bytes()).is_ok();
-        let opened = written && !selftest && cp_sys::tab::open_document(&path);
         let pitches: Vec<String> = placed
             .iter()
             .take(16)
@@ -481,11 +480,10 @@ impl App {
             }
             Err(e) => msg += &format!("  MIDI: {e}\n"),
         }
+        // La partition n'ouvre plus MuseScore (Cedric, 2026-11-22) : elle
+        // sera lue dans la fenetre de Guitar Tab ; le fichier reste un export.
         if written {
-            msg += &format!("  Score: {}\n", path.display());
-            if !opened && !selftest {
-                msg += "  (open it in MuseScore: no application is associated with .musicxml)\n";
-            }
+            msg += &format!("  Score (MusicXML): {}\n", path.display());
         } else {
             msg += &format!("  Score: could not write {}\n", path.display());
         }
