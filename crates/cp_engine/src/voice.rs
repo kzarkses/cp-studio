@@ -17,7 +17,12 @@ use std::sync::atomic::{AtomicI32, AtomicI64, AtomicU64, Ordering::Relaxed};
 
 use crate::curve;
 use crate::pool::ClipData;
+use crate::shift::{FEED, ShiftSlot};
 use crate::sinc;
+
+/// Le plus grand morceau qu'une voix etiree rend d'un coup (les ports
+/// rendent par 512).
+const MAX_SH: usize = 2048;
 use crate::types::{Frame, MAX_ENV_PTS, PlayMode, state};
 
 /// Sous ce gain, on force zero. Les denormaux coutent 100 a 400 cycles sur un
@@ -123,6 +128,13 @@ pub(crate) struct Voice {
     /// A l'envers depuis le depart : la tete passe a la fin de la region au
     /// premier bloc joue.
     pub rev_arm: bool,
+    // --- etirement en temps reel
+    /// L'etireur prete par le fil principal (jamais le dernier a le tenir).
+    pub shifter: Option<ShiftSlot>,
+    pub tempo: f64,
+    pub pshift: f64,
+    /// Un nouveau depart (lancement, saut) : l'etireur repart a zero.
+    pub sh_fresh: bool,
 }
 
 impl Voice {
@@ -177,6 +189,10 @@ impl Voice {
             interp: 0,
             reverse: false,
             rev_arm: false,
+            shifter: None,
+            tempo: 1.0,
+            pshift: 1.0,
+            sh_fresh: true,
         };
         v.reset();
         v
@@ -188,6 +204,10 @@ impl Voice {
         self.interp = 0;
         self.reverse = false;
         self.rev_arm = false;
+        self.shifter = None;
+        self.tempo = 1.0;
+        self.pshift = 1.0;
+        self.sh_fresh = true;
         self.state = state::IDLE;
         self.port = -1;
         self.clip = None;
@@ -433,6 +453,64 @@ impl Voice {
                 None => read_at(data, cnch, cf, q, unity, looping, src_start, src_end),
             }
         };
+        // --- l'etirement : le bloc entier sort d'abord de l'etireur, nourri
+        // de matiere lue a la tete (meme boucle, meme sens, memes bornes).
+        let stretching = self.shifter.is_some() && (self.tempo != 1.0 || self.pshift != 1.0);
+        let mut sbuf = [0f32; MAX_SH * 2];
+        let mut s_frames = 0usize;
+        let mut s_ended = false;
+        if stretching && n > off {
+            let want = ((n - off) as usize).min(MAX_SH);
+            if let Some(slot) = self.shifter.clone() {
+                if let Ok(mut sh) = slot.try_lock() {
+                    if self.sh_fresh {
+                        sh.restart();
+                        self.sh_fresh = false;
+                    }
+                    sh.tune(self.tempo, self.pshift);
+                    let mut src_done = sh.flushed;
+                    let got = sh.produce(&mut sbuf, want, |buf| {
+                        let mut k = 0;
+                        while k < FEED && !src_done {
+                            if rev && p < src_start as f64 {
+                                if looping && span > 0 {
+                                    p += span as f64;
+                                    if p < src_start as f64 {
+                                        let d = p - src_start as f64;
+                                        p = src_start as f64
+                                            + (d - (d / span as f64).floor() * span as f64);
+                                    }
+                                } else {
+                                    src_done = true;
+                                    break;
+                                }
+                            }
+                            if p >= src_end as f64 {
+                                if looping && span > 0 {
+                                    p -= span as f64;
+                                    if p >= src_end as f64 {
+                                        let d = p - src_start as f64;
+                                        p = src_start as f64
+                                            + (d - (d / span as f64).floor() * span as f64);
+                                    }
+                                } else {
+                                    src_done = true;
+                                    break;
+                                }
+                            }
+                            let (l, r) = read(p);
+                            buf[k * 2] = l as f64;
+                            buf[k * 2 + 1] = r as f64;
+                            p += dir;
+                            k += 1;
+                        }
+                        k
+                    });
+                    s_frames = got;
+                    s_ended = got < want && sh.flushed;
+                }
+            }
+        }
         let mut st = self.state;
         let mut fip = self.fade_in_pos;
         let mut fop = self.fade_out_pos;
@@ -495,44 +573,62 @@ impl Voice {
 
         let mut i = off;
         while i < n {
-            // --- debut de matiere (a l'envers)
-            if rev && p < src_start as f64 {
-                if looping {
-                    p += span as f64;
-                    if p < src_start as f64 {
-                        let d = p - src_start as f64;
-                        p = src_start as f64 + (d - (d / span as f64).floor() * span as f64);
+            // --- la voix etiree : le bloc deja rendu par l'etireur
+            let (mut l, mut r);
+            if stretching {
+                let k = (i - off) as usize;
+                if k >= s_frames {
+                    if s_ended {
+                        st = state::IDLE;
+                        ended_here = block_start + i as Frame;
+                        break;
                     }
+                    // L'etireur occupe ou en retard : un silence, pas une
+                    // attente.
+                    (l, r) = (0.0, 0.0);
                 } else {
-                    st = state::IDLE;
-                    ended_here = block_start + i as Frame;
-                    break;
+                    (l, r) = (sbuf[k * 2], sbuf[k * 2 + 1]);
                 }
-            }
-            // --- fin de matiere
-            if p >= src_end as f64 {
-                if looping {
-                    // Une soustraction, puis une reduction en O(1) : jamais une
-                    // boucle dont le nombre de tours depend d'une position.
-                    p -= span as f64;
-                    if p >= src_end as f64 {
-                        let d = p - src_start as f64;
-                        p = src_start as f64 + (d - (d / span as f64).floor() * span as f64);
-                        if !(p >= src_start as f64 && p < src_end as f64) {
-                            st = state::IDLE;
-                            ended_here = block_start + i as Frame;
-                            break;
+            } else {
+                // --- debut de matiere (a l'envers)
+                if rev && p < src_start as f64 {
+                    if looping {
+                        p += span as f64;
+                        if p < src_start as f64 {
+                            let d = p - src_start as f64;
+                            p = src_start as f64 + (d - (d / span as f64).floor() * span as f64);
                         }
+                    } else {
+                        st = state::IDLE;
+                        ended_here = block_start + i as Frame;
+                        break;
                     }
-                } else {
-                    st = state::IDLE;
-                    ended_here = block_start + i as Frame;
-                    break;
                 }
-            }
+                // --- fin de matiere
+                if p >= src_end as f64 {
+                    if looping {
+                        // Une soustraction, puis une reduction en O(1) : jamais une
+                        // boucle dont le nombre de tours depend d'une position.
+                        p -= span as f64;
+                        if p >= src_end as f64 {
+                            let d = p - src_start as f64;
+                            p = src_start as f64 + (d - (d / span as f64).floor() * span as f64);
+                            if !(p >= src_start as f64 && p < src_end as f64) {
+                                st = state::IDLE;
+                                ended_here = block_start + i as Frame;
+                                break;
+                            }
+                        }
+                    } else {
+                        st = state::IDLE;
+                        ended_here = block_start + i as Frame;
+                        break;
+                    }
+                }
 
-            // --- lecture interpolee
-            let (mut l, mut r) = read(p);
+                // --- lecture interpolee
+                (l, r) = read(p);
+            }
             if pon {
                 let ge = envp_eval(ept, (p * inv_csr) as f32, &mut epi);
                 l *= ge;
@@ -540,7 +636,7 @@ impl Voice {
             }
 
             // --- croisement avec l'ancienne tete
-            if ti < tl {
+            if ti < tl && !stretching {
                 let (mut lo, mut ro) = (0.0f32, 0.0f32);
                 if tp >= src_end as f64 && looping {
                     tp -= span as f64;
@@ -637,7 +733,9 @@ impl Voice {
                 out[o + 1] += r * gg * gr;
             }
 
-            p += dir;
+            if !stretching {
+                p += dir;
+            }
             i += 1;
         }
 
@@ -663,6 +761,11 @@ impl Voice {
         if ended_here >= 0 {
             self.clip = None;
             self.ended_at = ended_here;
+        }
+        // Finie : l'etireur retourne au vivier (le fil principal le tient
+        // encore : ce n'est jamais une liberation).
+        if self.state == state::IDLE {
+            self.shifter = None;
         }
 
         // Coupure nette datee : la voix s'eteint exactement au frame demande.

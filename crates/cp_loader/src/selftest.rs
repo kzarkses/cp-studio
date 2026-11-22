@@ -40,6 +40,8 @@ pub struct SelfTest {
     stretch_at: Option<Instant>,
     /// La piste de sortie (GUID), la voix, l'etape et son heure.
     route: Option<(String, cp_audio::VoiceH, u8, Instant)>,
+    /// La position de la voix quand l'etirement temps reel commence.
+    rt_pos0: f64,
     ui_at: Option<Instant>,
     keys_step: u8,
     wheels: u32,
@@ -106,6 +108,7 @@ pub fn requested() -> Option<SelfTest> {
         stretches: Vec::new(),
         stretch_at: None,
         route: None,
+        rt_pos0: 0.0,
         ui_at: None,
         keys_step: 0,
         wheels: 0,
@@ -344,10 +347,32 @@ impl SelfTest {
                         if blocks == 0 { " (aucun bloc audio : carte son fermee)" } else { "" }
                     ),
                 );
+                // Puis elastique EN TEMPS REEL sur la meme voix : tempo 0,8,
+                // hauteur +4 demi-tons (1,26).
+                a.set(v, cp_engine::Param::Tempo, 0.8);
+                a.set(v, cp_engine::Param::Shift, 1.26);
+                self.rt_pos0 = a.voice(v).map_or(0.0, |x| x.0);
+                self.route = Some((g, v, 1, Instant::now()));
+                false
+            }
+            1 => {
+                let [l, rr] = a.port_levels(3);
+                let tp = r.track_peak(&g);
+                let (made, lent) = a.shifters_in_use();
+                let st = a.stats();
+                let blocks = st.blocks;
+                self.say(
+                    (l > 0.05 && tp > 0.05 && made >= 1 && lent >= 1 && st.busy_renders == 0)
+                        || blocks == 0,
+                    format!(
+                        "elastique en temps reel (tempo 0,8, +4 demi-tons) : crete du port {l:.3}/{rr:.3}, de la piste {tp:.3}, {made} etireur(s) dont {lent} prete(s), {} rendu(s) refuse(s)",
+                        st.busy_renders
+                    ),
+                );
                 // Silence, puis la piste effacee EN JOUANT.
                 a.set(v, cp_engine::Param::Gain, 0.0);
                 r.delete_track(&g);
-                self.route = Some((g, v, 1, Instant::now()));
+                self.route = Some((g, v, 2, Instant::now()));
                 false
             }
             _ => {

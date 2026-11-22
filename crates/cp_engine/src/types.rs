@@ -126,4 +126,10 @@ pub enum Param {
     /// 1 = a l'envers : la tete recule. Pose avant le depart, elle part de
     /// la fin de la region.
     Reverse,
+    /// Le tempo sans changer la hauteur (1,5 = une fois et demie plus vite),
+    /// par l'etireur prete a la voix ([`crate::shift`]). 1 = sans.
+    Tempo,
+    /// La hauteur sans changer la duree, en rapport (2 = une octave
+    /// au-dessus), par l'etireur. 1 = sans.
+    Shift,
 }

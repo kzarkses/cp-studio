@@ -172,7 +172,18 @@ pub struct AudioHost {
     preview_srate: f64,
     /// Ports revenus a la sortie materielle : leur piste avait disparu.
     routes_lost: u32,
+    /// Les etireurs temps reel : le vivier (le dernier detenteur de chacun,
+    /// le fil audio ne libere jamais rien), et a quelle voix chacun est
+    /// prete.
+    shifters: Vec<cp_engine::shift::ShiftSlot>,
+    lent: Vec<(VoiceH, cp_engine::shift::ShiftSlot)>,
+    /// Fabrique un etireur hors de REAPER (les tests).
+    shift_factory: Option<Box<dyn Fn() -> Box<dyn cp_engine::shift::RtShift> + Send>>,
 }
+
+/// Au plus tant d'etireurs temps reel (elastique coute 2 a 3 % du fil audio
+/// par voix).
+const MAX_SHIFTERS: usize = 16;
 
 impl AudioHost {
     /// Dans REAPER : `Some(reaper)`, le crochet est enregistre. En test : `None`,
@@ -212,6 +223,9 @@ impl AudioHost {
             max_frames: usize::MAX,
             preview_srate: 0.0,
             routes_lost: 0,
+            shifters: Vec::new(),
+            lent: Vec::new(),
+            shift_factory: None,
         }
     }
 
@@ -717,6 +731,8 @@ impl AudioHost {
         for v in finished {
             self.ctl.voice_release(v);
         }
+        // Les etireurs des voix rendues reviennent au vivier.
+        self.reclaim_shifters();
         self.pool.collect();
         let sr = self.ctl.core().srate();
         if self.preview_srate > 0.0 && sr != self.preview_srate {
@@ -786,7 +802,59 @@ impl AudioHost {
     }
 
     pub fn set(&mut self, v: VoiceH, param: Param, value: f64) -> bool {
+        // Le tempo ou la hauteur a part : la voix emprunte un etireur.
+        if matches!(param, Param::Tempo | Param::Shift)
+            && (value - 1.0).abs() > 1e-9
+            && !self.lent.iter().any(|(w, _)| *w == v)
+        {
+            if let Some(slot) = self.free_shifter() {
+                if self
+                    .ctl
+                    .send(v, At::Now, VoiceOp::Shifter(Some(slot.clone())))
+                {
+                    self.lent.push((v, slot));
+                }
+            }
+        }
         self.ctl.send(v, At::Now, VoiceOp::Set { param, value })
+    }
+
+    /// Un etireur libre du vivier (personne d'autre ne le tient), ou un
+    /// neuf. Fil principal.
+    fn free_shifter(&mut self) -> Option<cp_engine::shift::ShiftSlot> {
+        if let Some(s) = self.shifters.iter().find(|s| Arc::strong_count(s) == 1) {
+            return Some(s.clone());
+        }
+        if self.shifters.len() >= MAX_SHIFTERS {
+            return None;
+        }
+        let sh: Box<dyn cp_engine::shift::RtShift> = match (&self.shift_factory, &self.reaper) {
+            (Some(f), _) => f(),
+            (None, Some(r)) => Box::new(stretch::RtElastique(r.pitch_shift()?)),
+            (None, None) => return None,
+        };
+        let slot = cp_engine::shift::ShiftState::new(sh, self.ctl.core().srate());
+        self.shifters.push(slot.clone());
+        Some(slot)
+    }
+
+    /// Les tests : la fabrique des etireurs temps reel hors de REAPER.
+    pub fn set_shift_factory(
+        &mut self,
+        f: Box<dyn Fn() -> Box<dyn cp_engine::shift::RtShift> + Send>,
+    ) {
+        self.shift_factory = Some(f);
+    }
+
+    /// Les etireurs pretes a des voix finies reviennent au vivier.
+    fn reclaim_shifters(&mut self) {
+        let core = self.ctl.core().clone();
+        self.lent.retain(|(v, _)| core.voice_query(*v).is_some());
+    }
+
+    /// Combien d'etireurs temps reel existent, et combien sont pretes.
+    pub fn shifters_in_use(&self) -> (usize, usize) {
+        (self.shifters.len(), self.lent.len())
     }
 
     /// (position en frames du clip, etat) d'une voix vivante.

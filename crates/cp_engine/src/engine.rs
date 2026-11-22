@@ -45,6 +45,8 @@ pub enum VoiceOp {
         next: VoiceH,
         xfade_s: f64,
     },
+    /// Prete (ou reprend, `None`) un etireur temps reel a la voix.
+    Shifter(Option<crate::shift::ShiftSlot>),
     /// Un point d'enveloppe en attente (rien ne s'entend avant `Param::EnvPts`).
     EnvPt {
         idx: i32,
@@ -682,6 +684,7 @@ fn apply(a: &mut PortAudio, ps: &PortSlot, c: Cmd, block_start: Frame, srate: f6
                     v.gain = gain as f32;
                     v.gain_target = gain as f32;
                     v.pos = v.loop_start as f64;
+                    v.sh_fresh = true;
                     v.start_at = at_f;
                     v.stop_at = Frame::MAX;
                     v.ended_at = -1;
@@ -712,6 +715,13 @@ fn apply(a: &mut PortAudio, ps: &PortSlot, c: Cmd, block_start: Frame, srate: f6
                     }
                 }
                 VoiceOp::Set { param, value: x } => set_param(v, param, x, srate, xf),
+                // L'etireur prete : il repart a zero au prochain bloc. (Celui
+                // qu'il remplace n'est jamais lache ici le dernier : le vivier
+                // du fil principal le tient.)
+                VoiceOp::Shifter(s) => {
+                    v.shifter = s;
+                    v.sh_fresh = true;
+                }
                 VoiceOp::Queue { next, xfade_s } => {
                     if target_gen == Some(next.generation()) {
                         v.next_voice = next.local() as i32;
@@ -752,6 +762,7 @@ fn set_param(v: &mut Voice, param: Param, x: f64, srate: f64, xf: i32) {
                 v.tail_i = 0;
             }
             v.pos = np;
+            v.sh_fresh = true;
         }
         Param::Loop => {
             v.mode = if x != 0.0 {
@@ -768,6 +779,8 @@ fn set_param(v: &mut Voice, param: Param, x: f64, srate: f64, xf: i32) {
             v.env_commit((x + 0.5) as i32);
         }
         Param::Interp => v.interp = if x >= 0.5 { 1 } else { 0 },
+        Param::Tempo => v.tempo = if x > 0.01 { x.min(20.0) } else { 1.0 },
+        Param::Shift => v.pshift = if x > 0.01 { x.min(20.0) } else { 1.0 },
         Param::Reverse => {
             v.reverse = x != 0.0;
             // Pose avant le depart : de la fin de la region.

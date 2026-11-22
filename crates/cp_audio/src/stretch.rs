@@ -53,6 +53,41 @@ impl Shifter for PitchShift {
     }
 }
 
+/// L'etireur de REAPER en temps reel, prete a une voix
+/// ([`cp_engine::shift`]) : la meme classe que pour la cuisson.
+pub struct RtElastique(pub PitchShift);
+
+impl cp_engine::shift::RtShift for RtElastique {
+    fn setup(&mut self, srate: f64, nch: usize) {
+        let p = &mut self.0;
+        p.set_quality(-1);
+        p.set_srate(srate);
+        p.set_nch(nch as i32);
+        p.set_tempo(1.0);
+        p.set_shift(1.0);
+        p.set_formant_shift(-1.0);
+        p.reset();
+    }
+    fn set_tempo(&mut self, tempo: f64) {
+        self.0.set_tempo(tempo);
+    }
+    fn set_shift(&mut self, shift: f64) {
+        self.0.set_shift(shift);
+    }
+    fn reset(&mut self) {
+        self.0.reset();
+    }
+    fn feed(&mut self, input: &[f64], nch: usize) {
+        self.0.feed(input, nch);
+    }
+    fn flush(&mut self) {
+        self.0.flush();
+    }
+    fn take(&mut self, out: &mut [f64], nch: usize) -> usize {
+        self.0.take(out, nch)
+    }
+}
+
 /// Fait passer `input` (entrelace) dans l'etireur, suivi de `pad` frames de
 /// silence (la queue sort) ; rend toute la sortie.
 fn run(sh: &mut dyn Shifter, input: &[f32], nch: usize, pad: usize) -> Vec<f64> {

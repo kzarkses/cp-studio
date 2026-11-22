@@ -608,3 +608,64 @@ fn une_session_chargee() {
 fn huit_heures_de_session() {
     session(8.0, 6);
 }
+
+// ---------------------------------------------------------------------------
+// L'etirement en temps reel (A5)
+// ---------------------------------------------------------------------------
+
+/// Une voix au tempo 0,5 (l'imitation d'etireur : lecture lineaire, un
+/// amorcage de 1000 frames) : la sortie dure le double, suit la matiere au
+/// bon rythme des le premier echantillon, et la voix finit quand l'etireur
+/// s'est vide ; l'etireur revient au vivier.
+#[test]
+fn le_tempo_en_temps_reel() {
+    let mut h = AudioHost::new(None, 48000.0);
+    h.set_shift_factory(Box::new(|| Box::new(cp_engine::shift::LinearRt::new(1000))));
+    let n = 4800usize;
+    let s: Vec<f32> = (0..n).map(|i| (i as f32 + 1.0) / n as f32).collect();
+    let c = h.load_samples(s.clone(), 1, 48000.0).unwrap();
+    block(&mut h, 0, 512);
+    let v = h.play(0, c, 0, 0, false, 1.0).unwrap();
+    assert!(h.set(v, Param::Tempo, 0.5));
+    assert_eq!(h.shifters_in_use(), (1, 1));
+    let mut got = Vec::new();
+    for _ in 0..40 {
+        got.extend(block(&mut h, 0, 512).chunks(2).map(|f| f[0]));
+    }
+    let heard: Vec<f64> = got.iter().copied().skip_while(|&x| x == 0.0).collect();
+    let len = heard.iter().rposition(|&x| x != 0.0).unwrap() + 1;
+    // Le double, a l'amorcage et a l'interpolation pres.
+    assert!((len as i64 - 2 * n as i64).abs() <= 4, "{len}");
+    // Le rythme : la sortie k vaut la matiere k / 2.
+    for k in [0usize, 1, 2, 100, 2001, 9000] {
+        let want = s[k / 2] as f64
+            + if k % 2 == 1 {
+                (s[(k / 2 + 1).min(n - 1)] - s[k / 2]) as f64 * 0.5
+            } else {
+                0.0
+            };
+        assert!(
+            (heard[k] - want).abs() < 1e-4,
+            "{k} : {} au lieu de {want}",
+            heard[k]
+        );
+    }
+    h.poll();
+    assert!(h.voice(v).is_none(), "la voix a fini");
+    assert_eq!(h.shifters_in_use(), (1, 0), "l'etireur est rendu");
+    // Une boucle a 1,5 tourne sans fin, avec le meme etireur.
+    let v = h.play(0, c, 0, 0, true, 1.0).unwrap();
+    h.set(v, Param::Tempo, 1.5);
+    for _ in 0..200 {
+        let b = block(&mut h, 0, 512);
+        assert!(b.iter().all(|x| x.is_finite()));
+    }
+    h.poll();
+    assert!(h.voice(v).is_some());
+    assert_eq!(h.shifters_in_use(), (1, 1));
+    let st = h.stats();
+    assert_eq!(
+        (st.under_pulls, st.over_pulls, st.dropped_commands),
+        (0, 0, 0)
+    );
+}
