@@ -26,7 +26,12 @@ struct Fake {
     fx_added: Vec<String>,
     rate: f64,
     thumbs_asked: std::collections::HashSet<String>,
+    stretches: usize,
 }
+
+/// Les tickets de cuisson du vrai moteur, distingues de ceux du faux
+/// chargement.
+const STRETCH_T: u32 = 1 << 30;
 
 impl Fake {
     fn new() -> Fake {
@@ -40,6 +45,7 @@ impl Fake {
             fx_added: Vec::new(),
             rate: 1.0,
             thumbs_asked: std::collections::HashSet::new(),
+            stretches: 0,
         }
     }
 
@@ -76,6 +82,15 @@ impl Host for Fake {
         t
     }
     fn poll(&mut self, ticket: u32) -> Loaded {
+        // Une cuisson : le vrai moteur.
+        if ticket & STRETCH_T != 0 {
+            self.a.poll();
+            return match self.a.ticket(ticket & !STRETCH_T) {
+                cp_audio::Load::Pending => Loaded::Pending,
+                cp_audio::Load::Ready(c) => Loaded::Ready(c.0),
+                cp_audio::Load::Failed(e) => Loaded::Failed(e),
+            };
+        }
         let Some(i) = self.tickets.iter().position(|(t, _)| *t == ticket) else {
             return Loaded::Failed("unknown".into());
         };
@@ -134,6 +149,18 @@ impl Host for Fake {
     }
     fn set_rate(&mut self, _voice: u32, rate: f64) {
         self.rate = rate;
+    }
+    fn stretch(&mut self, clip: u32, start: i64, end: i64, tempo: f64) -> u32 {
+        self.stretches += 1;
+        let t = self.a.stretch_with(
+            ClipH(clip),
+            start,
+            end,
+            tempo,
+            1.0,
+            Box::new(cp_audio::stretch::LinearShifter::new(0)),
+        );
+        t | STRETCH_T
     }
     fn swap_begin(&mut self) -> Result<(String, f64), String> {
         self.item.clone().ok_or_else(|| "no item".into())
@@ -650,4 +677,53 @@ fn habille_du_vrai_theme() {
     let p = std::env::temp_dir().join("cp_browser_theme.png");
     std::fs::write(&p, png::encode(&sc.s)).unwrap();
     println!("{}", p.display());
+}
+
+/// Le calage au tempo sans changer la hauteur : la premiere ecoute joue a la
+/// vitesse de calage (la hauteur suit), la version etiree se cuit, puis
+/// l'ecoute passe sur elle au meme endroit, a vitesse 1 ; la tete de lecture
+/// reste celle du fichier. Couper le calage revient au fichier.
+#[test]
+fn le_calage_au_tempo_garde_la_hauteur() {
+    let root = library();
+    let mut h = Fake::new();
+    let mut b = Browser::new(places(&root), Path::new("."), Vec::new());
+    b.layout(460.0, 520.0, 1.0);
+    // Un fichier « 120 bpm » dans un projet a 100, montre et joue en boucle.
+    let path = "C:/Loops/Loop 120 bpm.wav";
+    let t = h.load(path);
+    let Loaded::Ready(clip) = h.poll(t) else {
+        panic!("chargement");
+    };
+    let info = h.info(clip).unwrap();
+    b.wave.set_clip(clip, info, path);
+    b.wave.layout(b.lay.w);
+    b.sync = true;
+    b.looping = true;
+    b.play_wave(&mut h, None);
+    for _ in 0..4 {
+        b.tick(&mut h);
+        h.run_audio(512);
+    }
+    let r = 100.0 / 120.0;
+    assert!((h.rate - r).abs() < 1e-9, "d'abord la vitesse : {}", h.rate);
+    assert_eq!(h.stretches, 1, "une cuisson demandee");
+    // La cuisson finit : l'ecoute passe sur la version etiree.
+    let t0 = std::time::Instant::now();
+    while b.voice_map.is_none() {
+        b.tick(&mut h);
+        h.run_audio(512);
+        assert!(t0.elapsed().as_secs() < 10, "cuisson trop lente");
+    }
+    let st = b.stretched.clone().unwrap();
+    assert!((st.tempo - r).abs() < 1e-9 && st.clip != 0);
+    // La tete de lecture reste dans le fichier.
+    h.run_audio(4800);
+    b.tick(&mut h);
+    let ph = b.wave.playhead.unwrap();
+    assert!(ph >= 0.0 && ph <= b.wave.info.frames as f64, "{ph}");
+    // Couper le calage : retour au fichier, a vitesse 1.
+    key(&mut b, &mut h, 0x54);
+    assert!(b.voice_map.is_none());
+    assert!((h.rate - 1.0).abs() < 1e-9 || !b.sync);
 }

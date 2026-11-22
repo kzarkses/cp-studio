@@ -273,6 +273,10 @@ impl BrowserHost for Adapter<'_> {
     fn insert_rate(&mut self, rate: f64) {
         self.r.set_selected_item_rate(rate);
     }
+    fn stretch(&mut self, clip: u32, start: i64, end: i64, tempo: f64) -> u32 {
+        // L'etireur de REAPER (elastique) : la hauteur reste.
+        self.host.audio_stretch(clip, start, end, tempo, 1.0)
+    }
     fn swap_begin(&mut self) -> Result<(String, f64), String> {
         self.r.selected_take_file().ok_or_else(|| {
             "select an item in the arrange first (hot swap replaces its file)".to_string()

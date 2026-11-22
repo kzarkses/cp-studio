@@ -251,77 +251,77 @@ impl Reader for StretchReader {
     }
 }
 
+/// Un etireur d'imitation : un retard fixe (en frames de sortie), puis la
+/// matiere lue a `tempo` (interpolation lineaire). La hauteur change avec la
+/// vitesse : il ne sert qu'aux tests (le vrai est celui de REAPER).
+pub struct LinearShifter {
+    pub delay: usize,
+    tempo: f64,
+    nch: usize,
+    input: Vec<f64>,
+    made: usize,
+    flushed: bool,
+}
+
+impl LinearShifter {
+    pub fn new(delay: usize) -> LinearShifter {
+        LinearShifter {
+            delay,
+            tempo: 1.0,
+            nch: 1,
+            input: Vec::new(),
+            made: 0,
+            flushed: false,
+        }
+    }
+}
+
+impl Shifter for LinearShifter {
+    fn setup(&mut self, _srate: f64, nch: usize, tempo: f64, _shift: f64) {
+        self.tempo = tempo;
+        self.nch = nch;
+        self.input.clear();
+        self.made = 0;
+        self.flushed = false;
+    }
+    fn feed(&mut self, input: &[f64], _nch: usize) {
+        self.input.extend_from_slice(input);
+    }
+    fn flush(&mut self) {
+        self.flushed = true;
+    }
+    fn take(&mut self, out: &mut [f64], nch: usize) -> usize {
+        let fed = self.input.len() / self.nch;
+        let mut k = 0;
+        while k < out.len() / nch {
+            let o = self.made;
+            if o < self.delay {
+                for c in 0..nch {
+                    out[k * nch + c] = 0.0;
+                }
+            } else {
+                let x = (o - self.delay) as f64 * self.tempo;
+                let i = x.floor() as usize;
+                if i + 1 >= fed && !(self.flushed && i < fed) {
+                    break;
+                }
+                let t = x - i as f64;
+                for c in 0..nch {
+                    let a = self.input[i * self.nch + c];
+                    let b = self.input.get((i + 1) * self.nch + c).copied().unwrap_or(a);
+                    out[k * nch + c] = a + (b - a) * t;
+                }
+            }
+            self.made += 1;
+            k += 1;
+        }
+        k
+    }
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
-
-    /// Une imitation d'etireur : un retard fixe (en frames de sortie), puis
-    /// la matiere lue a `tempo` (interpolation lineaire), sans changer la
-    /// hauteur (ce n'est pas ce qu'on verifie ici).
-    pub struct FakeShifter {
-        pub delay: usize,
-        tempo: f64,
-        nch: usize,
-        input: Vec<f64>,
-        made: usize,
-        flushed: bool,
-    }
-
-    impl FakeShifter {
-        pub fn new(delay: usize) -> FakeShifter {
-            FakeShifter {
-                delay,
-                tempo: 1.0,
-                nch: 1,
-                input: Vec::new(),
-                made: 0,
-                flushed: false,
-            }
-        }
-    }
-
-    impl Shifter for FakeShifter {
-        fn setup(&mut self, _srate: f64, nch: usize, tempo: f64, _shift: f64) {
-            self.tempo = tempo;
-            self.nch = nch;
-            self.input.clear();
-            self.made = 0;
-            self.flushed = false;
-        }
-        fn feed(&mut self, input: &[f64], _nch: usize) {
-            self.input.extend_from_slice(input);
-        }
-        fn flush(&mut self) {
-            self.flushed = true;
-        }
-        fn take(&mut self, out: &mut [f64], nch: usize) -> usize {
-            let fed = self.input.len() / self.nch;
-            let mut k = 0;
-            while k < out.len() / nch {
-                let o = self.made;
-                if o < self.delay {
-                    for c in 0..nch {
-                        out[k * nch + c] = 0.0;
-                    }
-                } else {
-                    let x = (o - self.delay) as f64 * self.tempo;
-                    let i = x.floor() as usize;
-                    if i + 1 >= fed && !(self.flushed && i < fed) {
-                        break;
-                    }
-                    let t = x - i as f64;
-                    for c in 0..nch {
-                        let a = self.input[i * self.nch + c];
-                        let b = self.input.get((i + 1) * self.nch + c).copied().unwrap_or(a);
-                        out[k * nch + c] = a + (b - a) * t;
-                    }
-                }
-                self.made += 1;
-                k += 1;
-            }
-            k
-        }
-    }
 
     #[test]
     fn la_cuisson_dure_exactement_et_retire_le_retard() {
@@ -334,7 +334,7 @@ pub(crate) mod tests {
             input[k * 2 + 1] = -1.0;
         }
         for &(tempo, delay) in &[(0.75, 4321usize), (1.5, 777), (1.0, 0), (0.5, 6000)] {
-            let mut sh = FakeShifter::new(delay);
+            let mut sh = LinearShifter::new(delay);
             assert_eq!(latency(&mut sh, sr, 2, tempo, 1.0), delay, "tempo {tempo}");
             let out = bake(&mut sh, &input, 2, sr, tempo, 1.0);
             let want = (n as f64 / tempo).round() as usize;

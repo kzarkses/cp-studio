@@ -93,6 +93,12 @@ pub trait Host {
         0.0
     }
     fn set_rate(&mut self, _voice: u32, _rate: f64) {}
+    /// La region `[start, end)` d'un clip etiree a `tempo` sans changer la
+    /// hauteur (cuite par l'etireur de REAPER) : un ticket lu par `poll`, 0
+    /// si impossible.
+    fn stretch(&mut self, _clip: u32, _start: i64, _end: i64, _tempo: f64) -> u32 {
+        0
+    }
     /// Apres une insertion : la vitesse de l'item pose.
     fn insert_rate(&mut self, _rate: f64) {}
     /// Le fichier et le decalage de l'item choisi dans REAPER.
@@ -267,6 +273,12 @@ pub struct Browser {
     pending: Option<(String, u32, bool)>,
     voice: u32,
     voice_path: String,
+    /// La voix joue la version etiree : (debut de sa region dans le
+    /// fichier, vitesse) ; sa position se ramene au fichier.
+    voice_map: Option<(i64, f64)>,
+    /// La version etiree du fichier montre (le calage au tempo sans changer
+    /// la hauteur).
+    pub stretched: Option<v2::Stretched>,
     press: Option<Press>,
     grab: Grab,
     db_job: Option<JoinHandle<Vec<DbEntry>>>,
@@ -337,6 +349,8 @@ impl Browser {
             pending: None,
             voice: 0,
             voice_path: String::new(),
+            voice_map: None,
+            stretched: None,
             press: None,
             grab: Grab::None,
             db_job: None,
@@ -756,6 +770,7 @@ impl Browser {
             h.stop(self.voice, 0.01);
             self.voice = 0;
         }
+        self.voice_map = None;
         self.wave.playhead = None;
         self.dirty = true;
     }
@@ -810,13 +825,27 @@ impl Browser {
             (_, Some(f)) => (f, 0),
             (None, None) => (0, 0),
         };
+        self.voice_path = self.wave.path.clone();
+        // Cale au tempo : la version etiree (la hauteur reste) si elle est
+        // cuite ; sinon le fichier a la vitesse de calage (la hauteur suit),
+        // le temps qu'elle cuise.
+        if let Some(r) = self.sync_rate(h).filter(|r| (r - 1.0).abs() > 1e-6) {
+            if let Some((sc, ra)) = self.stretch_for(h, r) {
+                let off = ((a - ra).max(0) as f64 / r).round() as i64;
+                self.voice = h.play(sc, off, 0, self.looping, self.gain());
+                if self.voice != 0 {
+                    self.voice_map = Some((ra, r));
+                    self.dirty = true;
+                    return;
+                }
+            }
+        }
         self.voice = h.play(self.wave.clip, a, b, self.looping, self.gain());
         if self.voice != 0 {
             if let Some(r) = self.sync_rate(h) {
                 h.set_rate(self.voice, r);
             }
         }
-        self.voice_path = self.wave.path.clone();
         if self.voice == 0 {
             self.error = Some("the audio engine refused to play".into());
         }
@@ -874,6 +903,7 @@ impl Browser {
                 }
             }
         }
+        self.tick_stretch(h);
         if self.voice != 0 {
             // Une voix vit tant que son handle est valide : elle peut etre
             // encore « au repos » juste apres le lancement (le fil audio ne l'a
@@ -881,6 +911,11 @@ impl Browser {
             match h.voice(self.voice) {
                 Some((pos, st)) => {
                     if st != 0 && self.voice_path == self.wave.path {
+                        // La version etiree : sa position ramenee au fichier.
+                        let pos = match self.voice_map {
+                            Some((ra, r)) => ra as f64 + pos * r,
+                            None => pos,
+                        };
                         let ph = Some(pos);
                         if ph != self.wave.playhead {
                             self.wave.playhead = ph;
@@ -891,6 +926,7 @@ impl Browser {
                 }
                 None => {
                     self.voice = 0;
+                    self.voice_map = None;
                     self.wave.playhead = None;
                     self.dirty = true;
                 }
@@ -1283,10 +1319,7 @@ impl Browser {
             0x54 => {
                 self.sync = !self.sync;
                 h.save("sync", if self.sync { "1" } else { "0" });
-                if self.voice != 0 {
-                    let r = self.sync_rate(h).unwrap_or(1.0);
-                    h.set_rate(self.voice, r);
-                }
+                self.resync(h);
             }
             0x4C => {
                 self.looping = !self.looping;
@@ -1499,10 +1532,7 @@ impl Browser {
             } else if self.btn_hit(x, y, self.lay.sync_x) {
                 self.sync = !self.sync;
                 h.save("sync", if self.sync { "1" } else { "0" });
-                if self.voice != 0 {
-                    let r = self.sync_rate(h).unwrap_or(1.0);
-                    h.set_rate(self.voice, r);
-                }
+                self.resync(h);
             } else if self.btn_hit_w(x, y, self.lay.loop_x, self.lay.loop_w) {
                 self.looping = !self.looping;
                 h.save("loop", if self.looping { "1" } else { "0" });

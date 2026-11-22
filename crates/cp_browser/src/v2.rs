@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use crate::model::{self, Kind};
-use crate::{Browser, Host, Row};
+use crate::{Browser, Host, Loaded, Row};
 
 /// Le tempo ecrit dans un nom de fichier : « 120bpm », « 120 BPM »,
 /// « bpm120 », ou un nombre seul de 60 a 200 entre separateurs dans le nom
@@ -97,6 +97,26 @@ pub fn sync_rate(file_bpm: f64, project_bpm: f64) -> Option<f64> {
     Some(r)
 }
 
+/// La version etiree d'un fichier (le calage au tempo sans changer la
+/// hauteur) : sa region, sa vitesse, son ticket de cuisson puis son clip.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Stretched {
+    /// Le clip du fichier.
+    pub src: u32,
+    /// La region etiree (frames du fichier ; `b` = 0 : jusqu'au bout).
+    pub a: i64,
+    pub b: i64,
+    pub tempo: f64,
+    pub ticket: u32,
+    /// 0 tant qu'elle cuit.
+    pub clip: u32,
+    pub failed: bool,
+}
+
+/// Au-dela, on n'etire pas (la cuisson et la memoire) : le calage se fait
+/// par la vitesse, la hauteur suit.
+const STRETCH_MAX_S: f64 = 600.0;
+
 /// Un etat de remplacement a chaud : le fichier et le decalage d'origine de
 /// l'item.
 #[derive(Clone, Debug)]
@@ -109,6 +129,102 @@ impl Browser {
     // -----------------------------------------------------------------------
     // Le tempo
     // -----------------------------------------------------------------------
+
+    /// La version etiree du fichier montre a `tempo` (sa region : la
+    /// selection, sinon tout le fichier) : (clip, debut de la region) si elle
+    /// est cuite ; sinon la demande (une fois) et rend rien.
+    pub fn stretch_for(&mut self, h: &mut dyn Host, tempo: f64) -> Option<(u32, i64)> {
+        let (ra, rb) = self.wave.sel.unwrap_or((0, 0));
+        let src = self.wave.clip;
+        if let Some(s) = &self.stretched {
+            if s.src == src && s.a == ra && s.b == rb && (s.tempo - tempo).abs() < 1e-9 {
+                let ready = s.clip != 0 && h.info(s.clip).is_some_and(|i| i.complete());
+                return ready.then_some((s.clip, ra));
+            }
+        }
+        if let Some(old) = self.stretched.take() {
+            if old.clip != 0 {
+                h.release(old.clip);
+            }
+        }
+        let i = self.wave.info;
+        if i.srate > 0.0 && i.frames as f64 / i.srate > STRETCH_MAX_S {
+            return None;
+        }
+        let t = h.stretch(src, ra, rb, tempo);
+        self.stretched = Some(Stretched {
+            src,
+            a: ra,
+            b: rb,
+            tempo,
+            ticket: t,
+            clip: 0,
+            failed: t == 0,
+        });
+        None
+    }
+
+    /// La cuisson avance ; quand elle est prete et que le fichier joue
+    /// encore cale (la hauteur changee), l'ecoute passe sur la version
+    /// etiree, au meme endroit.
+    pub fn tick_stretch(&mut self, h: &mut dyn Host) {
+        let Some(s) = self.stretched.as_mut() else {
+            return;
+        };
+        if s.ticket != 0 {
+            match h.poll(s.ticket) {
+                Loaded::Pending => {}
+                Loaded::Ready(c) => {
+                    s.ticket = 0;
+                    s.clip = c;
+                }
+                Loaded::Failed(_) => {
+                    s.ticket = 0;
+                    s.failed = true;
+                }
+            }
+        }
+        let s = s.clone();
+        if s.clip == 0 || self.voice == 0 || self.voice_map.is_some() {
+            return;
+        }
+        if s.src != self.wave.clip || self.voice_path != self.wave.path {
+            return;
+        }
+        if !h.info(s.clip).is_some_and(|i| i.complete()) {
+            return;
+        }
+        if self.sync_rate(h).is_none_or(|r| (r - s.tempo).abs() > 1e-9) {
+            return;
+        }
+        if self.wave.sel.unwrap_or((0, 0)) != (s.a, s.b) {
+            return;
+        }
+        let Some((pos, st)) = h.voice(self.voice) else {
+            return;
+        };
+        if st == 0 {
+            return;
+        }
+        let off = ((pos - s.a as f64) / s.tempo).round().max(0.0) as i64;
+        h.stop(self.voice, 0.005);
+        self.voice = h.play(s.clip, off, 0, self.looping, self.gain());
+        self.voice_map = (self.voice != 0).then_some((s.a, s.tempo));
+        self.dirty = true;
+    }
+
+    /// Le calage vient de changer : l'ecoute repart du meme endroit du
+    /// fichier, calee ou non.
+    pub fn resync(&mut self, h: &mut dyn Host) {
+        if self.voice == 0 {
+            return;
+        }
+        let pos = h.voice(self.voice).map(|(p, _)| match self.voice_map {
+            Some((ra, r)) => ra as f64 + p * r,
+            None => p,
+        });
+        self.play_wave(h, pos.map(|p| p as i64));
+    }
 
     /// La vitesse de calage du fichier montre, si le calage est actif et le
     /// tempo du fichier connu.
