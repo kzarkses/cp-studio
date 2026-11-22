@@ -90,6 +90,7 @@ impl Raster {
             (-1.0f32, p1, p0)
         };
         let hf = self.h as f32;
+        let wf = self.w as f32;
         if p1.y <= 0.0 || p0.y >= hf {
             return;
         }
@@ -108,12 +109,18 @@ impl Raster {
             let xnext = x + dxdy * dy;
             let d = dy * dir;
             let (xa, xb) = if x < xnext { (x, xnext) } else { (xnext, x) };
+            // Dans le champ : un bord coupe au decoupage (x = 0) revient de
+            // l'interpolation a -2e-7 pres ; floor() donnait -1, que le
+            // passage en usize ramene a 0, et tout le segment se deposait
+            // une colonne trop a droite (la colonne du bord d'une zone
+            // redessinee differait du dessin complet).
+            let (xa, xb) = (xa.clamp(0.0, wf), xb.clamp(0.0, wf));
             let xaf = xa.floor();
             let xai = xaf as usize;
             let xbc = xb.ceil();
             let xbi = xbc as usize;
             if xbi <= xai + 1 {
-                let xmf = 0.5 * (x + xnext) - xaf;
+                let xmf = 0.5 * (xa + xb) - xaf;
                 self.acc[row + xai] += d - d * xmf;
                 self.acc[row + xai + 1] += d * xmf;
             } else {
@@ -236,6 +243,62 @@ mod tests {
         p.rect(-50.0, 2.0, 200.0, 4.0);
         let r = fill(&p, 20, 10);
         assert!((r.total() - 20.0 * 4.0).abs() < 1e-3, "{}", r.total());
+    }
+
+    /// Un champ qui commence plus a droite (une zone redessinee) donne a
+    /// chaque pixel la meme couverture que le champ entier : le trait d'un
+    /// « H » de Guitar Tab, coupe au bord d'une zone, en donnait 0,67 au
+    /// lieu de 0,37 sur la colonne du bord.
+    #[test]
+    fn un_champ_coupe_couvre_comme_le_champ_entier() {
+        let cover = |st: &Path, x0: f32, w: usize| -> Vec<Vec<f32>> {
+            let mut r = Raster::default();
+            r.reset(w, 8);
+            let mut polys = Vec::new();
+            st.flatten(0.02, &mut polys);
+            for p in &polys {
+                for s in p.windows(2) {
+                    r.line(
+                        pt(s[0].x - x0, s[0].y - 475.0),
+                        pt(s[1].x - x0, s[1].y - 475.0),
+                    );
+                }
+            }
+            let stride = r.stride();
+            (0..8)
+                .map(|y| {
+                    let mut sum = 0.0;
+                    (0..w)
+                        .map(|x| {
+                            sum += r.acc[y * stride + x];
+                            sum
+                        })
+                        .collect()
+                })
+                .collect()
+        };
+        for (a, b) in [
+            ((353.4, 480.0), (360.0, 476.0)),
+            ((353.4, 476.0), (360.0, 480.5)),
+        ] {
+            let mut line = Path::new();
+            line.move_to(a.0, a.1).line_to(b.0, b.1);
+            let mut st = Path::new();
+            line.stroke(1.1, &mut st);
+            let whole = cover(&st, 352.0, 12);
+            for cut in [353usize, 354, 355, 356] {
+                let part = cover(&st, cut as f32, 12 - (cut - 352));
+                for y in 0..8 {
+                    for x in 0..part[y].len() {
+                        let (g, w) = (part[y][x], whole[y][x + cut - 352]);
+                        assert!(
+                            (g - w).abs() < 1e-4,
+                            "coupe {cut}, ({x}, {y}) : {g} au lieu de {w}"
+                        );
+                    }
+                }
+            }
+        }
     }
 
     #[test]
