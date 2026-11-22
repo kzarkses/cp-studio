@@ -1183,15 +1183,47 @@ impl Arr {
                 y1: y,
                 right,
             };
+            let fade = self.fade_preview();
+            let trim = self.trim_preview();
             for (i, it) in self.tracks[t].items.iter_mut().enumerate() {
                 if drag.is_some_and(|d| d.0 == t && d.1 == i && !d.4) {
                     continue;
                 }
                 let is_sel = sel.is_some_and(|x| x.t == t && x.i == Some(i));
                 let sel_n = sel.filter(|x| x.t == t && x.i == Some(i)).and_then(|x| x.n);
+                // Le fondu qu'on tire se dessine a sa longueur du moment.
+                let kept = (it.fade_in, it.fade_out);
+                if let Some((ft, fi, fin, len)) = fade {
+                    if (ft, fi) == (t, i) {
+                        if fin {
+                            it.fade_in = len;
+                        } else {
+                            it.fade_out = len;
+                        }
+                    }
+                }
                 draw_item(
                     cv, text, icons, th, bx, it, t, i, geo, &lay, is_sel, sel_n, hover,
                 );
+                (it.fade_in, it.fade_out) = kept;
+                // Le bord qu'on tire : ce qui part est voile, ce qui vient est
+                // cadre, et une ligne marque le bord.
+                if let Some((tt, ti, left, q)) = trim {
+                    if (tt, ti) == (t, i) {
+                        let (xa, xb) = (geo.x(it.qn0).round(), geo.x(it.qn1).round());
+                        let xq = geo.x(q).round();
+                        let (h0, h1) = (lay.y0, lay.y1);
+                        let (a, b) = if left { (xa, xq) } else { (xq, xb) };
+                        let shrink = if left { xq > xa } else { xq < xb };
+                        if shrink {
+                            cv.fill_rect(a, h0, b - a, h1 - h0, Color::BLACK.with_alpha(110));
+                        } else {
+                            let (a, b) = (a.min(b), a.max(b));
+                            cv.dash_rect(a, h0 + 1.0, b - a, h1 - h0 - 2.0, 2.0, 2.0, th.accent);
+                        }
+                        cv.fill_rect(xq, h0, 1.0, h1 - h0, th.accent);
+                    }
+                }
             }
             if let Some((dt, di, q, to, _)) = drag {
                 if to == t {
@@ -2043,6 +2075,34 @@ fn draw_audio_item(
                     cv.fill_rect(x, mid - hh, 1.0, 2.0 * hh, wave_c);
                 }
                 x += 1.0;
+            }
+        }
+        // Les fondus : la zone qui se tait (au-dessus de la courbe) et la
+        // courbe, d'un pixel, comme REAPER.
+        let (top, bot) = (ly + s(3.0), ly + lh - s(3.0));
+        for (fin, len) in [(true, it.fade_in), (false, it.fade_out)] {
+            if len <= 1e-9 {
+                continue;
+            }
+            let (x0, x1) = if fin {
+                (xa, geo.x(it.qn0 + len))
+            } else {
+                (geo.x(it.qn1 - len), xb)
+            };
+            if x1 - x0 < 1.0 {
+                continue;
+            }
+            let mut zone = Path::new();
+            if fin {
+                zone.move_to(x0, top).line_to(x1, top).line_to(x0, bot).close();
+            } else {
+                zone.move_to(x0, top).line_to(x1, top).line_to(x1, bot).close();
+            }
+            cv.fill_path(&zone, Color::BLACK.with_alpha(70));
+            if fin {
+                cv.line(x0, bot, x1, top, 1.0, th.text_dim);
+            } else {
+                cv.line(x0, top, x1, bot, 1.0, th.text_dim);
             }
         }
         if let Some(st) = &it.state {

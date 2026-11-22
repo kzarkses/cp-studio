@@ -595,8 +595,12 @@ impl App {
             let key: Vec<_> = LOOK.iter().map(|k| r.theme_color(k)).collect();
             if let Some(w) = &mut self.ed.win {
                 if w.theme_key != key {
-                    w.theme = Theme::reaper(w.theme.scale, &|k| r.theme_color(k));
                     w.theme_key = key;
+                    let sc = w.theme.scale;
+                    let th = self.reaper_theme(sc);
+                    if let Some(w) = &mut self.ed.win {
+                        w.theme = th;
+                    }
                     self.ed.ed.mark();
                 }
             }
@@ -768,7 +772,7 @@ impl App {
             hwnd,
             place: self.ed.place,
             frame: crate::frame::Frame::default(),
-            theme: Theme::reaper(scale, &|k| r.theme_color(k)),
+            theme: self.reaper_theme(scale),
             theme_key: LOOK.iter().map(|k| r.theme_color(k)).collect(),
             tracking: false,
             closing: false,
@@ -902,10 +906,16 @@ impl App {
         }
         let scale = ui::dpi(w.hwnd) as f32 / 96.0;
         if (scale - w.theme.scale).abs() > 0.01 {
-            let r = self.r;
-            w.theme = Theme::reaper(scale, &|k| r.theme_color(k));
+            let th = self.reaper_theme(scale);
             self.ed.ed.mark();
+            let Some(w) = self.ed.win.as_mut() else {
+                return;
+            };
+            w.theme = th;
         }
+        let Some(w) = self.ed.win.as_mut() else {
+            return;
+        };
         if w.frame.resize(cw, ch) || force {
             self.ed.ed.mark();
         }
@@ -963,6 +973,21 @@ impl App {
     /// editeur MIDI la passe a la fenetre principale).
     fn ed_key(&mut self, vk: u32, ext: bool, md: cp_ui::Mods) -> bool {
         self.ed_keymap();
+        // D'abord les editions au survol de la fenetre principale de Cedric
+        // (Q, D, S, Z : sur la note sous la souris ; A, E : les fondus d'un
+        // clip) : elles passent avant les touches de l'editeur MIDI de REAPER
+        // (Q y quantifiait). La souris ailleurs : la touche suit son cours.
+        let hwnd = self.ed.win.as_ref().map(|w| w.hwnd);
+        if let Some(h) = hwnd {
+            if Self::mouse_over(h).is_some() {
+                if let Some(e) = self.main_hover(vk, ext, md) {
+                    let acts = self.ed.ed.hover_edit(e);
+                    self.ed_act(acts);
+                    self.ed_kick();
+                    return true;
+                }
+            }
+        }
         let km = self.ed.keys.as_ref().filter(|k| !k.is_empty());
         let Some(km) = km else {
             // Pas de table (REAPER ne l'a pas donnee) : les touches de base.
@@ -1089,6 +1114,12 @@ impl App {
             }
             msg::ERASEBKGND => Some(1),
             msg::GETDLGCODE => Some(0x0004 | 0x0080 | 0x0001),
+            // Le curseur de REAPER pour ce que ferait un geste ici.
+            msg::SETCURSOR if (m.lp & 0xFFFF) == 1 => {
+                let (cx, cy) = Self::mouse_over(hwnd).unwrap_or((x, y));
+                ui::set_pointer(self.ed.ed.pointer(cx, cy, md));
+                Some(1)
+            }
             msg::MOUSEMOVE => {
                 if let Some(w) = &mut self.ed.win {
                     if !w.tracking {
@@ -1097,6 +1128,10 @@ impl App {
                     }
                 }
                 self.ed_feed(Ev::Move { x, y, mods: md });
+                // Pendant un geste (souris capturee) : le curseur du geste.
+                if ui::has_capture(hwnd) {
+                    ui::set_pointer(self.ed.ed.pointer(x, y, md));
+                }
                 Some(0)
             }
             msg::MOUSELEAVE => {

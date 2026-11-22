@@ -37,6 +37,7 @@ use cp_ui::{Button, Ev, IconCache, Mods, Theme};
 
 mod editor;
 mod frame;
+mod native;
 mod gtab;
 mod items;
 mod tuner;
@@ -386,6 +387,11 @@ pub(crate) struct App {
     /// Battements depuis le chargement : au demarrage de REAPER, on attend
     /// qu'il ait fini de se construire avant d'ouvrir (et d'ancrer).
     ticks: u32,
+    /// Les raccourcis de la fenetre principale de REAPER (les editions au
+    /// survol), lus une fois.
+    main_keys: Option<cp_editview::keys::KeyMap>,
+    /// Les touches de modification au battement d'avant (le curseur suit).
+    last_mods: Mods,
 }
 
 fn read_shortcuts(r: &Reaper) -> (Vec<Shortcut>, PathBuf) {
@@ -1323,7 +1329,13 @@ impl Module for App {
             ops: Vec::new(),
             ticks: 0,
             show_perf: false,
+            main_keys: None,
+            last_mods: Mods::default(),
         };
+        // Les curseurs personnalises de REAPER (Cursors\<nom>.cur).
+        if let Some(res) = app.r.resource_path() {
+            ui::set_cursor_dir(&res);
+        }
         match decode(state) {
             Some(sv) => {
                 app.show_perf = sv.perf;
@@ -1437,6 +1449,8 @@ impl Module for App {
         if self.ticks == 15 {
             self.docker_tabs();
         }
+        self.reaper_look();
+        self.pointer_tick();
         self.gtab_tick();
         self.ed_tick();
         self.transport_tick();

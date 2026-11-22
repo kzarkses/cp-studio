@@ -176,6 +176,8 @@ pub(crate) struct GPart {
     requested: HashSet<String>,
     /// Les cretes que REAPER n'a pas encore : on reessaie plus tard.
     peak_retry: HashMap<String, Instant>,
+    /// La touche dont on a pris l'appui (on prend aussi son relachement).
+    key_down: Option<u32>,
     /// La derniere place connue de chaque paire (item audio -> audio, MIDI) :
     /// celui des deux qui a bouge depuis entraine l'autre, comme un groupe
     /// d'items de REAPER.
@@ -248,6 +250,7 @@ impl GPart {
             requested: HashSet::new(),
             peak_retry: HashMap::new(),
             pairs: HashMap::new(),
+            key_down: None,
         }
     }
 }
@@ -1202,12 +1205,16 @@ impl App {
         let r = self.r;
         let qn0 = r.time_to_qn(is.pos);
         let qn1 = r.time_to_qn(is.pos + is.len);
+        let fade_in = (r.time_to_qn(is.pos + is.fade_in) - qn0).max(0.0);
+        let fade_out = (qn1 - r.time_to_qn(is.pos + is.len - is.fade_out)).max(0.0);
         let akey = sound_key(&tk.path, tk.offs, is.len, tk.rate);
         let midi_hash = midi.and_then(|m| m.take()).and_then(|t| t.hash.clone());
         let midi_take_ok = midi.and_then(|m| m.ext[I_TAKE].as_deref()) == Some(tk.guid.as_str());
         let forced = self.gt.force.remove(&is.guid);
         // L'item n'a pas change : on le garde tel quel (le cas courant).
         if let Some(mut o) = old {
+            o.fade_in = fade_in;
+            o.fade_out = fade_out;
             let same = o.take == tk.guid
                 && o.akey == akey
                 && (o.qn0 - qn0).abs() < 1e-6
@@ -1266,6 +1273,8 @@ impl App {
         it.name = take_name(&tk.name);
         it.qn0 = qn0;
         it.qn1 = qn1;
+        it.fade_in = fade_in;
+        it.fade_out = fade_out;
         it.origin_qn = origin_qn;
         it.sig = sig;
         it.bpm = bpm;
@@ -2012,6 +2021,102 @@ impl App {
                 r.refresh_arrange();
                 self.gtab_sync();
             }
+            GAct::TrimItem { t, i, qn0, qn1 } => {
+                // Comme dans l'arrangement : le son reste ou il sonne (un bord
+                // gauche rogne decale la source d'autant) ; le MIDI suit, en
+                // un pas d'annulation.
+                let Some(it) = self.gt.arr.item(t, i).cloned() else {
+                    return;
+                };
+                let Some(info) = r.item_info(&it.guid) else {
+                    return;
+                };
+                let (p0, p1) = (r.qn_to_time(qn0), r.qn_to_time(qn1));
+                if p1 - p0 < 0.001 {
+                    return;
+                }
+                let d = p0 - info.pos;
+                let midi = r
+                    .item_ext(&it.guid, "CPGT_midi")
+                    .filter(|g| r.item_ext(g, "CPGT_src").as_deref() == Some(it.guid.as_str()));
+                r.undo_begin();
+                r.set_item_value(&it.guid, "D_POSITION", p0);
+                r.set_item_value(&it.guid, "D_LENGTH", p1 - p0);
+                if d.abs() > 1e-9 {
+                    r.set_active_take_value(&it.guid, "D_STARTOFFS", info.offs + d * info.rate);
+                }
+                if let Some(m) = &midi {
+                    let mo = r.item_info(m).map_or(0.0, |x| x.offs);
+                    r.set_item_value(m, "D_POSITION", p0);
+                    r.set_item_value(m, "D_LENGTH", p1 - p0);
+                    if d.abs() > 1e-9 {
+                        r.set_active_take_value(m, "D_STARTOFFS", (mo + d).max(0.0));
+                    }
+                }
+                r.undo_end("CP Guitar Tab: trim take", -1);
+                r.refresh_arrange();
+                self.gtab_sync();
+            }
+            GAct::FadeItem { t, i, fade_in, len } => {
+                let Some(it) = self.gt.arr.item(t, i).cloned() else {
+                    return;
+                };
+                let Some(info) = r.item_info(&it.guid) else {
+                    return;
+                };
+                let secs = if fade_in {
+                    r.qn_to_time(it.qn0 + len) - info.pos
+                } else {
+                    info.pos + info.len - r.qn_to_time(it.qn1 - len)
+                };
+                r.undo_begin();
+                r.set_item_value(
+                    &it.guid,
+                    if fade_in { "D_FADEINLEN" } else { "D_FADEOUTLEN" },
+                    secs.clamp(0.0, info.len),
+                );
+                r.undo_end(
+                    if fade_in {
+                        "CP Guitar Tab: fade in"
+                    } else {
+                        "CP Guitar Tab: fade out"
+                    },
+                    4,
+                );
+                r.refresh_arrange();
+                self.gtab_sync();
+            }
+            GAct::SplitItem { t, i, qn } => {
+                // La prise et son MIDI coupes au meme endroit ; la partie
+                // droite garde ses notes (son MIDI est la moitie droite).
+                let Some(it) = self.gt.arr.item(t, i).cloned() else {
+                    return;
+                };
+                let p = r.qn_to_time(qn);
+                let midi = r
+                    .item_ext(&it.guid, "CPGT_midi")
+                    .filter(|g| r.item_ext(g, "CPGT_src").as_deref() == Some(it.guid.as_str()));
+                r.undo_begin();
+                let a2 = r.split_item(&it.guid, p);
+                let m2 = midi.as_ref().and_then(|m| r.split_item(m, p));
+                if let (Some(a2), Some(m2)) = (&a2, &m2) {
+                    r.set_item_ext(a2, "CPGT_midi", m2);
+                    r.set_item_ext(m2, "CPGT_src", a2);
+                    if let Some(tk) = r.active_take_guid(a2) {
+                        r.set_item_ext(m2, "CPGT_take", &tk);
+                    }
+                    if let (Some(ai), Some(mi)) = (r.item_info(a2), r.item_info(m2)) {
+                        r.set_item_ext(
+                            m2,
+                            "CPGT_aoffs",
+                            &format!("{:.9}", ai.offs - mi.offs * ai.rate),
+                        );
+                    }
+                }
+                r.undo_end("CP Guitar Tab: split take", -1);
+                r.refresh_arrange();
+                self.gtab_sync();
+            }
             GAct::Export { t, i } => {
                 if let Some(it) = self.gt.arr.item(t, i).cloned() {
                     let (p, _) = self.gtab_export_item(&it);
@@ -2344,8 +2449,12 @@ impl App {
                 let key: Vec<_> = LOOK.iter().map(|k| r.theme_color(k)).collect();
                 if let Some(w) = &mut self.gt.win {
                     if w.theme_key != key {
-                        w.theme = Theme::reaper(w.theme.scale, &|k| r.theme_color(k));
                         w.theme_key = key;
+                        let sc = w.theme.scale;
+                        let th = self.reaper_theme(sc);
+                        if let Some(w) = &mut self.gt.win {
+                            w.theme = th;
+                        }
                         self.gt.arr.mark();
                     }
                 }
@@ -2631,7 +2740,7 @@ impl App {
             hwnd,
             place: self.gt.place,
             frame: crate::frame::Frame::default(),
-            theme: Theme::reaper(scale, &|k| r.theme_color(k)),
+            theme: self.reaper_theme(scale),
             theme_key: LOOK.iter().map(|k| r.theme_color(k)).collect(),
             tracking: false,
             closing: false,
@@ -2774,10 +2883,16 @@ impl App {
         }
         let scale = ui::dpi(w.hwnd) as f32 / 96.0;
         if (scale - w.theme.scale).abs() > 0.01 {
-            let r = self.r;
-            w.theme = Theme::reaper(scale, &|k| r.theme_color(k));
+            let th = self.reaper_theme(scale);
             self.gt.arr.mark();
+            let Some(w) = self.gt.win.as_mut() else {
+                return;
+            };
+            w.theme = th;
         }
+        let Some(w) = self.gt.win.as_mut() else {
+            return;
+        };
         if w.frame.resize(cw, ch) || force {
             self.gt.arr.mark();
         }
@@ -2835,6 +2950,26 @@ impl App {
                     return Some(0);
                 };
                 let vk = k.wp as u32;
+                let ext = (k.lp >> 24) & 1 == 1;
+                // Les editions au survol de Cedric (Q, D, S, Z, A, E dans
+                // l'arrangement) : sur ce qui est sous la souris, ici. La
+                // souris ailleurs : la touche reste a REAPER.
+                if matches!(k.message, msg::KEYDOWN | msg::SYSKEYDOWN) {
+                    if let (Some(_), Some(e)) =
+                        (Self::mouse_over(hwnd), self.main_hover(vk, ext, md))
+                    {
+                        if let Some(a) = self.gt.arr.hover_edit(e) {
+                            self.gtab_act(a);
+                        }
+                        self.gtab_kick();
+                        self.gt.key_down = Some(vk);
+                        return Some(1);
+                    }
+                }
+                if matches!(k.message, msg::KEYUP | msg::SYSKEYUP) && self.gt.key_down == Some(vk) {
+                    self.gt.key_down = None;
+                    return Some(1);
+                }
                 let wanted = self.gt.arr.wants_key(vk, md);
                 Some(match k.message {
                     msg::KEYDOWN | msg::SYSKEYDOWN if wanted => {
@@ -2864,6 +2999,12 @@ impl App {
             }
             msg::ERASEBKGND => Some(1),
             msg::GETDLGCODE => Some(0x0004 | 0x0080 | 0x0001),
+            // Le curseur de REAPER pour ce que ferait un geste ici.
+            msg::SETCURSOR if (m.lp & 0xFFFF) == 1 => {
+                let (cx, cy) = Self::mouse_over(hwnd).unwrap_or((x, y));
+                ui::set_pointer(self.gt.arr.pointer(cx, cy, md));
+                Some(1)
+            }
             msg::MOUSEMOVE => {
                 if let Some(w) = &mut self.gt.win {
                     if !w.tracking {
@@ -2872,6 +3013,11 @@ impl App {
                     }
                 }
                 self.gtab_feed(Ev::Move { x, y, mods: md });
+                // Pendant un geste (souris capturee), Windows n'envoie plus
+                // WM_SETCURSOR : le curseur du geste est pose ici.
+                if ui::has_capture(hwnd) {
+                    ui::set_pointer(self.gt.arr.pointer(x, y, md));
+                }
                 Some(0)
             }
             msg::MOUSELEAVE => {
@@ -2983,6 +3129,7 @@ fn arr_sig(a: &Arr) -> u64 {
             (it.qn0.to_bits(), it.qn1.to_bits(), it.origin_qn.to_bits()).hash(&mut h);
             format!("{:?}", it.state).hash(&mut h);
             (it.midi, it.active, it.sig, it.peaks.len(), it.dropped).hash(&mut h);
+            (it.fade_in.to_bits(), it.fade_out.to_bits()).hash(&mut h);
             for k in &it.takes {
                 (&k.name, k.done).hash(&mut h);
             }

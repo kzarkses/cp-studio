@@ -57,6 +57,11 @@ impl KeyMap {
     /// `defaults` : (touche, action, drapeaux) de la section ; `ini` : le
     /// texte de `reaper-kb.ini`.
     pub fn build(defaults: &[(u32, u32, u32)], ini: &str) -> KeyMap {
+        KeyMap::build_for(SECTION, defaults, ini)
+    }
+
+    /// La table d'une section de REAPER (0 : la fenetre principale).
+    pub fn build_for(section: u32, defaults: &[(u32, u32, u32)], ini: &str) -> KeyMap {
         let mut map: HashMap<(u32, u32), Bind> = HashMap::new();
         for &(key, cmd, flags) in defaults {
             // 255 : la molette, pas une touche.
@@ -81,7 +86,7 @@ impl KeyMap {
         for line in ini.lines() {
             let line = line.split('#').next().unwrap_or("");
             let w: Vec<&str> = line.split_whitespace().collect();
-            if w.len() < 5 || w[0] != "KEY" || w[4].parse::<u32>().ok() != Some(SECTION) {
+            if w.len() < 5 || w[0] != "KEY" || w[4].parse::<u32>().ok() != Some(section) {
                 continue;
             }
             let (Ok(flags), Ok(key)) = (w[1].parse::<u32>(), w[2].parse::<u32>()) else {

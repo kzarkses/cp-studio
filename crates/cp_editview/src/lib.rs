@@ -628,6 +628,173 @@ impl Ed {
         out
     }
 
+    /// Une edition au survol (les touches de l'arrangement de Cedric : Q, D,
+    /// S, Z, A, E) : sur la note sous la souris, a la souris calee sur la
+    /// grille (Maj : sans) ; dans un clip audio, ses bords et ses fondus.
+    pub fn hover_edit(&mut self, e: cp_ui::HoverEdit) -> Vec<Act> {
+        use cp_ui::HoverEdit as H;
+        self.dirty = true;
+        let (mx, my, m) = self.mouse;
+        let q = self.snap_near(self.qn_of(mx), !m.shift);
+        if let Some(a) = self.audio_mut() {
+            let (q0, q1) = (a.qn0, a.qn1);
+            if q <= q0 + 1e-6 || q >= q1 - 1e-6 {
+                return Vec::new();
+            }
+            let label = match e {
+                H::TrimLeft => {
+                    a.qn0 = q;
+                    a.fade_in = a.fade_in.min(q1 - q);
+                    "CP Editor: trim clip start"
+                }
+                H::TrimRight => {
+                    a.qn1 = q;
+                    a.fade_out = a.fade_out.min(q - q0);
+                    "CP Editor: trim clip end"
+                }
+                H::FadeIn => {
+                    a.fade_in = q - q0;
+                    "CP Editor: fade in"
+                }
+                H::FadeOut => {
+                    a.fade_out = q1 - q;
+                    "CP Editor: fade out"
+                }
+                H::Split | H::Delete => return Vec::new(),
+            };
+            return vec![Act::AudioLive, Act::AudioCommit(label)];
+        }
+        match e {
+            H::Delete => self.named_cmd(keys::Named::DeleteUnderMouse),
+            H::Split => self.named_cmd(keys::Named::Split),
+            H::TrimLeft | H::TrimRight => {
+                let Some((id, _)) = self.note_at(mx, my) else {
+                    return Vec::new();
+                };
+                let left = e == H::TrimLeft;
+                let Some(md) = self.midi_mut() else {
+                    return Vec::new();
+                };
+                // La note sous la souris ; choisie, toutes les choisies que la
+                // souris traverse.
+                let sel = md.roll.get(id).is_some_and(|n| n.sel);
+                let mut k = 0;
+                for n in md.roll.notes.iter_mut() {
+                    let on = if sel { n.sel } else { n.id == id };
+                    let end = n.end();
+                    if !on || q <= n.qn0 + 1e-6 || q >= end - 1e-6 {
+                        continue;
+                    }
+                    if left {
+                        n.qn0 = q;
+                        n.len = end - q;
+                    } else {
+                        n.len = q - n.qn0;
+                    }
+                    k += 1;
+                }
+                self.commit_if(
+                    k,
+                    if left {
+                        "CP Editor: trim note start"
+                    } else {
+                        "CP Editor: trim note end"
+                    },
+                )
+            }
+            H::FadeIn | H::FadeOut => Vec::new(),
+        }
+    }
+
+    /// Le curseur de REAPER a montrer : celui du geste en cours, sinon celui
+    /// que ferait un geste ici avec ces touches (Ctrl sur une note : la
+    /// copie ; Alt : la gomme ; un bord : la longueur...), comme l'editeur MIDI
+    /// de REAPER et la table souris de Cedric.
+    pub fn pointer(&self, x: f32, y: f32, m: Mods) -> cp_ui::Pointer {
+        use cp_ui::Pointer as P;
+        if let Some(d) = &self.drag {
+            match d {
+                Drag::Hand { .. } => return P::HandScroll,
+                Drag::Marquee { .. } => return P::Marquee,
+                Drag::Move {
+                    copy, axis, arp, ..
+                } => {
+                    return if *arp {
+                        P::NoteArp
+                    } else if *copy {
+                        P::NoteCopy
+                    } else {
+                        match axis {
+                            1 => P::NoteMoveH,
+                            2 => P::NoteMoveV,
+                            _ => P::Arrow,
+                        }
+                    };
+                }
+                Drag::Edge { left, stretch, .. } => {
+                    return match (*left, *stretch) {
+                        (true, false) => P::NoteEdgeLeft,
+                        (false, false) => P::NoteEdgeRight,
+                        (true, true) => P::NoteStretchLeft,
+                        (false, true) => P::NoteStretchRight,
+                    };
+                }
+                Drag::Insert { .. } => return P::NoteDraw,
+                Drag::Paint { .. } => return P::NotePaint,
+                Drag::Chords { .. } => return P::NoteChord,
+                Drag::Erase { .. } => return P::NoteErase,
+                Drag::Vel { .. } => return P::NoteVel,
+                Drag::Range { .. } => return P::TimeSelEdge,
+                Drag::HScroll { .. } | Drag::VScroll { .. } => return P::Arrow,
+                Drag::Audio { what, .. } => return Self::audio_pointer(*what),
+                Drag::Press { .. } => {}
+            }
+        }
+        match self.hit(x, y) {
+            Hit::Note { part, .. } => match part {
+                Part::Left if m.alt => P::NoteStretchLeft,
+                Part::Right if m.alt => P::NoteStretchRight,
+                Part::Left => P::NoteEdgeLeft,
+                Part::Right => P::NoteEdgeRight,
+                Part::Body => match (m.shift, m.ctrl, m.alt, m.win) {
+                    (true, true, true, false) => P::NoteMoveV,
+                    (_, true, false, true) => P::NoteArp,
+                    (false, true, false, false) => P::NoteCopy,
+                    (_, false, true, false) => P::NoteErase,
+                    _ => P::Arrow,
+                },
+            },
+            Hit::Grid => match (m.shift, m.ctrl, m.alt) {
+                (true, true, true) => P::NoteChord,
+                (false, true, true) => P::NotePaint,
+                (_, false, true) => P::NoteErase,
+                (false, true, false) => P::NoteCopy,
+                _ => P::NoteDraw,
+            },
+            Hit::Vel(_) | Hit::VelLane => P::NoteVel,
+            h @ (Hit::Wave
+            | Hit::EdgeL
+            | Hit::EdgeR
+            | Hit::FadeIn
+            | Hit::FadeOut
+            | Hit::Gain) => Self::audio_pointer(h),
+            _ => P::Arrow,
+        }
+    }
+
+    fn audio_pointer(h: Hit) -> cp_ui::Pointer {
+        use cp_ui::Pointer as P;
+        match h {
+            Hit::EdgeL => P::TrimLeft,
+            Hit::EdgeR => P::TrimRight,
+            Hit::FadeIn => P::FadeIn,
+            Hit::FadeOut => P::FadeOut,
+            Hit::Gain => P::ItemVol,
+            Hit::Wave => P::IBeam,
+            _ => P::Arrow,
+        }
+    }
+
     /// La ligne a la souris : sur la grille et la regle, calee sur la grille
     /// si le magnetisme est la (la ou un clic poserait le curseur).
     fn guide_at(&mut self, x: f32, y: f32) {
@@ -635,7 +802,7 @@ impl Ed {
         let over = x >= l.sx && x < l.sx + l.sw && y >= l.top && y < l.hs_y;
         self.guide_q = if self.guide.on && over && !matches!(self.clip, Clip::None) {
             let q = self.qn_of(x);
-            Some(if self.guide.snap { self.snap_near(q, true) } else { q })
+            Some(self.snap_near(q, self.guide.snaps(self.mouse.2)))
         } else {
             None
         };

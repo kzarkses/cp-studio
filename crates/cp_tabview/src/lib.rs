@@ -336,6 +336,9 @@ pub struct Item {
     pub frame_qn: Vec<f64>,
     pub env: Vec<f32>,
     pub onset: Vec<f32>,
+    /// Les fondus (noires) : leur longueur depuis le debut, avant la fin.
+    pub fade_in: f64,
+    pub fade_out: f64,
     /// La forme d'onde de REAPER sur tout l'item : (min, max) par colonne,
     /// colonnes egales de `qn0` a `qn1`.
     pub peaks: Vec<(f32, f32)>,
@@ -428,6 +431,18 @@ pub enum Hit {
         t: usize,
         i: usize,
         lane: Lane,
+    },
+    /// Le bord d'une prise (le rognage, comme dans l'arrangement).
+    ItemEdge {
+        t: usize,
+        i: usize,
+        left: bool,
+    },
+    /// La poignee d'un fondu (en haut, a la fin du fondu).
+    ItemFade {
+        t: usize,
+        i: usize,
+        fade_in: bool,
     },
     /// Une couche, hors des items.
     Lane {
@@ -589,6 +604,26 @@ pub enum Act {
     },
     /// La transcription automatique a ete allumee ou coupee ([`Arr::auto`]).
     Auto,
+    /// Une prise rognee : ses nouveaux bords (noires) ; son MIDI suit.
+    TrimItem {
+        t: usize,
+        i: usize,
+        qn0: f64,
+        qn1: f64,
+    },
+    /// Un fondu : sa longueur (noires).
+    FadeItem {
+        t: usize,
+        i: usize,
+        fade_in: bool,
+        len: f64,
+    },
+    /// Une prise coupee en deux (avec son MIDI).
+    SplitItem {
+        t: usize,
+        i: usize,
+        qn: f64,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -635,6 +670,24 @@ enum Drag {
         qn0: f64,
         to: usize,
         copy: bool,
+    },
+    /// Le bord d'une prise qu'on tire : `q0` le bord d'origine, `q` ou il
+    /// irait (cale par le magnetisme de REAPER, Maj : sans).
+    Trim {
+        t: usize,
+        i: usize,
+        left: bool,
+        qp: f64,
+        q0: f64,
+        q: f64,
+        moved: bool,
+    },
+    /// La poignee d'un fondu qu'on tire : sa longueur (noires).
+    Fade {
+        t: usize,
+        i: usize,
+        fade_in: bool,
+        len: f64,
     },
     /// Le bouton du milieu (comme dans REAPER) : la vue suit la main. Sur la
     /// regle, un geste vertical zoome autour de la noire saisie.
@@ -730,6 +783,9 @@ pub struct Arr {
     dirty: bool,
     /// Les zones a redessiner quand tout ne l'est pas (un survol).
     damage: Vec<cp_gfx::IRect>,
+    /// La souris : sa place et les touches tenues (les editions au survol,
+    /// le curseur).
+    mouse: (f32, f32, Mods),
     /// Le bas des pistes a l'ecran (les traits s'y arretent).
     pub(crate) tracks_bottom: f32,
 }
@@ -777,6 +833,7 @@ impl Arr {
             guide_q: None,
             damage: Vec::new(),
             tracks_bottom: 0.0,
+            mouse: (0.0, 0.0, Mods::default()),
         }
     }
 
@@ -1024,11 +1081,181 @@ impl Arr {
     }
 
     pub fn hit(&self, x: f32, y: f32) -> Hit {
-        self.boxes
+        let Some(b) = self
+            .boxes
             .iter()
             .rev()
             .find(|b| x >= b.0 && x < b.0 + b.2 && y >= b.1 && y < b.1 + b.3)
-            .map_or(Hit::None, |b| b.4)
+        else {
+            return Hit::None;
+        };
+        // Une prise, comme dans l'arrangement : ses bords se rognent, ses
+        // coins du haut tirent les fondus.
+        if let Hit::Item { t, i, lane } = b.4 {
+            if matches!(lane, Lane::Audio | Lane::Midi) {
+                if let Some(it) = self.item(t, i) {
+                    let (xa, xb) = (self.x_of(it.qn0), self.x_of(it.qn1));
+                    let e = (5.0 * self.scale).min((xb - xa) / 4.0).max(1.0);
+                    if lane == Lane::Audio && y < b.1 + 9.0 * self.scale {
+                        let mid = (xa + xb) * 0.5;
+                        let fi = self.x_of(it.qn0 + it.fade_in);
+                        let fo = self.x_of(it.qn1 - it.fade_out);
+                        if (x - fi).abs() <= e && x < mid {
+                            return Hit::ItemFade { t, i, fade_in: true };
+                        }
+                        if (x - fo).abs() <= e && x >= mid {
+                            return Hit::ItemFade {
+                                t,
+                                i,
+                                fade_in: false,
+                            };
+                        }
+                    }
+                    if x - xa < e {
+                        return Hit::ItemEdge { t, i, left: true };
+                    }
+                    if xb - x <= e {
+                        return Hit::ItemEdge { t, i, left: false };
+                    }
+                }
+            }
+        }
+        b.4
+    }
+
+    /// La prise sous la souris (ou qu'elle soit dans ses couches).
+    fn item_under(&self, x: f32, y: f32) -> Option<(usize, usize)> {
+        match self.hit(x, y) {
+            Hit::Item { t, i, .. }
+            | Hit::ItemEdge { t, i, .. }
+            | Hit::ItemFade { t, i, .. }
+            | Hit::Note { t, i, .. }
+            | Hit::Ghost { t, i, .. }
+            | Hit::TabLine { t, i, .. }
+            | Hit::Transcribe { t, i } => Some((t, i)),
+            _ => None,
+        }
+    }
+
+    /// Une edition au survol (les touches de Cedric) : sur la prise sous la
+    /// souris, a la place de la souris calee par le magnetisme de REAPER ;
+    /// sur une note, Supprimer l'efface.
+    pub fn hover_edit(&mut self, e: cp_ui::HoverEdit) -> Option<Act> {
+        use cp_ui::HoverEdit as H;
+        let (x, y, m) = self.mouse;
+        if e == H::Delete {
+            if let Hit::Note { t, i, n } = self.hit(x, y) {
+                self.select(Some(Sel {
+                    t,
+                    i: Some(i),
+                    n: Some(n),
+                }));
+                return self.delete_note();
+            }
+        }
+        let (t, i) = self.item_under(x, y)?;
+        let it = self.item(t, i)?;
+        let (q0, q1) = (it.qn0, it.qn1);
+        let raw = self.qn_of(x);
+        let q = if m.shift { raw } else { self.snap_item(raw) };
+        let inside = q > q0 + 1e-6 && q < q1 - 1e-6;
+        match e {
+            H::Delete => Some(Act::DeleteItem { t, i }),
+            H::TrimLeft if inside => Some(Act::TrimItem { t, i, qn0: q, qn1: q1 }),
+            H::TrimRight if inside => Some(Act::TrimItem { t, i, qn0: q0, qn1: q }),
+            H::Split if inside => Some(Act::SplitItem { t, i, qn: q }),
+            H::FadeIn if inside => Some(Act::FadeItem {
+                t,
+                i,
+                fade_in: true,
+                len: q - q0,
+            }),
+            H::FadeOut if inside => Some(Act::FadeItem {
+                t,
+                i,
+                fade_in: false,
+                len: q1 - q,
+            }),
+            _ => None,
+        }
+    }
+
+    /// Le curseur de REAPER a montrer : celui du geste en cours, sinon celui
+    /// que ferait un geste ici avec ces touches (Ctrl sur une prise : la
+    /// copie...).
+    pub fn pointer(&self, x: f32, y: f32, m: Mods) -> cp_ui::Pointer {
+        use cp_ui::Pointer as P;
+        match self.drag {
+            Some(Drag::Item { copy, .. }) => {
+                return if copy { P::ItemCopy } else { P::ItemMove };
+            }
+            Some(Drag::Trim { left, .. }) => {
+                return if left { P::TrimLeft } else { P::TrimRight };
+            }
+            Some(Drag::Fade { fade_in, .. }) => {
+                return if fade_in { P::FadeIn } else { P::FadeOut };
+            }
+            Some(Drag::Hand { .. }) => return P::HandScroll,
+            Some(Drag::Range { .. }) => return P::TimeSelEdge,
+            Some(_) => return P::Arrow,
+            None => {}
+        }
+        match self.hit(x, y) {
+            Hit::Item {
+                lane: Lane::Audio | Lane::Midi,
+                ..
+            } => {
+                if m.ctrl {
+                    P::ItemCopy
+                } else {
+                    P::ItemMove
+                }
+            }
+            Hit::ItemEdge { left, .. } => {
+                if left {
+                    P::TrimLeft
+                } else {
+                    P::TrimRight
+                }
+            }
+            Hit::ItemFade { fade_in, .. } => {
+                if fade_in {
+                    P::FadeIn
+                } else {
+                    P::FadeOut
+                }
+            }
+            Hit::Lane { .. } => P::IBeam,
+            _ => P::Arrow,
+        }
+    }
+
+    /// Le bord qu'on tire et ou il irait (le dessin le montre).
+    pub(crate) fn trim_preview(&self) -> Option<(usize, usize, bool, f64)> {
+        match self.drag {
+            Some(Drag::Trim {
+                t,
+                i,
+                left,
+                q,
+                moved: true,
+                ..
+            }) => Some((t, i, left, q)),
+            _ => None,
+        }
+    }
+
+    /// Le fondu qu'on tire : sa longueur (le dessin la montre).
+    pub(crate) fn fade_preview(&self) -> Option<(usize, usize, bool, f64)> {
+        match self.drag {
+            Some(Drag::Fade {
+                t,
+                i,
+                fade_in,
+                len,
+            }) => Some((t, i, fade_in, len)),
+            _ => None,
+        }
     }
 
     /// Ou est une cible a l'ecran (tests, auto-test).
@@ -1219,7 +1446,8 @@ impl Arr {
     /// Un evenement de la fenetre ; rend ce que le module doit faire.
     pub fn event(&mut self, ev: &Ev) -> Option<Act> {
         match *ev {
-            Ev::Move { x, y, .. } => {
+            Ev::Move { x, y, mods } => {
+                self.mouse = (x, y, mods);
                 match self.drag {
                     Some(Drag::Note {
                         t,
@@ -1286,6 +1514,57 @@ impl Arr {
                             qn0: q,
                             to,
                             copy: m.ctrl,
+                        });
+                        self.dirty = true;
+                        return None;
+                    }
+                    Some(Drag::Trim {
+                        t,
+                        i,
+                        left,
+                        qp,
+                        q0,
+                        moved,
+                        ..
+                    }) => {
+                        let (lo, hi) = {
+                            let it = self.item(t, i)?;
+                            (it.qn0, it.qn1)
+                        };
+                        let raw = q0 + (self.qn_of(x) - qp);
+                        let q = if mods.shift { raw } else { self.snap_item(raw) };
+                        let min = 1.0 / 64.0;
+                        let q = if left {
+                            q.clamp(0.0, hi - min)
+                        } else {
+                            q.max(lo + min)
+                        };
+                        let moved = moved || (q - q0).abs() > 1e-9;
+                        self.drag = Some(Drag::Trim {
+                            t,
+                            i,
+                            left,
+                            qp,
+                            q0,
+                            q,
+                            moved,
+                        });
+                        self.dirty = true;
+                        return None;
+                    }
+                    Some(Drag::Fade { t, i, fade_in, .. }) => {
+                        let (lo, hi) = {
+                            let it = self.item(t, i)?;
+                            (it.qn0, it.qn1)
+                        };
+                        let raw = self.qn_of(x);
+                        let q = if mods.shift { raw } else { self.snap_item(raw) };
+                        let len = if fade_in { q - lo } else { hi - q }.clamp(0.0, hi - lo);
+                        self.drag = Some(Drag::Fade {
+                            t,
+                            i,
+                            fade_in,
+                            len,
                         });
                         self.dirty = true;
                         return None;
@@ -1422,6 +1701,30 @@ impl Arr {
                         }
                         Some(Act::MoveItem { t, i, qn0, to })
                     }
+                    Some(Drag::Trim {
+                        t,
+                        i,
+                        left,
+                        q,
+                        moved: true,
+                        ..
+                    }) => {
+                        let it = self.item(t, i)?;
+                        let (a, b) = if left { (q, it.qn1) } else { (it.qn0, q) };
+                        Some(Act::TrimItem {
+                            t,
+                            i,
+                            qn0: a,
+                            qn1: b,
+                        })
+                    }
+                    Some(Drag::Trim { qp, .. }) => Some(Act::Seek(qp)),
+                    Some(Drag::Fade {
+                        t,
+                        i,
+                        fade_in,
+                        len,
+                    }) => Some(Act::FadeItem { t, i, fade_in, len }),
                     _ => None,
                 }
             }
@@ -1484,7 +1787,11 @@ impl Arr {
         let over = x >= l.sx && x < l.sx + l.sw && y >= l.top && y < l.bottom - l.hs_h;
         self.guide_q = if self.guide.on && over {
             let q = self.qn_of(x);
-            Some(if self.guide.snap { self.snap_item(q) } else { q })
+            Some(if self.guide.snaps(self.mouse.2) {
+                self.snap_item(q)
+            } else {
+                q
+            })
         } else {
             None
         };
@@ -1550,6 +1857,41 @@ impl Arr {
                     let q = self.item(t, i)?.snap(self.qn_of(x));
                     Some(Act::Seek(q))
                 }
+            }
+            Hit::ItemEdge { t, i, left } => {
+                self.select(Some(Sel {
+                    t,
+                    i: Some(i),
+                    n: None,
+                }));
+                let it = self.item(t, i)?;
+                let q0 = if left { it.qn0 } else { it.qn1 };
+                self.drag = Some(Drag::Trim {
+                    t,
+                    i,
+                    left,
+                    qp: self.qn_of(x),
+                    q0,
+                    q: q0,
+                    moved: false,
+                });
+                None
+            }
+            Hit::ItemFade { t, i, fade_in } => {
+                self.select(Some(Sel {
+                    t,
+                    i: Some(i),
+                    n: None,
+                }));
+                let it = self.item(t, i)?;
+                let len = if fade_in { it.fade_in } else { it.fade_out };
+                self.drag = Some(Drag::Fade {
+                    t,
+                    i,
+                    fade_in,
+                    len,
+                });
+                None
             }
             Hit::Item { t, i, lane } => {
                 self.select(Some(Sel {
