@@ -19,7 +19,7 @@ use cp_tab::engrave::Engraved;
 use cp_ui::Theme;
 
 use crate::draw::{self, Geo, Warp};
-use crate::{HBox, Hit, Item, Lane, Lanes};
+use crate::{HBox, Hit, Item, Lane, Lanes, Track};
 
 pub const DPI: f32 = 300.0;
 /// A4 a 300 DPI.
@@ -197,6 +197,36 @@ fn rows(score: bool, tab: bool, nstr: usize) -> Rows {
         tab: tab_top,
         h: y,
     }
+}
+
+/// Une guitare entiere en une partition : ses items transcrits, bout a
+/// bout (un morceau fait de plusieurs prises). Leurs notes sont en noires du
+/// projet : elles se rejoignent telles quelles, un trou entre deux items
+/// devient des silences. L'origine, la mesure, la grille, le tempo et
+/// l'accord sont ceux du premier ; le nom, celui de la piste.
+pub fn whole_track(tr: &Track) -> Option<Item> {
+    let mut items: Vec<&Item> = tr.items.iter().filter(|it| !it.doc.is_empty()).collect();
+    items.sort_by(|a, b| a.qn0.total_cmp(&b.qn0));
+    let first = *items.first()?;
+    let last = *items.last()?;
+    let mut doc: Vec<cp_tab::doc::TNote> =
+        items.iter().flat_map(|it| it.doc.iter().cloned()).collect();
+    cp_tab::doc::sort(&mut doc);
+    let mut it = Item {
+        guid: first.guid.clone(),
+        take: first.take.clone(),
+        name: tr.head.name.clone(),
+        qn0: first.qn0,
+        qn1: last.qn1,
+        origin_qn: first.origin_qn,
+        sig: first.sig,
+        bpm: first.bpm,
+        detect: first.detect.clone(),
+        dropped: items.iter().map(|it| it.dropped).sum(),
+        ..Item::default()
+    };
+    it.set_doc(doc);
+    Some(it)
 }
 
 /// Ce que la mise en pages a produit.

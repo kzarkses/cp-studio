@@ -1947,3 +1947,63 @@ fn chaque_survol_se_redessine_tout_de_suite() {
         bad.join("\n")
     );
 }
+
+/// Une guitare entiere en une partition : ses items bout a bout (un
+/// morceau fait de plusieurs prises), le nom de la piste ; un trou entre
+/// deux items devient des mesures de silence ; un item sans tablature ne
+/// compte pas.
+#[test]
+fn une_guitare_entiere_s_exporte() {
+    let v = arranger();
+    let tr = &v.tracks[0];
+    let n: usize = tr.items.iter().map(|it| it.doc.len()).sum();
+    let mut it = print::whole_track(tr).unwrap();
+    assert_eq!(it.name, "Rhythm");
+    assert_eq!(it.doc.len(), n);
+    assert!((it.origin_qn - 32.0).abs() < 1e-9);
+    // Les items A (mesures 9 et 10) et B (11 et 12) : quatre mesures.
+    assert_eq!(it.engraved().measures, 4);
+    // B deux mesures plus loin : deux mesures de silence entre eux.
+    let mut tr2 = tr.clone();
+    let b = &mut tr2.items[1];
+    let moved: Vec<_> = b
+        .doc
+        .iter()
+        .cloned()
+        .map(|mut x| {
+            x.qn0 += 8.0;
+            x.qn1 += 8.0;
+            x
+        })
+        .collect();
+    b.qn0 += 8.0;
+    b.qn1 += 8.0;
+    b.set_doc(moved);
+    // Dans le desordre : l'ordre du temps decide.
+    tr2.items.swap(0, 1);
+    tr2.items.push(Item::default());
+    let mut it2 = print::whole_track(&tr2).unwrap();
+    assert!((it2.origin_qn - 32.0).abs() < 1e-9);
+    let eng = it2.engraved().clone();
+    assert_eq!(eng.measures, 6);
+    let empty: Vec<i64> = (0..eng.measures)
+        .filter(|&m| {
+            eng.signs
+                .iter()
+                .filter(|s| s.measure == m)
+                .all(|s| eng.events[s.ev].notes.is_empty())
+        })
+        .collect();
+    assert_eq!(empty, vec![2, 3]);
+    // Le PDF de la guitare entiere.
+    let mut bench = Bench::new(10, 10);
+    let p = print::pdf(&it2, tr2.head.lanes, &mut bench.t);
+    assert_eq!(p.measures, 6);
+    assert!(p.pdf.starts_with(b"%PDF"));
+    // Rien a exporter : aucun item transcrit.
+    let mut none = tr.clone();
+    for it in &mut none.items {
+        it.set_doc(Vec::new());
+    }
+    assert!(print::whole_track(&none).is_none());
+}

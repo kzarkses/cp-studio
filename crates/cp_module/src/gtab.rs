@@ -1999,9 +1999,38 @@ impl App {
         let Some(it) = self.gt.arr.item(t, i).cloned() else {
             return;
         };
+        self.gtab_write_pdf(&it, t);
+    }
+
+    /// Une guitare entiere (ses items bout a bout) en PDF, ou en MusicXML.
+    fn gtab_export_track(&mut self, t: usize, pdf: bool) {
+        let Some(it) = self
+            .gt
+            .arr
+            .tracks
+            .get(t)
+            .and_then(cp_tabview::print::whole_track)
+        else {
+            self.gt.arr.status = "Nothing to export".into();
+            return;
+        };
+        if pdf {
+            self.gtab_write_pdf(&it, t);
+        } else {
+            let (p, _) = self.gtab_export_item(&it);
+            self.gt.arr.status = match p {
+                Some(p) => format!("Exported: {}", p.display()),
+                None => "Export failed".into(),
+            };
+        }
+    }
+
+    /// Les pages d'une partition (un item, ou une guitare reunie) ; les
+    /// couches de la piste `t` decident (la partition, la tab, les deux).
+    fn gtab_write_pdf(&mut self, it: &Item, t: usize) {
         let lanes = self.gt.arr.tracks[t].head.lanes;
         let t0 = std::time::Instant::now();
-        let p = cp_tabview::print::pdf(&it, lanes, &mut self.text);
+        let p = cp_tabview::print::pdf(it, lanes, &mut self.text);
         let dir = self.gtab_dir();
         let _ = std::fs::create_dir_all(&dir);
         let path = free_path(&dir, &clean_name(&it.name), "pdf");
@@ -2735,6 +2764,11 @@ impl App {
         let Some(h) = self.gt.arr.tracks.get(t).map(|x| x.head.clone()) else {
             return;
         };
+        // Une partition a exporter : au moins un item transcrit.
+        let has_tab = self.gt.arr.tracks[t]
+            .items
+            .iter()
+            .any(|it| !it.doc.is_empty());
         // Les couches de la piste, cochees quand elles sont montrees.
         let lane = |id: u32, l: Lane| {
             Some(MenuItem {
@@ -2764,6 +2798,19 @@ impl App {
             }),
             None,
             Some(MenuItem {
+                id: 4,
+                text: "Export PDF",
+                checked: false,
+                enabled: has_tab,
+            }),
+            Some(MenuItem {
+                id: 5,
+                text: "Export MusicXML",
+                checked: false,
+                enabled: has_tab,
+            }),
+            None,
+            Some(MenuItem {
                 id: 3,
                 text: "Delete guitar track",
                 checked: false,
@@ -2777,6 +2824,8 @@ impl App {
                     self.gtab_act(a);
                 }
             }
+            4 => self.gtab_export_track(t, true),
+            5 => self.gtab_export_track(t, false),
             1 => {
                 if let Some(n) = r.user_inputs("Rename guitar track", 1, "Name", &h.name) {
                     let n = n.trim().to_string();
