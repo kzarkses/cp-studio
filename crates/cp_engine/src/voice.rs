@@ -82,6 +82,8 @@ pub(crate) struct Voice {
     pub pan: f32,
     pub loop_start: Frame,
     pub loop_end: Frame,
+    /// Le fondu enchaine au point de boucle (secondes source).
+    pub loop_xf: f64,
     // --- fondus
     pub fade_in_len: i32,
     pub fade_in_cur: i32,
@@ -193,6 +195,7 @@ impl Voice {
             tempo: 1.0,
             pshift: 1.0,
             sh_fresh: true,
+            loop_xf: 0.0,
         };
         v.reset();
         v
@@ -208,6 +211,7 @@ impl Voice {
         self.tempo = 1.0;
         self.pshift = 1.0;
         self.sh_fresh = true;
+        self.loop_xf = 0.0;
         self.state = state::IDLE;
         self.port = -1;
         self.clip = None;
@@ -447,11 +451,70 @@ impl Voice {
             let l = data[s];
             (l, if cnch > 1 { data[s + 1] } else { l })
         };
-        let read = |q: f64| -> (f32, f32) {
+        // Le fondu enchaine au point de boucle : sa longueur en frames
+        // source (bornee par la matiere avant la boucle et par sa moitie).
+        let xf = if looping && self.loop_xf > 0.0 {
+            ((self.loop_xf * c.srate().max(1.0)) as Frame)
+                .min(src_start)
+                .min(span / 2)
+                .max(0)
+        } else {
+            0
+        };
+        // La matiere hors de la region (le partenaire du fondu, avant le
+        // debut de la boucle), lue sur tout le clip.
+        let tap_all = |m: Frame| -> (f32, f32) {
+            if m < 0 || m >= avail.min(cf) {
+                return (0.0, 0.0);
+            }
+            let s = m as usize * cnch;
+            let l = data[s];
+            (l, if cnch > 1 { data[s + 1] } else { l })
+        };
+        let read_plain = |q: f64| -> (f32, f32) {
             match hq {
                 Some(k) => k.read(q, step, tap),
                 None => read_at(data, cnch, cf, q, unity, looping, src_start, src_end),
             }
+        };
+        // Avec un fondu au point de boucle, la matiere se lit sans
+        // repliement (le fondu fait la couture) : la vraie matiere de part et
+        // d'autre de la boucle.
+        let read_free = |q: f64| -> (f32, f32) {
+            match hq {
+                Some(k) => k.read(q, step, tap_all),
+                None if unity => tap_all(q.floor() as Frame),
+                None => {
+                    let i0 = q.floor() as Frame;
+                    let ft = (q - i0 as f64) as f32;
+                    let (a0, a1, a2, a3) = (
+                        tap_all(i0 - 1),
+                        tap_all(i0),
+                        tap_all(i0 + 1),
+                        tap_all(i0 + 2),
+                    );
+                    (
+                        hermite(a0.0, a1.0, a2.0, a3.0, ft),
+                        hermite(a0.1, a1.1, a2.1, a3.1, ft),
+                    )
+                }
+            }
+        };
+        let read = |q: f64| -> (f32, f32) {
+            if xf <= 0 {
+                return read_plain(q);
+            }
+            let (l, r) = read_free(q);
+            if q < (src_end - xf) as f64 || q >= src_end as f64 {
+                return (l, r);
+            }
+            // Dans les `xf` dernieres frames : la fin descend, la matiere
+            // d'avant la boucle monte (a puissance constante).
+            let t = ((q - (src_end - xf) as f64) / xf as f64) as f32;
+            let a = (t * std::f32::consts::FRAC_PI_2).cos();
+            let b = (t * std::f32::consts::FRAC_PI_2).sin();
+            let (pl, pr) = read_free(q - span as f64);
+            (l * a + pl * b, r * a + pr * b)
         };
         // --- l'etirement : le bloc entier sort d'abord de l'etireur, nourri
         // de matiere lue a la tete (meme boucle, meme sens, memes bornes).

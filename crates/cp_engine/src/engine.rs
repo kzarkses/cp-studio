@@ -780,6 +780,7 @@ fn set_param(v: &mut Voice, param: Param, x: f64, srate: f64, xf: i32) {
         }
         Param::Interp => v.interp = if x >= 0.5 { 1 } else { 0 },
         Param::Tempo => v.tempo = if x > 0.01 { x.min(20.0) } else { 1.0 },
+        Param::LoopXfade => v.loop_xf = x.clamp(0.0, 10.0),
         Param::Shift => v.pshift = if x > 0.01 { x.min(20.0) } else { 1.0 },
         Param::Reverse => {
             v.reverse = x != 0.0;

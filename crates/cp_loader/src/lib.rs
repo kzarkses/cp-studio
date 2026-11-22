@@ -518,9 +518,10 @@ fn toggle_state(cmd: i32) -> i32 {
 
 fn param_from(n: u32) -> Option<cp_engine::Param> {
     use cp_engine::Param::*;
-    const ALL: [cp_engine::Param; 23] = [
+    const ALL: [cp_engine::Param; 24] = [
         Rate, Gain, Pan, LoopStart, LoopEnd, FadeIn, FadeOut, Pos, Loop, Env, Attack, Decay,
         Sustain, Release, ACurve, DCurve, RCurve, Gate, EnvPts, Interp, Reverse, Tempo, Shift,
+        LoopXfade,
     ];
     ALL.iter().copied().find(|p| *p as u32 == n)
 }

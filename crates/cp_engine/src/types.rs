@@ -132,4 +132,9 @@ pub enum Param {
     /// La hauteur sans changer la duree, en rapport (2 = une octave
     /// au-dessus), par l'etireur. 1 = sans.
     Shift,
+    /// Le fondu enchaine au point de boucle, en secondes source : la fin
+    /// de la boucle se melange (a puissance constante) a la matiere qui
+    /// precede son debut, et le saut ne s'entend plus. Borne par la matiere
+    /// avant le debut de la boucle et par la moitie de la boucle. 0 = sans.
+    LoopXfade,
 }

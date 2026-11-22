@@ -669,3 +669,55 @@ fn le_tempo_en_temps_reel() {
         (0, 0, 0)
     );
 }
+
+/// Une boucle dont la fin ne rejoint pas le debut (1000 frames d'un La :
+/// 9,17 periodes) claque a chaque tour ; avec un fondu enchaine de 5 ms au
+/// point de boucle, plus aucun saut. Sans fondu, le son reste celui de
+/// toujours.
+#[test]
+fn le_fondu_au_point_de_boucle() {
+    let s = sine(440.0, 48000);
+    let run = |xf: f64, interp: f64| -> f64 {
+        let mut h = AudioHost::new(None, 48000.0);
+        let c = h.load_samples(s.clone(), 1, 48000.0).unwrap();
+        block(&mut h, 0, 64);
+        let v = h.play(0, c, 4800, 5800, true, 1.0).unwrap();
+        h.set(v, Param::LoopXfade, xf);
+        h.set(v, Param::Interp, interp);
+        let mut got = Vec::new();
+        for _ in 0..12 {
+            got.extend(block(&mut h, 0, 256).chunks(2).map(|f| f[0]));
+        }
+        // Le plus grand saut d'un echantillon au suivant, hors du depart.
+        got.windows(2)
+            .skip(100)
+            .map(|w| (w[1] - w[0]).abs())
+            .fold(0.0, f64::max)
+    };
+    let natural = 2.0 * std::f64::consts::PI * 440.0 / 48000.0;
+    let (hard, soft) = (run(0.0, 0.0), run(0.005, 0.0));
+    eprintln!(
+        "saut au point de boucle : {hard:.3} sans fondu, {soft:.4} avec (une sinusoide : {natural:.4})"
+    );
+    assert!(hard > 0.3, "{hard}");
+    assert!(soft < natural * 1.3, "{soft}");
+    // A vitesse 1,3 en sinc, aussi.
+    let mut h = AudioHost::new(None, 48000.0);
+    let c = h.load_samples(s.clone(), 1, 48000.0).unwrap();
+    block(&mut h, 0, 64);
+    let v = h.play(0, c, 4800, 5800, true, 1.0).unwrap();
+    h.set(v, Param::LoopXfade, 0.005);
+    h.set(v, Param::Rate, 1.3);
+    h.set(v, Param::Interp, 1.0);
+    let mut got = Vec::new();
+    for _ in 0..12 {
+        got.extend(block(&mut h, 0, 256).chunks(2).map(|f| f[0]));
+    }
+    let worst = got
+        .windows(2)
+        .skip(100)
+        .map(|w| (w[1] - w[0]).abs())
+        .fold(0.0, f64::max);
+    eprintln!("a 1,3 en sinc : {worst:.4}");
+    assert!(worst < natural * 1.3 * 1.3 + 0.01, "{worst}");
+}
