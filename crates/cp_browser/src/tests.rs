@@ -727,3 +727,22 @@ fn le_calage_au_tempo_garde_la_hauteur() {
     assert!(b.voice_map.is_none());
     assert!((h.rate - 1.0).abs() < 1e-9 || !b.sync);
 }
+
+/// Les boutons de la barre s'expliquent en infobulle (rien a l'ecran) ; la
+/// liste n'en a pas.
+#[test]
+fn la_barre_s_explique_en_infobulle() {
+    let root = library();
+    let b = {
+        let mut b = Browser::new(places(&root), Path::new("."), Vec::new());
+        b.layout(460.0, 520.0, 1.0);
+        b
+    };
+    let l = b.lay;
+    let at = |x: f32| b.tip_at(x + 2.0, l.bar_h * 0.5).map(|t| t.0);
+    assert!(at(l.sync_x).unwrap().contains("keeping the pitch"));
+    assert!(at(l.view_x).unwrap().contains("Samples view"));
+    assert!(at(l.star_x).unwrap().contains("Favorite"));
+    assert!(at(l.play_x).unwrap().contains("Space"));
+    assert!(b.tip_at(10.0, l.list_y + 10.0).is_none());
+}

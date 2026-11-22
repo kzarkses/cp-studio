@@ -332,6 +332,12 @@ pub(crate) enum WinOp {
 struct View {
     hwnd: Hwnd,
     place: Place,
+    /// L'infobulle : ce qu'elle explique (et depuis quand la souris y est),
+    /// et la bulle de Windows.
+    tip_key: Option<(String, std::time::Instant)>,
+    tip: Option<ui::Tooltip>,
+    tip_shown: bool,
+    mouse: (f32, f32),
     surf: Surface,
     present: Vec<u32>,
     /// Ce qui est a l'ecran (pour n'envoyer que ce qui change).
@@ -584,6 +590,10 @@ impl App {
             frames_on: false,
             closing: false,
             perf: Perf::default(),
+            tip_key: None,
+            tip: None,
+            tip_shown: false,
+            mouse: (-1.0, -1.0),
         });
         self.blook = None;
         self.browser_look();
@@ -962,13 +972,16 @@ impl App {
                         v.tracking = true;
                         ui::track_leave(hwnd);
                     }
+                    v.mouse = (x, y);
                 }
                 self.feed(Ev::Move { x, y, mods: md });
             }
             msg::MOUSELEAVE => {
                 if let Some(v) = &mut self.view {
                     v.tracking = false;
+                    v.mouse = (-1.0, -1.0);
                 }
+                self.browser_tip_hide();
                 self.feed(Ev::Leave);
             }
             msg::LBUTTONDOWN
@@ -1264,6 +1277,60 @@ impl App {
     }
 }
 
+impl App {
+    /// L'infobulle du navigateur : apres 0,6 s sur un bouton de la barre.
+    fn browser_tip(&mut self) {
+        let Some(v) = self.view.as_mut() else { return };
+        let (x, y) = v.mouse;
+        let now = if x < 0.0 {
+            None
+        } else {
+            self.browser.tip_at(x, y)
+        };
+        match (&now, &v.tip_key) {
+            (Some((t, _)), Some((k, _))) if t == k => {}
+            _ => {
+                v.tip_key = now
+                    .as_ref()
+                    .map(|(t, _)| (t.clone(), std::time::Instant::now()));
+                if v.tip_shown {
+                    if let Some(t) = &mut v.tip {
+                        t.hide();
+                    }
+                    v.tip_shown = false;
+                }
+                return;
+            }
+        }
+        let (Some((text, (rx, ry, _, rh))), Some((_, since))) = (now, &v.tip_key) else {
+            return;
+        };
+        if v.tip_shown || since.elapsed().as_secs_f64() < 0.6 {
+            return;
+        }
+        if v.tip.is_none() {
+            v.tip = ui::Tooltip::new(v.hwnd);
+        }
+        let (sx, sy) = ui::client_to_screen(v.hwnd, rx as i32, (ry + rh) as i32 + 6);
+        if let Some(t) = &mut v.tip {
+            t.show(&text.replace('\n', "\r\n"), sx, sy);
+            v.tip_shown = true;
+        }
+    }
+
+    fn browser_tip_hide(&mut self) {
+        if let Some(v) = self.view.as_mut() {
+            if v.tip_shown {
+                if let Some(t) = &mut v.tip {
+                    t.hide();
+                }
+            }
+            v.tip_shown = false;
+            v.tip_key = None;
+        }
+    }
+}
+
 impl Module for App {
     fn init(host: HostRef, state: &[u8]) -> Self {
         let r = host.reaper();
@@ -1516,6 +1583,7 @@ impl Module for App {
 
     fn tick(&mut self) {
         self.ticks = self.ticks.saturating_add(1);
+        self.browser_tip();
         // Une demi-seconde de battements apres le chargement : REAPER a fini
         // de se construire (ses dockers compris).
         if !self.ops.is_empty() && self.ticks >= 15 {

@@ -1405,6 +1405,60 @@ impl Browser {
         y < self.lay.bar_h && x >= self.lay.search_x && x < self.lay.search_x + self.lay.search_w
     }
 
+    /// L'infobulle de ce qui est sous la souris dans la barre (les mots ne
+    /// sont pas a l'ecran) : son texte et le rectangle qu'elle explique.
+    pub fn tip_at(&self, x: f32, y: f32) -> Option<(String, (f32, f32, f32, f32))> {
+        let l = self.lay;
+        if y >= l.bar_h {
+            return None;
+        }
+        let b = |bx: f32, w: f32| (bx, 0.0, w, l.bar_h);
+        let on = |v: bool| if v { "on" } else { "off" };
+        if self.btn_hit(x, y, l.view_x) {
+            return Some((
+                format!(
+                    "Samples view: one waveform per file ({}) \u{2014} W",
+                    on(self.samples_view)
+                ),
+                b(l.view_x, l.btn),
+            ));
+        }
+        if self.btn_hit(x, y, l.sync_x) {
+            return Some((
+                format!(
+                    "Sync to the project tempo, keeping the pitch ({}) \u{2014} T\nThe tempo is read in the file name (\u{201c}120 bpm\u{201d}).",
+                    on(self.sync)
+                ),
+                b(l.sync_x, l.btn),
+            ));
+        }
+        if self.btn_hit_w(x, y, l.loop_x, l.loop_w) {
+            return Some((
+                format!("Loop ({}) \u{2014} L", on(self.looping)),
+                b(l.loop_x, l.loop_w),
+            ));
+        }
+        if self.btn_hit_w(x, y, l.play_x, l.play_w) {
+            return Some(("Play / stop \u{2014} Space".into(), b(l.play_x, l.play_w)));
+        }
+        if self.btn_hit(x, y, l.star_x) {
+            return Some(("Favorite \u{2014} F".into(), b(l.star_x, l.btn)));
+        }
+        if x >= l.vol_x - 4.0 && x < l.vol_x + l.vol_w + 4.0 {
+            return Some((
+                format!("Preview volume: {:.0} %", self.volume * 100.0),
+                b(l.vol_x, l.vol_w),
+            ));
+        }
+        if self.in_search(x, y) {
+            return Some((
+                "Search names and REAPER's media databases \u{2014} Ctrl+F".into(),
+                b(l.search_x, l.search_w),
+            ));
+        }
+        None
+    }
+
     fn btn_hit(&self, x: f32, y: f32, bx: f32) -> bool {
         self.btn_hit_w(x, y, bx, self.lay.btn)
     }
