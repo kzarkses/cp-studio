@@ -266,6 +266,9 @@ pub struct ReaperLook {
     pub m_ruler_fg: Color,
     pub m_edit_cursor: Color,
     pub m_selbg: Color,
+    /// Le lasso de l'arrangement (clic droit glisse).
+    pub marquee_fill: Color,
+    pub marquee_outline: Color,
 }
 
 impl Default for ReaperLook {
@@ -310,6 +313,8 @@ impl Default for ReaperLook {
             m_ruler_fg: hex(0xC8C8C8),
             m_edit_cursor: hex(0x339887),
             m_selbg: a(0xFFFFFF, 0.06),
+            marquee_fill: a(0x808080, 0.3),
+            marquee_outline: hex(0xFFFFFF),
         }
     }
 }
@@ -376,6 +381,8 @@ impl ReaperLook {
             m_ruler_fg: c("midi_rulerfg", d.m_ruler_fg),
             m_edit_cursor: c("midi_editcurs", d.m_edit_cursor),
             m_selbg: ca("midi_selbg", "midi_selbg_drawmode", d.m_selbg),
+            marquee_fill: ca("marquee_fill", "marquee_drawmode", d.marquee_fill),
+            marquee_outline: c("marquee_outline", d.marquee_outline),
         }
     }
 }

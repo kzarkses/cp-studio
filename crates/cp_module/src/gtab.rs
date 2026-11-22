@@ -187,6 +187,10 @@ pub(crate) struct GPart {
     /// celui des deux qui a bouge depuis entraine l'autre, comme un groupe
     /// d'items de REAPER.
     pairs: HashMap<String, (Geo, Geo)>,
+    /// L'item MIDI de chaque prise (par le GUID de son audio).
+    midi_of: HashMap<String, String>,
+    /// L'empreinte de la selection de REAPER deja montree (`None` : a relire).
+    sel_sig: Option<u64>,
 }
 
 /// La place d'un item : debut, longueur, lane, decalage de sa prise (s).
@@ -255,6 +259,8 @@ impl GPart {
             requested: HashSet::new(),
             peak_retry: HashMap::new(),
             pairs: HashMap::new(),
+            midi_of: HashMap::new(),
+            sel_sig: None,
             key_down: None,
             view_seen: None,
             view_pushed: None,
@@ -1005,6 +1011,9 @@ impl App {
             old_heads.insert(tr.head.guid.clone(), tr.head);
         }
         let mut live: HashSet<String> = HashSet::new();
+        self.gt.midi_of.clear();
+        // Les prises sont refaites : leur selection est a relire.
+        self.gt.sel_sig = None;
         let mut tracks: Vec<Track> = Vec::new();
         let mut to_write: Vec<(String, String)> = Vec::new();
         let mut to_fix: Vec<(String, f64, f64, i32)> = Vec::new();
@@ -1077,6 +1086,7 @@ impl App {
                     todos.push((is.guid.clone(), todo));
                 }
                 if let Some(m) = midi {
+                    self.gt.midi_of.insert(is.guid.clone(), m.guid.clone());
                     // L'audio et son MIDI se tiennent comme un groupe de
                     // REAPER : celui qu'on a bouge ou rogne (ici, dans REAPER)
                     // entraine l'autre, et les notes restent ou elles sonnent
@@ -2194,6 +2204,29 @@ impl App {
                 r.refresh_arrange();
                 self.gtab_sync();
             }
+            GAct::SelectItems { items, pick } => {
+                let mut guids = Vec::new();
+                for (t, i, a, m) in items {
+                    let Some(it) = self.gt.arr.item(t, i) else {
+                        continue;
+                    };
+                    if a {
+                        guids.push(it.guid.clone());
+                    }
+                    if m {
+                        if let Some(g) = self.gt.midi_of.get(&it.guid) {
+                            guids.push(g.clone());
+                        }
+                    }
+                }
+                let mode = match pick {
+                    cp_tabview::Pick::Replace => cp_sys::items::SelMode::Replace,
+                    cp_tabview::Pick::Add => cp_sys::items::SelMode::Add,
+                    cp_tabview::Pick::Toggle => cp_sys::items::SelMode::Toggle,
+                };
+                r.select_items(&guids, mode);
+                self.gt.sel_sig = None;
+            }
             GAct::ClickItem { t, i, lane, q } => {
                 r.set_edit_cursor(r.qn_to_time(q));
                 let Some(it) = self.gt.arr.item(t, i).cloned() else {
@@ -2642,6 +2675,7 @@ impl App {
         if !rec && !self.gt.arr.dragging() {
             self.gtab_follow_selection(playing);
             self.gtab_select_pending();
+            self.gtab_picks();
         }
         if !open {
             return;
@@ -2888,6 +2922,37 @@ impl App {
             t.show(&text.replace('\n', "\r\n"), sx, sy);
         }
         w.tip_text = text;
+    }
+
+    /// Les items choisis dans REAPER s'allument ici (l'audio, le MIDI),
+    /// comme dans l'arrangement : relus quand la selection change.
+    fn gtab_picks(&mut self) {
+        let r = self.r;
+        let sig = r.item_selection_sig();
+        if self.gt.sel_sig == Some(sig) {
+            return;
+        }
+        self.gt.sel_sig = Some(sig);
+        let sel: HashSet<String> = r.selected_item_guids().into_iter().collect();
+        let mut changed = false;
+        for tr in &mut self.gt.arr.tracks {
+            for it in &mut tr.items {
+                let p = (
+                    sel.contains(&it.guid),
+                    self.gt
+                        .midi_of
+                        .get(&it.guid)
+                        .is_some_and(|m| sel.contains(m)),
+                );
+                if it.picked != p {
+                    it.picked = p;
+                    changed = true;
+                }
+            }
+        }
+        if changed {
+            self.gt.arr.mark();
+        }
     }
 
     /// Choisir dans REAPER un item d'une guitare (son audio ou son MIDI) le
@@ -3288,6 +3353,11 @@ impl App {
                     dbl: matches!(m.msg, msg::LBUTTONDBLCLK | msg::RBUTTONDBLCLK),
                     mods: md,
                 });
+                // Le clic droit ne capture que s'il commence un geste (le
+                // lasso) : un menu garde la souris libre.
+                if !left && self.gt.arr.dragging() {
+                    ui::capture(hwnd);
+                }
                 Some(0)
             }
             msg::MBUTTONDOWN | msg::MBUTTONDBLCLK => {

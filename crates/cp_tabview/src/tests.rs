@@ -1361,3 +1361,123 @@ fn le_survol_ne_laisse_pas_de_trainee() {
         bad[..bad.len().min(12)].join("\n")
     );
 }
+
+/// Le clic droit glisse : le lasso de l'arrangement. Il choisit les items
+/// qu'il touche (la couche audio : l'item audio ; le MIDI, la partition, la
+/// tab : l'item MIDI), Maj en plus, Ctrl en inversant ; un clic droit sans
+/// bouger ne change rien.
+#[test]
+fn le_lasso_choisit_les_prises() {
+    use cp_ui::Pointer as P;
+    let mut b = Bench::new(1600, 900);
+    let mut v = arranger();
+    v.rec.clear();
+    v.tracks[0].items[0].midi = true;
+    b.draw(&mut v);
+    let rect = |v: &Arr, lane| {
+        v.rect_of(Hit::Item { t: 0, i: 0, lane })
+            .expect("la couche")
+    };
+    let right = |v: &mut Arr, a: (f32, f32), z: (f32, f32), mods: Mods| {
+        v.event(&Ev::Down {
+            x: a.0,
+            y: a.1,
+            b: Button::Right,
+            dbl: false,
+            mods,
+        });
+        v.event(&Ev::Move {
+            x: z.0,
+            y: z.1,
+            mods,
+        });
+        v.event(&Ev::Up {
+            x: z.0,
+            y: z.1,
+            b: Button::Right,
+            mods,
+        })
+    };
+    let au = rect(&v, Lane::Audio);
+    let x0 = v.x_of(v.tracks[0].items[0].qn0) + 6.0;
+    // Dans la couche audio seulement.
+    let a = right(
+        &mut v,
+        (x0, au.1 + 3.0),
+        (x0 + 50.0, au.1 + au.3 - 3.0),
+        Mods::default(),
+    );
+    assert_eq!(
+        a,
+        Some(Act::SelectItems {
+            items: vec![(0, 0, true, false)],
+            pick: Pick::Replace
+        })
+    );
+    assert_eq!(v.tracks[0].items[0].picked, (true, false));
+    // Maj : la tab en plus (l'item MIDI).
+    let tab = rect(&v, Lane::Tab);
+    let shift = Mods {
+        shift: true,
+        ..Mods::default()
+    };
+    let a = right(&mut v, (x0, tab.1 + 3.0), (x0 + 50.0, tab.1 + 10.0), shift);
+    assert_eq!(
+        a,
+        Some(Act::SelectItems {
+            items: vec![(0, 0, false, true)],
+            pick: Pick::Add
+        })
+    );
+    assert_eq!(v.tracks[0].items[0].picked, (true, true));
+    // Ctrl : l'audio s'eteint, le MIDI reste.
+    let ctrl = Mods {
+        ctrl: true,
+        ..Mods::default()
+    };
+    v.event(&Ev::Down {
+        x: x0,
+        y: au.1 + 3.0,
+        b: Button::Right,
+        dbl: false,
+        mods: ctrl,
+    });
+    v.event(&Ev::Move {
+        x: x0 + 60.0,
+        y: au.1 + 20.0,
+        mods: ctrl,
+    });
+    assert_eq!(v.pointer(x0 + 60.0, au.1 + 20.0, ctrl), P::Marquee);
+    b.shot(&mut v, "10_lasso");
+    v.event(&Ev::Up {
+        x: x0 + 60.0,
+        y: au.1 + 20.0,
+        b: Button::Right,
+        mods: ctrl,
+    });
+    assert_eq!(v.tracks[0].items[0].picked, (false, true));
+    // Un clic droit sans bouger : rien.
+    let a = right(
+        &mut v,
+        (x0, au.1 + 3.0),
+        (x0 + 1.0, au.1 + 3.0),
+        Mods::default(),
+    );
+    assert_eq!(a, None);
+    assert_eq!(v.tracks[0].items[0].picked, (false, true));
+    // Un clic sur la prise la choisit seule, sa couche allumee.
+    v.event(&Ev::Down {
+        x: x0 + 20.0,
+        y: au.1 + au.3 * 0.6,
+        b: Button::Left,
+        dbl: false,
+        mods: Mods::default(),
+    });
+    v.event(&Ev::Up {
+        x: x0 + 20.0,
+        y: au.1 + au.3 * 0.6,
+        b: Button::Left,
+        mods: Mods::default(),
+    });
+    assert_eq!(v.tracks[0].items[0].picked, (true, false));
+}

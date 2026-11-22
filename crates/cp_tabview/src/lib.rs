@@ -336,6 +336,8 @@ pub struct Item {
     pub frame_qn: Vec<f64>,
     pub env: Vec<f32>,
     pub onset: Vec<f32>,
+    /// Choisi dans REAPER : (l'item audio, l'item MIDI), relu par le module.
+    pub picked: (bool, bool),
     /// Les fondus (noires) : leur longueur depuis le debut, avant la fin.
     pub fade_in: f64,
     pub fade_out: f64,
@@ -643,6 +645,12 @@ pub enum Act {
         lane: Lane,
         q: f64,
     },
+    /// Le lasso relache : les prises touchees, (piste, prise, son audio, son
+    /// MIDI), choisies dans REAPER selon `pick`.
+    SelectItems {
+        items: Vec<(usize, usize, bool, bool)>,
+        pick: Pick,
+    },
     /// Une prise coupee en deux (avec son MIDI).
     SplitItem {
         t: usize,
@@ -698,6 +706,15 @@ enum Drag {
         qn0: f64,
         to: usize,
         copy: bool,
+    },
+    /// Le lasso (clic droit glisse, comme dans l'arrangement) : ses deux
+    /// coins.
+    Marquee {
+        x0: f32,
+        y0: f32,
+        x1: f32,
+        y1: f32,
+        moved: bool,
     },
     /// Une guitare qu'on glisse par son en-tete (comme les pistes de
     /// REAPER) : ou elle irait.
@@ -857,6 +874,36 @@ impl SnapGrid {
 }
 
 pub use cp_ui::Guide;
+
+/// Comment le lasso change la selection (les gestes de l'arrangement de
+/// REAPER) : seul, Maj en plus, Ctrl en inversant.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Pick {
+    Replace,
+    Add,
+    Toggle,
+}
+
+impl Pick {
+    pub fn of(m: Mods) -> Pick {
+        if m.ctrl {
+            Pick::Toggle
+        } else if m.shift {
+            Pick::Add
+        } else {
+            Pick::Replace
+        }
+    }
+
+    /// La selection d'une prise apres le lasso : `was` avant, `hit` touche.
+    pub fn apply(self, was: (bool, bool), hit: (bool, bool)) -> (bool, bool) {
+        match self {
+            Pick::Replace => hit,
+            Pick::Add => (was.0 || hit.0, was.1 || hit.1),
+            Pick::Toggle => (was.0 ^ hit.0, was.1 ^ hit.1),
+        }
+    }
+}
 
 impl Default for Arr {
     fn default() -> Self {
@@ -1288,6 +1335,7 @@ impl Arr {
             Some(Drag::Hand { .. }) => return P::HandScroll,
             Some(Drag::TrackMove { moved: true, .. }) => return P::TrackDrag,
             Some(Drag::Range { .. }) => return P::TimeSelEdge,
+            Some(Drag::Marquee { moved: true, .. }) => return P::Marquee,
             Some(_) => return P::Arrow,
             None => {}
         }
@@ -1578,6 +1626,20 @@ impl Arr {
                         self.dirty = true;
                         return None;
                     }
+                    Some(Drag::Marquee { x0, y0, moved, .. }) => {
+                        let moved = moved || (x - x0).abs().max((y - y0).abs()) >= 3.0;
+                        self.drag = Some(Drag::Marquee {
+                            x0,
+                            y0,
+                            x1: x,
+                            y1: y,
+                            moved,
+                        });
+                        if moved {
+                            self.dirty = true;
+                        }
+                        return None;
+                    }
                     Some(Drag::Item {
                         t,
                         i,
@@ -1761,10 +1823,22 @@ impl Arr {
                 None
             }
             Ev::Down { x, y, b, dbl, mods } => self.down(x, y, b, dbl, mods),
-            Ev::Up { .. } => {
+            Ev::Up { mods, .. } => {
                 let d = self.drag.take();
                 self.dirty = true;
                 match d {
+                    Some(Drag::Marquee {
+                        x0,
+                        y0,
+                        x1,
+                        y1,
+                        moved: true,
+                    }) => {
+                        let items = self.marquee_hits((x0, y0, x1, y1));
+                        let pick = Pick::of(mods);
+                        self.apply_pick(&items, pick);
+                        Some(Act::SelectItems { items, pick })
+                    }
                     Some(Drag::Note {
                         moved: true,
                         t,
@@ -1802,7 +1876,11 @@ impl Arr {
                         if !moved {
                             // Un simple clic, comme dans l'arrangement : le
                             // curseur, et l'item choisi (son MIDI ou son audio,
-                            // selon la couche) dans REAPER et l'editeur.
+                            // selon la couche) dans REAPER et l'editeur ; il
+                            // s'allume ici sans attendre la relecture.
+                            let midi = self.item(t, i).is_some_and(|it| it.midi);
+                            let hit = (lane == Lane::Audio || !midi, lane != Lane::Audio && midi);
+                            self.apply_pick(&[(t, i, hit.0, hit.1)], Pick::Replace);
                             return Some(Act::ClickItem {
                                 t,
                                 i,
@@ -1944,7 +2022,24 @@ impl Arr {
                 | Hit::Solo(t)
                 | Hit::Tuning(t) => Some(Act::TrackMenu { t, x, y }),
                 _ if y < self.lay.bar_h => Some(Act::ViewMenu { x, y }),
-                _ => None,
+                _ => {
+                    // Dans les pistes : le lasso, comme dans l'arrangement.
+                    let l = self.lay;
+                    if x >= l.sx
+                        && x < l.sx + l.sw
+                        && y >= l.top + l.ruler_h
+                        && y < l.bottom - l.hs_h
+                    {
+                        self.drag = Some(Drag::Marquee {
+                            x0: x,
+                            y0: y,
+                            x1: x,
+                            y1: y,
+                            moved: false,
+                        });
+                    }
+                    None
+                }
             };
         }
         if b != Button::Left {
@@ -2281,6 +2376,84 @@ impl Arr {
 
     pub fn dragging(&self) -> bool {
         self.drag.is_some()
+    }
+
+    /// Le lasso en cours, une fois la souris partie : (x0, y0, x1, y1),
+    /// ordonnes.
+    pub(crate) fn marquee_rect(&self) -> Option<(f32, f32, f32, f32)> {
+        match self.drag {
+            Some(Drag::Marquee {
+                x0,
+                y0,
+                x1,
+                y1,
+                moved: true,
+            }) => Some((x0.min(x1), y0.min(y1), x0.max(x1), y0.max(y1))),
+            _ => None,
+        }
+    }
+
+    /// Les prises que touche un lasso : (piste, prise, son audio, son MIDI).
+    /// La couche audio vise l'item audio ; le MIDI, la partition et la tab
+    /// visent l'item MIDI (l'audio s'il n'y en a pas).
+    pub fn marquee_hits(&self, r: (f32, f32, f32, f32)) -> Vec<(usize, usize, bool, bool)> {
+        let (xa, ya, xb, yb) = (r.0.min(r.2), r.1.min(r.3), r.0.max(r.2), r.1.max(r.3));
+        let mut out: Vec<(usize, usize, bool, bool)> = Vec::new();
+        for b in &self.boxes {
+            let Hit::Item { t, i, lane } = b.4 else {
+                continue;
+            };
+            if b.0 >= xb || b.0 + b.2 <= xa || b.1 >= yb || b.1 + b.3 <= ya {
+                continue;
+            }
+            let midi = self.item(t, i).is_some_and(|it| it.midi);
+            let (a, m) = if lane == Lane::Audio || !midi {
+                (true, false)
+            } else {
+                (false, true)
+            };
+            match out.iter_mut().find(|e| e.0 == t && e.1 == i) {
+                Some(e) => {
+                    e.2 |= a;
+                    e.3 |= m;
+                }
+                None => out.push((t, i, a, m)),
+            }
+        }
+        out
+    }
+
+    /// Change la selection montree (avant que REAPER ne la rende).
+    fn apply_pick(&mut self, hits: &[(usize, usize, bool, bool)], pick: Pick) {
+        for (t, tr) in self.tracks.iter_mut().enumerate() {
+            for (i, it) in tr.items.iter_mut().enumerate() {
+                let hit = hits
+                    .iter()
+                    .find(|e| e.0 == t && e.1 == i)
+                    .map_or((false, false), |e| (e.2, e.3));
+                it.picked = pick.apply(it.picked, hit);
+            }
+        }
+        self.dirty = true;
+    }
+
+    /// Ce que montre une prise : sa selection, et pendant le lasso, celle
+    /// qu'elle aurait.
+    pub(crate) fn shown_pick(
+        &self,
+        t: usize,
+        i: usize,
+        lasso: &[(usize, usize, bool, bool)],
+    ) -> (bool, bool) {
+        let was = self.item(t, i).map_or((false, false), |it| it.picked);
+        if self.marquee_rect().is_none() {
+            return was;
+        }
+        let hit = lasso
+            .iter()
+            .find(|e| e.0 == t && e.1 == i)
+            .map_or((false, false), |e| (e.2, e.3));
+        Pick::of(self.mouse.2).apply(was, hit)
     }
 
     /// Le texte de l'infobulle d'une cible : l'ecran reste sans phrases,

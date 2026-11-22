@@ -697,6 +697,20 @@ impl Arr {
                     );
                 }
             }
+            // Le lasso (les couleurs du theme de REAPER).
+            if let Some((xa, ya, xb, yb)) = self.marquee_rect() {
+                let (xa, ya) = (xa.round(), ya.round());
+                let (w, h) = ((xb.round() - xa).max(1.0), (yb.round() - ya).max(1.0));
+                cv.fill_rect(xa, ya, w, h, th.rp.marquee_fill);
+                cv.stroke_rect(
+                    xa + 0.5,
+                    ya + 0.5,
+                    w - 1.0,
+                    h - 1.0,
+                    1.0,
+                    th.rp.marquee_outline,
+                );
+            }
             // Une prise qu'on glisse (elle se dessine a sa nouvelle place) :
             // la ligne ou tombe son debut, a travers les pistes.
             if let Some((_, _, q, _, _)) = self.item_drag() {
@@ -1292,10 +1306,17 @@ impl Arr {
                 y0,
                 y1: y,
                 right,
-                focus: self.focus_lane,
             };
             let fade = self.fade_preview();
             let trim = self.trim_preview();
+            // La selection de REAPER, et celle qu'aurait le lasso en cours.
+            let lasso = self
+                .marquee_rect()
+                .map(|r| self.marquee_hits(r))
+                .unwrap_or_default();
+            let picks: Vec<(bool, bool)> = (0..self.tracks[t].items.len())
+                .map(|i| self.shown_pick(t, i, &lasso))
+                .collect();
             for (i, it) in self.tracks[t].items.iter_mut().enumerate() {
                 if drag.is_some_and(|d| d.0 == t && d.1 == i && !d.4) {
                     continue;
@@ -1314,7 +1335,7 @@ impl Arr {
                     }
                 }
                 draw_item(
-                    cv, text, icons, th, bx, it, t, i, geo, &lay, is_sel, sel_n, hover,
+                    cv, text, icons, th, bx, it, t, i, geo, &lay, is_sel, sel_n, hover, picks[i],
                 );
                 (it.fade_in, it.fade_out) = kept;
                 // Le bord qu'on tire : ce qui part est voile, ce qui vient est
@@ -1338,6 +1359,10 @@ impl Arr {
             }
             if let Some((dt, di, q, to, _)) = drag {
                 if to == t {
+                    // La prise qu'on glisse est choisie (la couche saisie),
+                    // comme dans l'arrangement.
+                    let fl = self.focus_lane;
+                    let grab = (fl == Lane::Audio, fl == Lane::Midi);
                     if let Some(it) = self.tracks.get_mut(dt).and_then(|x| x.items.get_mut(di)) {
                         let moved = Geo {
                             scroll: geo.scroll - (q - it.qn0),
@@ -1358,6 +1383,7 @@ impl Arr {
                             true,
                             None,
                             Hit::None,
+                            grab,
                         );
                     }
                 }
@@ -1949,8 +1975,6 @@ struct ItemLay<'a> {
     y0: f32,
     y1: f32,
     right: f32,
-    /// L'item qui a le focus dans la prise choisie (audio ou MIDI).
-    focus: Lane,
 }
 
 /// Un item dans toutes les couches de sa piste : l'audio, le MIDI, la
@@ -1969,6 +1993,7 @@ fn draw_item(
     is_sel: bool,
     sel_n: Option<usize>,
     hover: Hit,
+    pick: (bool, bool),
 ) {
     let s = |v: f32| th.s(v);
     let (xa, xb) = (geo.x(it.qn0), geo.x(it.qn1));
@@ -1982,30 +2007,8 @@ fn draw_item(
         match lane {
             // L'item qui a le focus (l'audio ou le MIDI) : choisi, comme
             // dans REAPER.
-            Lane::Audio => draw_audio_item(
-                cv,
-                text,
-                th,
-                it,
-                geo,
-                xa,
-                xb,
-                ly,
-                lh,
-                is_sel && lay.focus == Lane::Audio,
-            ),
-            Lane::Midi => draw_midi_item(
-                cv,
-                th,
-                it,
-                geo,
-                xa,
-                xb,
-                ly,
-                lh,
-                nstr,
-                is_sel && lay.focus == Lane::Midi,
-            ),
+            Lane::Audio => draw_audio_item(cv, text, th, it, geo, xa, xb, ly, lh, pick.0),
+            Lane::Midi => draw_midi_item(cv, th, it, geo, xa, xb, ly, lh, nstr, pick.1),
             _ => {}
         }
         push(

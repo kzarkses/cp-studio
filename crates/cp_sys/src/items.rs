@@ -23,6 +23,17 @@ pub struct QnNote {
 
 type GetStr = unsafe extern "C" fn(P, *const c_char, *mut c_char, bool) -> bool;
 
+/// Comment un lasso change la selection d'items.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SelMode {
+    /// Seuls les items touches.
+    Replace,
+    /// En plus de la selection.
+    Add,
+    /// Chacun inverse.
+    Toggle,
+}
+
 thread_local! {
     /// GUID d'item -> son pointeur, verifie a chaque usage (fil principal).
     static ITEMS: std::cell::RefCell<std::collections::HashMap<String, usize>> =
@@ -131,6 +142,85 @@ impl Reaper {
         (!it.is_null())
             .then(|| self.item_str(it, "GUID", None))
             .flatten()
+    }
+
+    /// L'empreinte de la selection d'items (leur nombre, leurs pointeurs) :
+    /// lue a chaque battement sans rien copier. Choisir un item ne bouge pas
+    /// le compteur du projet.
+    pub fn item_selection_sig(&self) -> u64 {
+        type Count = unsafe extern "C" fn(P) -> i32;
+        type SelItem = unsafe extern "C" fn(P, i32) -> P;
+        let (Some(c), Some(g)) = (
+            self.f::<Count>(c"CountSelectedMediaItems"),
+            self.f::<SelItem>(c"GetSelectedMediaItem"),
+        ) else {
+            return 0;
+        };
+        // SAFETY: projet nul = courant ; fil principal.
+        let n = unsafe { c(null_mut()) };
+        let mut h: u64 = 0xcbf2_9ce4_8422_2325 ^ n as u64;
+        for k in 0..n.max(0) {
+            // SAFETY: 0 <= k < n.
+            let p = unsafe { g(null_mut(), k) } as usize as u64;
+            h = (h ^ p).wrapping_mul(0x0100_0000_01b3);
+        }
+        h
+    }
+
+    /// Les GUID des items choisis.
+    pub fn selected_item_guids(&self) -> Vec<String> {
+        type Count = unsafe extern "C" fn(P) -> i32;
+        type SelItem = unsafe extern "C" fn(P, i32) -> P;
+        let (Some(c), Some(g)) = (
+            self.f::<Count>(c"CountSelectedMediaItems"),
+            self.f::<SelItem>(c"GetSelectedMediaItem"),
+        ) else {
+            return Vec::new();
+        };
+        // SAFETY: projet nul = courant ; fil principal.
+        let n = unsafe { c(null_mut()) };
+        (0..n.max(0))
+            .filter_map(|k| {
+                // SAFETY: 0 <= k < n.
+                let it = unsafe { g(null_mut(), k) };
+                (!it.is_null())
+                    .then(|| self.item_str(it, "GUID", None))
+                    .flatten()
+            })
+            .collect()
+    }
+
+    /// Choisit des items par leur GUID, comme le lasso de l'arrangement :
+    /// seuls eux, en plus de la selection, ou chacun inverse.
+    pub fn select_items(&self, guids: &[String], mode: SelMode) {
+        type Sel = unsafe extern "C" fn(P, bool);
+        type IsSel = unsafe extern "C" fn(P) -> bool;
+        type Cmd = unsafe extern "C" fn(i32, i32);
+        type Upd = unsafe extern "C" fn();
+        let (Some(s), Some(is), Some(c)) = (
+            self.f::<Sel>(c"SetMediaItemSelected"),
+            self.f::<IsSel>(c"IsMediaItemSelected"),
+            self.f::<Cmd>(c"Main_OnCommand"),
+        ) else {
+            return;
+        };
+        if mode == SelMode::Replace {
+            // SAFETY: fil principal ; 40289 = Item : enlever toute selection.
+            unsafe { c(40289, 0) };
+        }
+        for g in guids {
+            if let Some(it) = self.item_of(g) {
+                // SAFETY: item vivant (valide a l'instant par `item_of`).
+                unsafe {
+                    let on = mode != SelMode::Toggle || !is(it);
+                    s(it, on);
+                }
+            }
+        }
+        if let Some(u) = self.f::<Upd>(c"UpdateArrange") {
+            // SAFETY: fil principal.
+            unsafe { u() };
+        }
     }
 
     /// Une donnee privee d'un item (`P_EXT:<cle>`), lue ou ecrite.
