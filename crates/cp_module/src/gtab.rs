@@ -172,6 +172,11 @@ pub(crate) struct GPart {
     synth_ok: bool,
     /// L'auto-test attend la transcription de cette prise.
     selftest_take: Option<String>,
+    /// Les items que Cedric a demande de transcrire (la transcription ne se
+    /// fait que sur demande, sauf `arr.auto`).
+    requested: HashSet<String>,
+    /// Les cretes que REAPER n'a pas encore : on reessaie plus tard.
+    peak_retry: HashMap<String, Instant>,
 }
 
 impl GPart {
@@ -179,6 +184,13 @@ impl GPart {
         let mut arr = Arr::new();
         arr.listen = Listen::from_key(&r.ext_get(SECTION, "gtab_listen").unwrap_or_default());
         arr.split = r.ext_get(SECTION, "gtab_split").as_deref() == Some("1");
+        arr.auto = r.ext_get(SECTION, "gtab_auto").as_deref() == Some("1");
+        // Le magnetisme de REAPER (sa grille, ses reglages) pour glisser une
+        // prise, comme dans l'arrangement.
+        let rr = *r;
+        arr.snapper = Some(Box::new(move |q: f64| {
+            rr.time_to_qn(rr.snap_time(rr.qn_to_time(q)))
+        }));
         GPart {
             arr,
             win: None,
@@ -202,6 +214,8 @@ impl GPart {
             migrated: None,
             synth_ok: false,
             selftest_take: None,
+            requested: HashSet::new(),
+            peak_retry: HashMap::new(),
         }
     }
 }
@@ -509,7 +523,9 @@ impl App {
         }
         let merged = doc::merge(&it.doc, fresh, &it.suppressed, range);
         let ghosts = if it.detect.ghosts {
-            doc::ghosts(&self.gtab_notes(it, true), &merged, grid, &tuning)
+            let mut g = doc::ghosts(&self.gtab_notes(it, true), &merged, grid, &tuning);
+            doc::drop_suppressed(&mut g, &it.suppressed, grid);
+            g
         } else {
             Vec::new()
         };
@@ -526,12 +542,14 @@ impl App {
             return;
         };
         let g = if it.detect.ghosts {
-            doc::ghosts(
+            let mut g = doc::ghosts(
                 &self.gtab_notes(it, true),
                 &it.doc,
                 it.detect.grid,
                 &it.detect.tuning(),
-            )
+            );
+            doc::drop_suppressed(&mut g, &it.suppressed, it.detect.grid);
+            g
         } else {
             Vec::new()
         };
@@ -776,9 +794,60 @@ impl App {
             self.gt.midi_seen.insert(g.clone(), h);
         }
         self.gtab_save_tab(&it);
+        self.gt.requested.remove(&it.guid);
         if let Some(x) = self.gt.arr.item_mut(t, i) {
             x.midi = true;
         }
+    }
+
+    /// Cet item doit-il etre transcrit (tout seul, ou demande) ?
+    fn gtab_wants(&self, item: &str) -> bool {
+        self.gt.arr.auto || self.gt.requested.contains(item)
+    }
+
+    /// Une prise sans MIDI a elle, qui en designe un autre (une coupe, une
+    /// copie) : ses notes sont celles de ce MIDI qui sonnent dans son morceau
+    /// du meme fichier. Le MIDI fait foi, on ne retranscrit pas.
+    fn gtab_doc_from_parent(
+        &self,
+        is: &ItemSnap,
+        tk: &TakeSnap,
+        it: &Item,
+    ) -> Option<Vec<cp_tab::doc::TNote>> {
+        let r = self.r;
+        let pm = is.ext[I_MIDI].as_deref()?;
+        let psrc = r.item_ext(pm, "CPGT_src")?;
+        if psrc == is.guid {
+            return None;
+        }
+        let pa = r.item_audio(&psrc)?;
+        if pa.path != tk.path || pa.rate <= 0.0 || tk.rate <= 0.0 {
+            return None;
+        }
+        let notes = r.midi_notes(pm)?;
+        let mut out: Vec<MidiQn> = Vec::new();
+        for n in notes {
+            // Le temps dans le fichier, puis sa place dans ce morceau.
+            let s0 = pa.offs + (r.qn_to_time(n.qn0) - pa.pos) * pa.rate;
+            let s1 = pa.offs + (r.qn_to_time(n.qn1) - pa.pos) * pa.rate;
+            let u0 = is.pos + (s0 - tk.offs) / tk.rate;
+            if u0 < is.pos - 1e-6 || u0 >= is.pos + is.len - 1e-6 {
+                continue;
+            }
+            let u1 = is.pos + (s1 - tk.offs) / tk.rate;
+            out.push(MidiQn {
+                qn0: r.time_to_qn(u0),
+                qn1: r.time_to_qn(u1.max(u0 + 1e-3)),
+                pitch: n.pitch,
+                chan: n.chan.clamp(0, 15) as u8,
+                vel: n.vel.clamp(1, 127) as u8,
+            });
+        }
+        let mut d = doc::from_midi(&out, &it.detect.tuning(), &Sidecar::default());
+        for x in &mut d {
+            x.locked = true;
+        }
+        Some(d)
     }
 
     /// La tablature lue dans l'item MIDI (Cedric l'a modifie dans REAPER).
@@ -1012,6 +1081,7 @@ impl App {
             for tr in &self.gt.arr.tracks {
                 for it in &tr.items {
                     if it.state == Some(State::Waiting)
+                        && (self.gt.arr.auto || self.gt.requested.contains(&it.guid))
                         && !self.gt.queue.iter().any(|(_, t)| *t == it.take)
                         && self.gt.job.as_ref().is_none_or(|j| j.take != it.take)
                     {
@@ -1066,6 +1136,13 @@ impl App {
             if same && !forced && (o.state != Some(State::Ready) || midi_same || !midi_take_ok) {
                 let was = o.state.clone();
                 o.state = self.gtab_state(&o.take, &akey).or(o.state);
+                if matches!(o.state, Some(State::Idle) | Some(State::Waiting)) {
+                    o.state = Some(if self.gtab_wants(&is.guid) {
+                        State::Waiting
+                    } else {
+                        State::Idle
+                    });
+                }
                 // Il vient d'etre transcrit (analyse chargee ailleurs).
                 if was != Some(State::Ready) && o.state == Some(State::Ready) {
                     self.gt.force.insert(is.guid.clone());
@@ -1074,11 +1151,15 @@ impl App {
             }
             if same && !forced && midi_take_ok {
                 // Modifie dans REAPER : relu.
-                if let (Some(m), Some(d)) = (
+                if let (Some(m), Some(mut d)) = (
                     midi,
                     self.gtab_doc_from_midi(&midi.map(|m| m.guid.clone()).unwrap_or_default(), &o),
                 ) {
+                    // Le MIDI fait foi : une note effacee ne revient pas (ni
+                    // fantome, ni decodage), une note ajoutee est tenue.
+                    doc::reconcile(&o.doc, &mut d, &mut o.suppressed);
                     o.set_doc(d);
+                    self.gtab_save_tab(&o);
                     if let Some(h) = midi_hash {
                         self.gt.midi_seen.insert(m.guid.clone(), h);
                     }
@@ -1115,8 +1196,22 @@ impl App {
             rate: tk.rate,
         };
         let ready = self.gtab_ana(&akey, &is.guid, &src);
+        let wants = self.gtab_wants(&is.guid);
         if !ready {
-            it.state = self.gtab_state(&tk.guid, &akey).or(Some(State::Waiting));
+            // Une coupe ou une copie d'une prise transcrite : son MIDI vient
+            // de celui de la prise d'origine.
+            if midi.is_none() && self.gtab_load_tab(&tk.guid, qn0).is_none() {
+                if let Some(d) = self.gtab_doc_from_parent(is, tk, &it) {
+                    it.state = Some(State::Ready);
+                    it.set_doc(d);
+                    return (it, Todo::Nothing);
+                }
+            }
+            it.state = self.gtab_state(&tk.guid, &akey).or(Some(if wants {
+                State::Waiting
+            } else {
+                State::Idle
+            }));
             return (it, Todo::Nothing);
         }
         it.state = Some(State::Ready);
@@ -1161,7 +1256,19 @@ impl App {
                 it.set_doc(d);
                 (it, Todo::Ghosts)
             }
-            (None, None) => (it, Todo::Decode),
+            (None, None) => {
+                if let Some(d) = self.gtab_doc_from_parent(is, tk, &it) {
+                    it.set_doc(d);
+                    return (it, Todo::Ghosts);
+                }
+                // Rien ne se transcrit sans qu'on le demande.
+                if wants {
+                    (it, Todo::Decode)
+                } else {
+                    it.state = Some(State::Idle);
+                    (it, Todo::Nothing)
+                }
+            }
         }
     }
 
@@ -1341,16 +1448,21 @@ impl App {
     /// Recopie l'etat de la file dans les items.
     fn gtab_set_state(&mut self) {
         let busy = self.gt.job.as_ref().map(|j| (j.take.clone(), j.last_pct));
+        let auto = self.gt.arr.auto;
         for tr in &mut self.gt.arr.tracks {
             for it in &mut tr.items {
                 if it.state == Some(State::Ready) {
                     continue;
                 }
+                let queued = auto
+                    || self.gt.requested.contains(&it.guid)
+                    || self.gt.queue.iter().any(|(_, t)| *t == it.take);
                 it.state = Some(match &busy {
                     Some((t, p)) if *t == it.take => State::Busy(*p),
                     _ => match self.gt.failed.get(&it.take) {
                         Some(e) => State::Failed(e.clone()),
-                        None => State::Waiting,
+                        None if queued => State::Waiting,
+                        None => State::Idle,
                     },
                 });
             }
@@ -1483,6 +1595,8 @@ impl App {
                 })
             {
                 self.gtab_make_guitar(&tr.guid);
+                // L'action transcrit l'item choisi : c'est une demande.
+                self.gt.requested.insert(a.clone());
                 if selftest() {
                     // L'auto-test juge le reseau : le meme riff revient a
                     // chaque passage, son analyse en cache est oubliee.
@@ -1616,18 +1730,71 @@ impl App {
             }
             GAct::Retune { t } => self.gtab_retune(t),
             GAct::Transcribe { t, i } => {
-                if let Some(it) = self.gt.arr.item(t, i) {
+                // Sur demande. L'analyse d'un fichier ne change pas : si elle
+                // est la, on decode tout de suite (les notes tenues restent) ;
+                // sinon le reseau ecoute.
+                if let Some(it) = self.gt.arr.item(t, i).cloned() {
                     let (g, tk) = (it.guid.clone(), it.take.clone());
+                    self.gt.requested.insert(g.clone());
                     self.gt.failed.remove(&tk);
-                    self.gt.anas.remove(&it.akey.clone());
-                    let _ = std::fs::remove_file(self.gtab_cache(&it.akey, "cpga"));
-                    if let Some(x) = self.gt.arr.item_mut(t, i) {
-                        x.state = Some(State::Waiting);
+                    let path = r.item_audio(&g).map(|a| a.path).unwrap_or_default();
+                    if self.gt.anas.contains_key(&it.akey) || self.gtab_has_ana(&it.akey, &path) {
+                        self.gt.force.insert(g.clone());
+                        self.gt.redecode.insert(g);
+                        self.gtab_sync();
+                        // Pas encore d'item MIDI : le decodage neuf l'ecrit.
+                        if let Some((t, i)) = self.gtab_find(&it.guid) {
+                            let empty = self.gt.arr.tracks[t].items[i].doc.is_empty();
+                            if self.gt.arr.tracks[t].items[i].state == Some(State::Ready) && empty {
+                                self.gtab_decode(t, i, None);
+                                self.gtab_write(t, i, "CP Guitar Tab: transcription");
+                            }
+                        }
+                    } else {
+                        if let Some(x) = self.gt.arr.item_mut(t, i) {
+                            x.state = Some(State::Waiting);
+                        }
+                        self.gt.queue.retain(|(_, k)| *k != tk);
+                        self.gt.queue.push_front((g, tk));
+                        self.gtab_next_job();
                     }
-                    self.gt.queue.retain(|(_, k)| *k != tk);
-                    self.gt.queue.push_front((g, tk));
-                    self.gtab_next_job();
                 }
+            }
+            GAct::Auto => {
+                let on = self.gt.arr.auto;
+                self.gtab_keep("gtab_auto", if on { "1" } else { "0" });
+                if on {
+                    // Tout ce qui attend sa transcription part.
+                    let idle: Vec<String> = self
+                        .gt
+                        .arr
+                        .tracks
+                        .iter()
+                        .flat_map(|t| t.items.iter())
+                        .filter(|x| x.state == Some(State::Idle))
+                        .map(|x| x.guid.clone())
+                        .collect();
+                    self.gt.force.extend(idle);
+                }
+                self.gtab_sync();
+            }
+            GAct::CopyItem { t, i, qn0, to } => {
+                // Comme dans l'arrangement : une copie de la prise. Elle
+                // emporte la reference a son MIDI ; le rafraichissement lui
+                // en fait un, avec les notes de son morceau.
+                let Some(it) = self.gt.arr.item(t, i).cloned() else {
+                    return;
+                };
+                let Some(dest) = head(self, to) else { return };
+                r.undo_begin();
+                let made = r.copy_item(&it.guid, &dest.guid, r.qn_to_time(qn0));
+                r.undo_end("CP Guitar Tab: copy take", -1);
+                r.refresh_arrange();
+                if let Some(g) = made {
+                    self.gt.pending = Some(g);
+                }
+                self.gtab_sync();
+                self.gtab_select_pending();
             }
             GAct::DeleteItem { t, i } => {
                 if let Some(it) = self.gt.arr.item(t, i).cloned() {
@@ -2075,7 +2242,7 @@ impl App {
         }
         // Le rafraichissement, fenetre ouverte.
         self.gt.since_sync += 1;
-        if self.gt.since_sync >= 15 && !rec {
+        if self.gt.since_sync >= 15 && !rec && !self.gt.arr.dragging() {
             self.gt.since_sync = 0;
             self.gtab_sync();
             if open {
@@ -2123,12 +2290,111 @@ impl App {
         if !shown {
             return;
         }
+        self.gtab_peaks();
         self.gtab_tip();
         if playing || self.gt.job.is_some() {
             self.gtab_want_frames(true);
         } else if self.gt.arr.take_dirty() {
             self.gt.arr.mark();
             self.gtab_render(false);
+        }
+    }
+
+    /// Les formes d'onde de REAPER des prises visibles, a la resolution du
+    /// zoom (quelques-unes par battement).
+    fn gtab_peaks(&mut self) {
+        let r = self.r;
+        let a = &self.gt.arr;
+        let ppq = a.lay.ppq.max(1.0) as f64;
+        let (v0, v1) = (a.scroll, a.scroll + a.view_qn());
+        let mut todo: Vec<(usize, usize, String, f64, f64, usize)> = Vec::new();
+        for (t, tr) in a.tracks.iter().enumerate() {
+            for (i, it) in tr.items.iter().enumerate() {
+                if it.qn1 < v0 || it.qn0 > v1 || it.qn1 <= it.qn0 {
+                    continue;
+                }
+                let want = (((it.qn1 - it.qn0) * ppq).round() as usize).clamp(16, 16000);
+                let have = it.peaks.len();
+                if have > 0 && (have as f64 / want as f64 - 1.0).abs() < 0.3 {
+                    continue;
+                }
+                if self
+                    .gt
+                    .peak_retry
+                    .get(&it.guid)
+                    .is_some_and(|t| t.elapsed().as_secs_f64() < 2.0)
+                {
+                    continue;
+                }
+                todo.push((t, i, it.guid.clone(), it.qn0, it.qn1, want));
+                if todo.len() >= 3 {
+                    break;
+                }
+            }
+        }
+        for (t, i, g, q0, q1, want) in todo {
+            match r.take_peaks(&g, r.qn_to_time(q0), r.qn_to_time(q1), want) {
+                Some(pk) => {
+                    self.gt.peak_retry.remove(&g);
+                    if let Some(it) = self.gt.arr.item_mut(t, i) {
+                        it.peaks = pk;
+                    }
+                    self.gt.arr.mark();
+                }
+                None => {
+                    self.gt.peak_retry.insert(g, Instant::now());
+                }
+            }
+        }
+    }
+
+    /// Des fichiers deposes sur la fenetre (le navigateur, l'Explorateur) :
+    /// des prises neuves sur la guitare sous la souris, a la place calee par
+    /// le magnetisme de REAPER (a la suite l'une de l'autre). Hors d'une
+    /// guitare : une guitare neuve. Rien ne se transcrit sans qu'on le
+    /// demande (sauf la transcription automatique).
+    fn gtab_drop(&mut self, files: Vec<String>, x: f32, y: f32) {
+        let r = self.r;
+        let section = crate::DROP_SECTION.lock().ok().and_then(|mut s| s.take());
+        let l = self.gt.arr.lay;
+        let q = if x >= l.sx {
+            let q = self.gt.arr.qn_of(x).max(0.0);
+            r.time_to_qn(r.snap_time(r.qn_to_time(q)))
+        } else {
+            r.time_to_qn(r.cursor_position())
+        };
+        let track = match self.gt.arr.track_at(y) {
+            Some(t) => self.gt.arr.tracks.get(t).map(|x| x.head.guid.clone()),
+            None => self.gtab_new_guitar(),
+        };
+        let Some(track) = track else { return };
+        r.undo_begin();
+        let mut pos = r.qn_to_time(q);
+        let mut first: Option<String> = None;
+        for f in &files {
+            let Some(g) = r.insert_audio_item(&track, f, pos) else {
+                continue;
+            };
+            // Le passage choisi dans le navigateur : la prise le garde seul.
+            let norm = |s: &str| s.to_lowercase().replace('/', "\\");
+            if let Some((path, a, b)) = &section {
+                if norm(path) == norm(f) && b > a {
+                    r.set_item_value(&g, "D_LENGTH", b - a);
+                    r.set_active_take_value(&g, "D_STARTOFFS", *a);
+                }
+            }
+            if let Some(au) = r.item_audio(&g) {
+                pos = au.pos + au.len;
+            }
+            first.get_or_insert(g);
+        }
+        r.undo_end("CP Guitar Tab: insert files", -1);
+        r.refresh_arrange();
+        if let Some(g) = first {
+            self.gt.pending = Some(g);
+            self.gtab_sync();
+            self.gtab_select_pending();
+            self.gtab_render(true);
         }
     }
 
@@ -2283,6 +2549,8 @@ impl App {
             hover: (cp_tabview::Hit::None, Instant::now()),
             tip_text: String::new(),
         });
+        // Des fichiers deposes (le navigateur, l'Explorateur) : WM_DROPFILES.
+        cp_sys::shell::accept_files(hwnd, true);
         self.gtab_sync();
         self.gt.arr.mark();
         self.gtab_render(true);
@@ -2447,6 +2715,11 @@ impl App {
         let (x, y) = (lo16(m.lp), hi16(m.lp));
         let md = mods();
         match m.msg {
+            cp_sys::shell::WM_DROPFILES => {
+                let (files, dx, dy) = cp_sys::shell::take_drop(m.wp);
+                self.gtab_drop(files, dx as f32, dy as f32);
+                Some(0)
+            }
             WM_CP_FRAME => {
                 let r = self.r;
                 let ps = r.play_state();

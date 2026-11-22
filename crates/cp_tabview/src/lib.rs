@@ -37,7 +37,8 @@ Mouse\n\
 Wheel  scroll   \u{00b7}   Alt+wheel  move in time\n\
 Shift+wheel  zoom   \u{00b7}   Ctrl+wheel  lane height\n\
 Middle drag  move the view (on the ruler, up/down zooms)\n\
-Double-click the MIDI  MIDI editor   \u{00b7}   double-click a string  add a note";
+Drag a take  move it (Shift: no snap, Ctrl: copy)   \u{00b7}   drop audio files  new takes\n\
+Double-click the MIDI  editor   \u{00b7}   double-click a string  add a note";
 
 pub const TUNINGS: [(&str, [i32; 6]); 5] = [
     ("Standard E", [40, 45, 50, 55, 59, 64]),
@@ -289,6 +290,8 @@ impl Default for Head {
 pub enum State {
     /// Transcrit : sa tablature est la.
     Ready,
+    /// Pas transcrit : on transcrit quand Cedric le demande.
+    Idle,
     /// En file d'attente.
     Waiting,
     /// Le reseau ecoute (pourcentage).
@@ -333,6 +336,9 @@ pub struct Item {
     pub frame_qn: Vec<f64>,
     pub env: Vec<f32>,
     pub onset: Vec<f32>,
+    /// La forme d'onde de REAPER sur tout l'item : (min, max) par colonne,
+    /// colonnes egales de `qn0` a `qn1`.
+    pub peaks: Vec<(f32, f32)>,
     pub doc: Vec<TNote>,
     pub ghosts: Vec<TNote>,
     /// Les notes effacees par Cedric (un nouveau decodage ne les ramene pas).
@@ -447,9 +453,16 @@ pub enum Hit {
     Listen(Listen),
     Split,
     Follow,
+    /// Transcrire les prises neuves d'elles-memes.
+    Auto,
     AddTrack,
     /// L'aide (une infobulle : les touches et les gestes).
     Help,
+    /// Transcrire cet item (il ne l'est pas encore).
+    Transcribe {
+        t: usize,
+        i: usize,
+    },
     // L'inspecteur
     Take(usize),
     Slider(u8),
@@ -567,6 +580,15 @@ pub enum Act {
         qn0: f64,
         to: usize,
     },
+    /// ... copiee (Ctrl, comme dans l'arrangement).
+    CopyItem {
+        t: usize,
+        i: usize,
+        qn0: f64,
+        to: usize,
+    },
+    /// La transcription automatique a ete allumee ou coupee ([`Arr::auto`]).
+    Auto,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -606,10 +628,13 @@ enum Drag {
         t: usize,
         i: usize,
         x0: f32,
+        /// La noire sous la souris a l'appui.
+        qp: f64,
         moved: bool,
-        /// Ou elle irait : son debut, sa guitare.
+        /// Ou elle irait : son debut, sa guitare ; copiee (Ctrl).
         qn0: f64,
         to: usize,
+        copy: bool,
     },
     /// Le bouton du milieu (comme dans REAPER) : la vue suit la main. Sur la
     /// regle, un geste vertical zoome autour de la noire saisie.
@@ -675,6 +700,11 @@ pub struct Arr {
     pub playhead: Option<f64>,
     pub playing: bool,
     pub rec: Vec<Rec>,
+    /// Transcrire les prises neuves d'elles-memes (sinon : sur demande).
+    pub auto: bool,
+    /// Le magnetisme de REAPER (noires -> noires), pose par le module ; sans
+    /// lui, la double croche.
+    pub snapper: Option<Box<dyn Fn(f64) -> f64 + Send>>,
     pub sel: Option<Sel>,
     pub range: Option<(f64, f64)>,
     /// Ce qui se passe (« Transcribing 45 % »).
@@ -715,6 +745,8 @@ impl Arr {
             playhead: None,
             playing: false,
             rec: Vec::new(),
+            auto: false,
+            snapper: None,
             sel: None,
             range: None,
             busy: None,
@@ -1105,24 +1137,36 @@ impl Arr {
                         return None;
                     }
                     Some(Drag::Item {
-                        t, i, x0, moved, ..
+                        t,
+                        i,
+                        x0,
+                        qp,
+                        moved,
+                        ..
                     }) => {
                         if !moved && (x - x0).abs() < 4.0 * self.scale {
                             return None;
                         }
                         let it = self.item(t, i)?;
-                        // Cale sur la double croche ; Maj : sans magnetisme.
-                        let raw = it.qn0 + ((x - x0) / self.lay.ppq.max(1e-3)) as f64;
-                        let free = matches!(ev, Ev::Move { mods, .. } if mods.shift);
-                        let q = if free { raw } else { (raw * 4.0).round() / 4.0 }.max(0.0);
+                        // Comme dans l'arrangement : le debut de la prise se
+                        // cale selon le magnetisme de REAPER ; Maj : sans ;
+                        // Ctrl : une copie.
+                        let raw = it.qn0 + (self.qn_of(x) - qp);
+                        let m = match ev {
+                            Ev::Move { mods, .. } => *mods,
+                            _ => Mods::default(),
+                        };
+                        let q = if m.shift { raw } else { self.snap_item(raw) }.max(0.0);
                         let to = self.track_at(y).unwrap_or(t);
                         self.drag = Some(Drag::Item {
                             t,
                             i,
                             x0,
+                            qp,
                             moved: true,
                             qn0: q,
                             to,
+                            copy: m.ctrl,
                         });
                         self.dirty = true;
                         return None;
@@ -1248,9 +1292,14 @@ impl Arr {
                         moved,
                         qn0,
                         to,
+                        copy,
+                        ..
                     }) => {
                         if !moved {
                             return Some(Act::Seek(self.qn_of(x0)));
+                        }
+                        if copy {
+                            return Some(Act::CopyItem { t, i, qn0, to });
                         }
                         let it = self.item(t, i)?;
                         if (it.qn0 - qn0).abs() < 1e-9 && to == t {
@@ -1302,6 +1351,14 @@ impl Arr {
             }
             Ev::Key { vk: k, mods, .. } => self.key(k, mods),
             Ev::Char(_) => None,
+        }
+    }
+
+    /// Le debut d'une prise glissee, cale par le magnetisme de REAPER.
+    fn snap_item(&self, q: f64) -> f64 {
+        match &self.snapper {
+            Some(f) => f(q),
+            None => (q * 4.0).round() / 4.0,
         }
     }
 
@@ -1375,16 +1432,19 @@ impl Arr {
                 if dbl && lane == Lane::Midi {
                     return Some(Act::OpenMidi { t, i });
                 }
-                // La prise audio se glisse ; un simple clic place le curseur.
-                if lane == Lane::Audio {
+                // La prise (son audio, son MIDI) se glisse ; un simple clic
+                // place le curseur.
+                if matches!(lane, Lane::Audio | Lane::Midi) {
                     let q = self.item(t, i)?.qn0;
                     self.drag = Some(Drag::Item {
                         t,
                         i,
                         x0: x,
+                        qp: self.qn_of(x),
                         moved: false,
                         qn0: q,
                         to: t,
+                        copy: false,
                     });
                     return None;
                 }
@@ -1457,6 +1517,18 @@ impl Arr {
             Hit::Follow => {
                 self.follow = !self.follow;
                 None
+            }
+            Hit::Auto => {
+                self.auto = !self.auto;
+                Some(Act::Auto)
+            }
+            Hit::Transcribe { t, i } => {
+                self.select(Some(Sel {
+                    t,
+                    i: Some(i),
+                    n: None,
+                }));
+                Some(Act::Transcribe { t, i })
             }
             Hit::AddTrack => Some(Act::AddTrack),
             Hit::Take(k) => {
@@ -1559,8 +1631,9 @@ impl Arr {
         None
     }
 
-    /// Le geste en cours sur une prise : (piste, item, debut vise, guitare).
-    pub(crate) fn item_drag(&self) -> Option<(usize, usize, f64, usize)> {
+    /// Le geste en cours sur une prise : (piste, item, debut vise, guitare,
+    /// copie).
+    pub(crate) fn item_drag(&self) -> Option<(usize, usize, f64, usize, bool)> {
         match self.drag {
             Some(Drag::Item {
                 t,
@@ -1568,8 +1641,9 @@ impl Arr {
                 moved: true,
                 qn0,
                 to,
+                copy,
                 ..
-            }) => Some((t, i, qn0, to)),
+            }) => Some((t, i, qn0, to, copy)),
             _ => None,
         }
     }
@@ -1648,8 +1722,11 @@ impl Arr {
             Hit::Item { t, i, lane } => {
                 let it = self.item(t, i)?;
                 match lane {
-                    Lane::Midi => format!("{}\nDouble-click: MIDI editor", it.name),
-                    Lane::Audio => format!("{}\nDrag: move (Shift: no snap)", it.name),
+                    Lane::Midi => format!(
+                        "{}\nDrag: move (Shift: no snap, Ctrl: copy) \u{00b7} double-click: editor",
+                        it.name
+                    ),
+                    Lane::Audio => format!("{}\nDrag: move (Shift: no snap, Ctrl: copy)", it.name),
                     _ => it.name.clone(),
                 }
             }
@@ -1674,6 +1751,15 @@ impl Arr {
             Hit::Listen(Listen::Both) => "Hear both".into(),
             Hit::Split => "Original left, tab right".into(),
             Hit::Follow => "Follow playback".into(),
+            Hit::Auto => format!(
+                "Transcribe new takes by themselves ({})",
+                if self.auto {
+                    "on"
+                } else {
+                    "off: click a take's wand"
+                }
+            ),
+            Hit::Transcribe { .. } => "Transcribe this take".into(),
             Hit::AddTrack => "New guitar track".into(),
             Hit::Help => HELP.into(),
             Hit::Take(k) => format!("Take {}", k + 1),
@@ -1684,7 +1770,14 @@ impl Arr {
             Hit::Check(_) => "Ghosts: notes just under the threshold".into(),
             Hit::Grid(_) => "Rhythm grid".into(),
             Hit::KeepGhosts => "Keep the ghost notes".into(),
-            Hit::Retranscribe => "Transcribe again".into(),
+            Hit::Retranscribe => {
+                let (t, i) = self.sel_item()?;
+                if self.item(t, i)?.state == Some(State::Ready) {
+                    "Transcribe again (your edited notes stay)".into()
+                } else {
+                    "Transcribe".into()
+                }
+            }
             Hit::DeleteItem => "Delete the take and its tab (Del)".into(),
             Hit::Export => "Export MusicXML".into(),
             Hit::SynthSlider(1) => "Tone".into(),

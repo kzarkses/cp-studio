@@ -639,3 +639,83 @@ fn glisser_une_prise() {
         other => panic!("{other:?}"),
     }
 }
+
+/// Comme dans l'arrangement : la prise glissee se dessine entiere (son onde)
+/// a sa nouvelle place, se cale par le magnetisme de REAPER, Ctrl la copie ;
+/// une prise pas encore transcrite montre sa baguette, qui la transcrit.
+#[test]
+fn glisser_comme_l_arrangement_et_transcrire_sur_demande() {
+    let mut b = Bench::new(1600, 760);
+    let mut v = arranger();
+    // Le magnetisme de REAPER : ici, la mesure entiere.
+    v.snapper = Some(Box::new(|q: f64| (q / 4.0).round() * 4.0));
+    // La forme d'onde de REAPER sur la premiere prise.
+    {
+        let it = &mut v.tracks[0].items[0];
+        it.peaks = (0..800)
+            .map(|k| {
+                let a = ((k as f32 * 0.07).sin() * 0.6).abs() * (1.0 - (k % 100) as f32 / 140.0);
+                (-a, a)
+            })
+            .collect();
+    }
+    // La seconde prise de la seconde guitare n'est pas transcrite.
+    {
+        let it = &mut v.tracks[1].items[0];
+        it.state = Some(State::Idle);
+        it.doc.clear();
+        it.ghosts.clear();
+    }
+    b.draw(&mut v);
+    let wand = |h: &Hit| matches!(h, Hit::Transcribe { t: 1, i: 0 });
+    let (wx, wy) = find(&v, wand).expect("la baguette de la prise pas transcrite");
+    assert_eq!(click(&mut v, wx, wy), Some(Act::Transcribe { t: 1, i: 0 }));
+    assert!(v.rect_of(Hit::Auto).is_some());
+    // Glisser par la couche audio, d'une noire et demie : la mesure la plus
+    // proche (le magnetisme), Ctrl : une copie.
+    let audio = |h: &Hit| {
+        *h == Hit::Item {
+            t: 0,
+            i: 0,
+            lane: Lane::Audio,
+        }
+    };
+    let (x, y) = find(&v, audio).expect("la prise audio");
+    let q0 = v.tracks[0].items[0].qn0;
+    let px = v.lay.ppq;
+    let ctrl = Mods {
+        ctrl: true,
+        ..Mods::default()
+    };
+    v.event(&Ev::Down {
+        x,
+        y,
+        b: Button::Left,
+        dbl: false,
+        mods: ctrl,
+    });
+    v.event(&Ev::Move {
+        x: x + px * 3.0,
+        y,
+        mods: ctrl,
+    });
+    b.shot(&mut v, "7_glisser_onde");
+    let a = v.event(&Ev::Up {
+        x: x + px * 3.0,
+        y,
+        b: Button::Left,
+        mods: ctrl,
+    });
+    match a {
+        Some(Act::CopyItem {
+            t: 0,
+            i: 0,
+            qn0,
+            to: 0,
+        }) => assert!(
+            (qn0 - ((q0 + 3.0) / 4.0).round() * 4.0).abs() < 1e-9,
+            "{qn0}"
+        ),
+        other => panic!("{other:?}"),
+    }
+}

@@ -419,6 +419,21 @@ impl Arr {
             self.follow,
             Hit::Follow,
             false,
+        ) + s(4.0);
+        // La transcription automatique des prises neuves (coupee : sur
+        // demande, la baguette de chaque prise).
+        x += self.icon_button(
+            cv,
+            icons,
+            th,
+            bx,
+            x,
+            by,
+            bh,
+            Icon::Wand,
+            self.auto,
+            Hit::Auto,
+            false,
         );
         // A droite : l'aide, la piste neuve, l'enregistrement en cours.
         let mut rx = l.w - s(10.0) - bh;
@@ -636,18 +651,12 @@ impl Arr {
                     );
                 }
             }
-            // Une prise qu'on glisse : ou elle irait, sur sa guitare.
-            if let Some((t, i, q, to)) = self.item_drag() {
-                let len = self.item(t, i).map_or(0.0, |it| it.qn1 - it.qn0);
-                let mut ty = top - self.vscroll;
-                for tr in self.tracks.iter().take(to) {
-                    ty += track_h(tr, th.scale, vz) + s(TRACK_SEP);
-                }
-                if let Some(tr) = self.tracks.get(to) {
-                    let th_ = track_h(tr, th.scale, vz);
-                    let (xa, xb) = (geo.x(q), geo.x(q + len));
-                    cv.fill_rect(xa, ty, xb - xa, th_, th.accent.with_alpha(40));
-                    cv.stroke_rect(xa, ty, xb - xa, th_, s(1.5), th.accent);
+            // Une prise qu'on glisse (elle se dessine a sa nouvelle place) :
+            // la ligne ou tombe son debut, a travers les pistes.
+            if let Some((_, _, q, _, _)) = self.item_drag() {
+                let x = geo.x(q).round();
+                if x >= l.sx && x <= content_r {
+                    cv.fill_rect(x, top, 1.0, (y - top).max(0.0), th.accent);
                 }
             }
         }
@@ -1157,102 +1166,52 @@ impl Arr {
             l.sw,
             (vis.1 + vis.3).min(y0 + h) - vis.1.max(y0),
         ) {
+            // La prise qu'on glisse : elle quitte sa place (sauf une copie) et
+            // se dessine, entiere, la ou elle irait.
+            let drag = self.item_drag();
+            let lay = ItemLay {
+                lanes: &lane_ys,
+                shown: lanes,
+                nstr,
+                clip: content_clip,
+                y0,
+                y1: y,
+                right,
+            };
             for (i, it) in self.tracks[t].items.iter_mut().enumerate() {
-                let (qa, qb) = (it.qn0, it.qn1);
-                let (xa, xb) = (geo.x(qa), geo.x(qb));
-                if xb < l.sx || xa > right {
+                if drag.is_some_and(|d| d.0 == t && d.1 == i && !d.4) {
                     continue;
                 }
                 let is_sel = sel.is_some_and(|x| x.t == t && x.i == Some(i));
                 let sel_n = sel.filter(|x| x.t == t && x.i == Some(i)).and_then(|x| x.n);
-                for &(lane, ly, lh) in &lane_ys {
-                    match lane {
-                        Lane::Audio => {
-                            draw_audio_item(cv, text, th, it, geo, xa, xb, ly, lh, is_sel)
-                        }
-                        Lane::Midi => draw_midi_item(cv, th, it, geo, xa, xb, ly, lh, nstr),
-                        _ => {}
+                draw_item(
+                    cv, text, icons, th, bx, it, t, i, geo, &lay, is_sel, sel_n, hover,
+                );
+            }
+            if let Some((dt, di, q, to, _)) = drag {
+                if to == t {
+                    if let Some(it) = self.tracks.get_mut(dt).and_then(|x| x.items.get_mut(di)) {
+                        let moved = Geo {
+                            scroll: geo.scroll - (q - it.qn0),
+                            ..geo
+                        };
+                        let mut none: Vec<HBox> = Vec::new();
+                        draw_item(
+                            cv,
+                            text,
+                            icons,
+                            th,
+                            &mut none,
+                            it,
+                            dt,
+                            di,
+                            moved,
+                            &lay,
+                            true,
+                            None,
+                            Hit::None,
+                        );
                     }
-                    push(
-                        bx,
-                        content_clip,
-                        xa,
-                        ly,
-                        xb - xa,
-                        lh,
-                        Hit::Item { t, i, lane },
-                    );
-                    match lane {
-                        Lane::Score => {
-                            if it.state == Some(State::Ready) || !it.doc.is_empty() {
-                                draw_score(
-                                    cv,
-                                    text,
-                                    th,
-                                    it,
-                                    t,
-                                    i,
-                                    geo,
-                                    ly + s(38.0),
-                                    sel_n,
-                                    hover,
-                                    bx,
-                                    content_clip,
-                                );
-                            } else {
-                                draw_pending(cv, text, th, it, xa, xb, ly, lh);
-                            }
-                        }
-                        Lane::Tab => {
-                            let tg = s(11.0);
-                            let ty = ly + s(18.0);
-                            for k in 0..nstr {
-                                push(
-                                    bx,
-                                    content_clip,
-                                    xa,
-                                    ty + k as f32 * tg - tg * 0.5,
-                                    xb - xa,
-                                    tg,
-                                    Hit::TabLine {
-                                        t,
-                                        i,
-                                        s: nstr - 1 - k,
-                                    },
-                                );
-                            }
-                            if it.state == Some(State::Ready) || !it.doc.is_empty() {
-                                draw_tab(
-                                    cv,
-                                    text,
-                                    th,
-                                    it,
-                                    t,
-                                    i,
-                                    geo,
-                                    ty,
-                                    tg,
-                                    sel_n,
-                                    hover,
-                                    bx,
-                                    content_clip,
-                                );
-                            } else if !lanes.on(Lane::Score) {
-                                draw_pending(cv, text, th, it, xa, xb, ly, lh);
-                            }
-                        }
-                        _ => {}
-                    }
-                }
-                if is_sel {
-                    cv.stroke_rect(
-                        xa,
-                        y0 + 1.0,
-                        xb - xa,
-                        (y - y0 - 2.0).max(0.0),
-                        s(1.5),
-                        th.accent,
-                    );
                 }
             }
             // L'enregistrement en cours : une prise rouge qui grandit.
@@ -1832,6 +1791,162 @@ impl Arr {
 
 /// L'item dans la couche audio : son cadre, son nom, sa forme d'onde (de
 /// l'analyse), ou ce qui l'attend.
+/// Ou se dessinent les couches d'une piste (pour un item).
+struct ItemLay<'a> {
+    lanes: &'a [(Lane, f32, f32)],
+    shown: crate::Lanes,
+    nstr: usize,
+    clip: (f32, f32, f32, f32),
+    /// Le haut et le bas des couches, le bord droit du contenu.
+    y0: f32,
+    y1: f32,
+    right: f32,
+}
+
+/// Un item dans toutes les couches de sa piste : l'audio, le MIDI, la
+/// partition, la tab, et leurs cibles.
+fn draw_item(
+    cv: &mut Canvas<'_>,
+    text: &mut TextCache,
+    icons: &mut IconCache,
+    th: &Theme,
+    bx: &mut Vec<HBox>,
+    it: &mut Item,
+    t: usize,
+    i: usize,
+    geo: Geo,
+    lay: &ItemLay<'_>,
+    is_sel: bool,
+    sel_n: Option<usize>,
+    hover: Hit,
+) {
+    let s = |v: f32| th.s(v);
+    let (xa, xb) = (geo.x(it.qn0), geo.x(it.qn1));
+    if xb < geo.sx || xa > lay.right {
+        return;
+    }
+    let content_clip = lay.clip;
+    let nstr = lay.nstr;
+    let shown = it.state == Some(State::Ready) || !it.doc.is_empty();
+    for &(lane, ly, lh) in lay.lanes {
+        match lane {
+            Lane::Audio => draw_audio_item(cv, text, th, it, geo, xa, xb, ly, lh, is_sel),
+            Lane::Midi => draw_midi_item(cv, th, it, geo, xa, xb, ly, lh, nstr),
+            _ => {}
+        }
+        push(
+            bx,
+            content_clip,
+            xa,
+            ly,
+            xb - xa,
+            lh,
+            Hit::Item { t, i, lane },
+        );
+        match lane {
+            Lane::Score => {
+                if shown {
+                    draw_score(
+                        cv,
+                        text,
+                        th,
+                        it,
+                        t,
+                        i,
+                        geo,
+                        ly + s(38.0),
+                        sel_n,
+                        hover,
+                        bx,
+                        content_clip,
+                    );
+                } else {
+                    draw_pending(
+                        cv,
+                        text,
+                        icons,
+                        th,
+                        bx,
+                        it,
+                        t,
+                        i,
+                        xa,
+                        xb,
+                        ly,
+                        lh,
+                        hover,
+                        content_clip,
+                    );
+                }
+            }
+            Lane::Tab => {
+                let tg = s(11.0);
+                let ty = ly + s(18.0);
+                for k in 0..nstr {
+                    push(
+                        bx,
+                        content_clip,
+                        xa,
+                        ty + k as f32 * tg - tg * 0.5,
+                        xb - xa,
+                        tg,
+                        Hit::TabLine {
+                            t,
+                            i,
+                            s: nstr - 1 - k,
+                        },
+                    );
+                }
+                if shown {
+                    draw_tab(
+                        cv,
+                        text,
+                        th,
+                        it,
+                        t,
+                        i,
+                        geo,
+                        ty,
+                        tg,
+                        sel_n,
+                        hover,
+                        bx,
+                        content_clip,
+                    );
+                } else if !lay.shown.on(Lane::Score) {
+                    draw_pending(
+                        cv,
+                        text,
+                        icons,
+                        th,
+                        bx,
+                        it,
+                        t,
+                        i,
+                        xa,
+                        xb,
+                        ly,
+                        lh,
+                        hover,
+                        content_clip,
+                    );
+                }
+            }
+            _ => {}
+        }
+    }
+    if is_sel {
+        cv.stroke_rect(
+            xa,
+            lay.y0 + 1.0,
+            xb - xa,
+            (lay.y1 - lay.y0 - 2.0).max(0.0),
+            s(1.5),
+            th.accent,
+        );
+    }
+}
+
 fn draw_audio_item(
     cv: &mut Canvas<'_>,
     text: &mut TextCache,
@@ -1883,11 +1998,30 @@ fn draw_audio_item(
             &name,
             th.text,
         );
-        // La forme d'onde.
+        // La forme d'onde : celle de REAPER, sinon l'enveloppe de l'analyse.
         let mid = ly + s(17.0) + (lh - s(23.0)) * 0.5;
         let half = (lh - s(25.0)) * 0.5;
         let n = it.frame_qn.len();
-        if n > 0 && !it.env.is_empty() {
+        let np = it.peaks.len();
+        if np > 0 && it.qn1 > it.qn0 {
+            let wave_c = th.text_dim.mix(th.text, 0.3).fade(0.85);
+            let mut x = xa.max(geo.clip.0).floor();
+            let x_end = xb.min(geo.clip.0 + geo.clip.2);
+            let k = np as f64 / (it.qn1 - it.qn0);
+            while x < x_end {
+                let qa = geo.scroll + ((x - geo.sx) / geo.ppq.max(1e-3)) as f64;
+                let qb = geo.scroll + ((x + 1.0 - geo.sx) / geo.ppq.max(1e-3)) as f64;
+                let a = (((qa - it.qn0) * k).floor().max(0.0) as usize).min(np - 1);
+                let b = (((qb - it.qn0) * k).ceil().max(0.0) as usize).clamp(a + 1, np);
+                let (lo, hi) = it.peaks[a..b]
+                    .iter()
+                    .fold((0f32, 0f32), |(l, h), p| (l.min(p.0), h.max(p.1)));
+                let top = mid - hi.clamp(-1.0, 1.0) * half;
+                let bot = mid - lo.clamp(-1.0, 1.0) * half;
+                cv.fill_rect(x, top.min(bot), 1.0, (bot - top).abs().max(1.0), wave_c);
+                x += 1.0;
+            }
+        } else if n > 0 && !it.env.is_empty() {
             let wave_c = th.text_dim.mix(th.text, 0.3).fade(0.85);
             let mut x = xa.max(geo.clip.0);
             let x_end = xb.min(geo.clip.0 + geo.clip.2);
@@ -1908,7 +2042,7 @@ fn draw_audio_item(
         }
         if let Some(st) = &it.state {
             let msg = match st {
-                State::Ready => String::new(),
+                State::Ready | State::Idle => String::new(),
                 State::Waiting => "\u{2026}".into(),
                 State::Busy(p) => format!("{p} %"),
                 State::Failed(e) => format!("\u{26a0} {e}"),
@@ -1978,23 +2112,25 @@ fn draw_midi_item(
     }
 }
 
-/// Un item pas encore transcrit, dans la partition ou la tab.
+/// Un item pas encore transcrit, dans la partition ou la tab : la baguette
+/// le transcrit (rien ne se transcrit sans qu'on le demande).
 fn draw_pending(
     cv: &mut Canvas<'_>,
     text: &mut TextCache,
+    icons: &mut IconCache,
     th: &Theme,
+    bx: &mut Vec<HBox>,
     it: &Item,
+    t: usize,
+    i: usize,
     xa: f32,
     xb: f32,
     ly: f32,
     lh: f32,
+    hover: Hit,
+    clip: (f32, f32, f32, f32),
 ) {
     let s = th.scale;
-    let msg = match &it.state {
-        Some(State::Busy(p)) => format!("{p} %"),
-        Some(State::Failed(e)) => format!("\u{26a0} {e}"),
-        _ => "\u{2026}".into(),
-    };
     dashed_rect(
         cv,
         xa + 2.0,
@@ -2003,6 +2139,37 @@ fn draw_pending(
         lh - 8.0 * s,
         th.text_faint,
     );
+    if matches!(it.state, None | Some(State::Idle)) {
+        let bs = (26.0 * s).round();
+        let x = (xa.max(clip.0) + 10.0 * s).round();
+        let y = (ly + (lh - bs) * 0.5).round();
+        if x + bs <= xb {
+            let hit = Hit::Transcribe { t, i };
+            let hov = hover == hit;
+            cv.fill_round_rect(
+                x,
+                y,
+                bs,
+                bs,
+                3.0 * s,
+                if hov {
+                    th.accent.with_alpha(60)
+                } else {
+                    th.field
+                },
+            );
+            let isz = (16.0 * s) as u16;
+            let o = ((bs - isz as f32) * 0.5).round();
+            icons.draw(cv, Icon::Wand, x + o, y + o, isz, th.accent, false);
+            push(bx, clip, x, y, bs, bs, hit);
+        }
+        return;
+    }
+    let msg = match &it.state {
+        Some(State::Busy(p)) => format!("{p} %"),
+        Some(State::Failed(e)) => format!("\u{26a0} {e}"),
+        _ => "\u{2026}".into(),
+    };
     text.draw(
         cv,
         Font::new(0, (11.0 * s) as u16, 400),
