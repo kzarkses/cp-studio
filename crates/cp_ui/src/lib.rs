@@ -103,13 +103,119 @@ pub mod vk {
 /// Une couleur (r, g, b).
 pub type Rgb = (u8, u8, u8);
 
+/// Les curseurs de souris de REAPER, par ce qu'un geste ferait (les noms de
+/// ses fichiers `Cursors\<nom>.cur`). Une vue dit lequel montrer selon ce
+/// qui est sous la souris et les touches tenues, comme REAPER.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
+pub enum Pointer {
+    #[default]
+    Arrow,
+    // L'arrangement
+    ItemMove,
+    ItemCopy,
+    ItemSlide,
+    TrimLeft,
+    TrimRight,
+    StretchLeft,
+    StretchRight,
+    DualEdge,
+    FadeIn,
+    FadeOut,
+    ItemVol,
+    IBeam,
+    TimeSelEdge,
+    Marquee,
+    HandScroll,
+    Delete,
+    // L'editeur MIDI
+    NoteDraw,
+    NotePaint,
+    NoteErase,
+    NoteCopy,
+    NoteEdgeLeft,
+    NoteEdgeRight,
+    NoteEdgeDual,
+    NoteStretchLeft,
+    NoteStretchRight,
+    NoteMoveH,
+    NoteMoveV,
+    NoteVel,
+    NoteChord,
+    NoteArp,
+    TouchSelect,
+    // Les poignees d'interface
+    ResizeNS,
+    ResizeWE,
+}
+
+/// Une edition « au survol » : sur ce qui est sous la souris, a la place de
+/// la souris (les scripts que Cedric lie a Q, D, S, Z, A, E dans
+/// l'arrangement : nvk, LKC, CP_DeleteUnderMouse).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HoverEdit {
+    TrimLeft,
+    TrimRight,
+    Split,
+    Delete,
+    FadeIn,
+    FadeOut,
+}
+
+impl HoverEdit {
+    /// Reconnait une action de REAPER a son nom (un script, une action
+    /// personnalisee) : demain, des raccourcis propres a CP Studio porteront
+    /// les memes mots.
+    pub fn of_name(name: &str) -> Option<HoverEdit> {
+        let n = name.to_ascii_lowercase();
+        if n.contains("trim left") || (n.contains("trim") && n.contains("left edge")) {
+            Some(HoverEdit::TrimLeft)
+        } else if n.contains("trim right") || (n.contains("trim") && n.contains("right edge")) {
+            Some(HoverEdit::TrimRight)
+        } else if n.contains("fadein") || n.contains("fade in") {
+            Some(HoverEdit::FadeIn)
+        } else if n.contains("fadeout") || n.contains("fade out") {
+            Some(HoverEdit::FadeOut)
+        } else if n.contains("delete") && n.contains("mouse") {
+            Some(HoverEdit::Delete)
+        } else if n.contains("split") && !n.contains("time selection") && !n.contains("razor") {
+            Some(HoverEdit::Split)
+        } else {
+            None
+        }
+    }
+}
+
 /// La ligne verticale a la souris, avec les reglages de REAPER.
 #[derive(Clone, Copy, Debug, PartialEq, Default)]
 pub struct Guide {
     pub on: bool,
     /// Calee sur la grille quand le magnetisme est la.
     pub snap: bool,
+    /// Maj (ou Ctrl) tenue : sans magnetisme.
+    pub shift_free: bool,
+    pub ctrl_free: bool,
     pub color: Option<Color>,
+}
+
+impl Guide {
+    /// Les reglages de REAPER : `guidelines2` (Preferences > Appearance,
+    /// « Display vertical line at mouse position »), releve dans reaper.exe
+    /// le 2026-11-22 : 0x10 montree, 0x20 calee (le bouton du magnetisme),
+    /// 0x40 Maj sans, 0x80 Ctrl sans.
+    pub fn from_reaper(guidelines2: i32, color: Option<Color>) -> Guide {
+        Guide {
+            on: guidelines2 & 0x10 != 0,
+            snap: guidelines2 & 0x20 != 0,
+            shift_free: guidelines2 & 0x40 != 0,
+            ctrl_free: guidelines2 & 0x80 != 0,
+            color,
+        }
+    }
+
+    /// Calee, avec ces touches tenues ?
+    pub fn snaps(&self, m: Mods) -> bool {
+        self.snap && !(self.shift_free && m.shift) && !(self.ctrl_free && m.ctrl)
+    }
 }
 
 /// Couleurs, tailles, polices. `scale` = DPI / 96.

@@ -56,6 +56,7 @@ unsafe extern "system" {
     fn GetCapture() -> Raw;
     fn SetCursor(c: Raw) -> Raw;
     fn LoadCursorW(inst: Raw, name: *const u16) -> Raw;
+    fn LoadCursorFromFileW(path: *const u16) -> Raw;
     fn TrackMouseEvent(t: *mut TrackMouseEvent) -> i32;
     fn GetKeyState(vk: i32) -> i16;
     fn GetAsyncKeyState(vk: i32) -> i16;
@@ -465,6 +466,126 @@ pub enum Cursor {
     No,
     Wait,
     Cross,
+}
+
+#[link(name = "kernel32")]
+unsafe extern "system" {
+    fn GetModuleHandleW(name: *const u16) -> Raw;
+}
+
+/// Le nom REAPER d'un curseur, et ou le prendre : une ressource de
+/// reaper.exe (son numero) ou un curseur de Windows (IDC_*). Releve dans
+/// reaper.exe le 2026-11-22 (les appels de son chargeur).
+fn pointer_src(p: cp_ui::Pointer) -> (&'static str, Src) {
+    use Src::{Idc, Res};
+    use cp_ui::Pointer as P;
+    const ARROW: u16 = 32512;
+    const SIZEWE: u16 = 32644;
+    const SIZENS: u16 = 32645;
+    match p {
+        P::Arrow => ("arrow", Idc(ARROW)),
+        P::ItemMove => ("arrange_move", Res(187)),
+        P::ItemCopy => ("arrange_dd_copy", Res(182)),
+        P::ItemSlide => ("arrange_slide", Res(465)),
+        P::TrimLeft => ("arrange_leftresize", Res(417)),
+        P::TrimRight => ("arrange_rightresize", Res(418)),
+        P::StretchLeft => ("arrange_leftstretch", Res(430)),
+        P::StretchRight => ("arrange_rightstretch", Res(431)),
+        P::DualEdge => ("arrange_dualedge", Res(450)),
+        P::FadeIn => ("arrange_fadein", Res(105)),
+        P::FadeOut => ("arrange_fadeout", Res(184)),
+        P::ItemVol => ("arrange_itemvol", Idc(SIZENS)),
+        P::IBeam => ("arrange_ibeam", Res(220)),
+        P::TimeSelEdge => ("arrange_timesel", Idc(SIZEWE)),
+        P::Marquee => ("arrange_marquee", Res(488)),
+        P::HandScroll => ("arrange_handscroll", Res(429)),
+        P::Delete => ("delete", Res(464)),
+        P::NoteDraw => ("midi_draw", Res(185)),
+        P::NotePaint => ("midi_paint", Res(473)),
+        P::NoteErase => ("midi_erase", Res(472)),
+        P::NoteCopy => ("midi_copy", Res(182)),
+        P::NoteEdgeLeft => ("midi_noteedge_l", Res(417)),
+        P::NoteEdgeRight => ("midi_noteedge_r", Res(418)),
+        P::NoteEdgeDual => ("midi_noteedge_dual", Res(450)),
+        P::NoteStretchLeft => ("midi_stretch_l", Res(430)),
+        P::NoteStretchRight => ("midi_stretch_r", Res(431)),
+        P::NoteMoveH => ("midi_move_horz", Idc(SIZEWE)),
+        P::NoteMoveV => ("midi_move_vert", Idc(SIZENS)),
+        P::NoteVel => ("midi_vel", Idc(SIZENS)),
+        P::NoteChord => ("midi_chord", Res(503)),
+        P::NoteArp => ("midi_arp", Res(502)),
+        P::TouchSelect => ("midi_touch_select", Res(515)),
+        P::ResizeNS => ("tcp_resize", Idc(SIZENS)),
+        P::ResizeWE => ("tcppane_resize", Idc(SIZEWE)),
+    }
+}
+
+#[derive(Clone, Copy)]
+enum Src {
+    Res(u16),
+    Idc(u16),
+}
+
+thread_local! {
+    /// Les curseurs charges (partages, jamais detruits) et le dossier
+    /// `Cursors` de REAPER.
+    static POINTERS: std::cell::RefCell<(Option<std::path::PathBuf>, std::collections::HashMap<cp_ui::Pointer, usize>)> =
+        std::cell::RefCell::new((None, std::collections::HashMap::new()));
+}
+
+/// Le dossier de ressources de REAPER : ses curseurs personnalises sont dans
+/// `Cursors`.
+pub fn set_cursor_dir(resource: &std::path::Path) {
+    POINTERS.with(|p| {
+        let mut p = p.borrow_mut();
+        let dir = resource.join("Cursors");
+        if p.0.as_deref() != Some(dir.as_path()) {
+            p.0 = Some(dir);
+            p.1.clear();
+        }
+    });
+}
+
+/// Montre le curseur de REAPER pour ce geste, comme REAPER le charge : le
+/// fichier `Cursors\<nom>.cur` s'il existe (les curseurs de Cedric), sinon
+/// celui de reaper.exe, sinon celui de Windows.
+pub fn set_pointer(ptr: cp_ui::Pointer) {
+    let h = POINTERS.with(|p| {
+        let mut p = p.borrow_mut();
+        if let Some(&h) = p.1.get(&ptr) {
+            return h as Raw;
+        }
+        let (name, src) = pointer_src(ptr);
+        let mut h: Raw = null_mut();
+        if let Some(dir) = &p.0 {
+            let f = dir.join(format!("{name}.cur"));
+            if f.is_file() {
+                let w = crate::win::wide(&f.to_string_lossy());
+                // SAFETY: chemin UTF-16 termine par zero.
+                h = unsafe { LoadCursorFromFileW(w.as_ptr()) };
+            }
+        }
+        if h.is_null() {
+            h = match src {
+                // SAFETY: le module de reaper.exe (le processus) ; un numero de
+                // ressource passe en MAKEINTRESOURCE.
+                Src::Res(id) => unsafe { LoadCursorW(GetModuleHandleW(null_mut()), id as usize as *const u16) },
+                Src::Idc(_) => null_mut(),
+            };
+        }
+        if h.is_null() {
+            let idc = match src {
+                Src::Idc(i) => i,
+                Src::Res(_) => 32512,
+            };
+            // SAFETY: curseur systeme partage.
+            h = unsafe { LoadCursorW(null_mut(), idc as usize as *const u16) };
+        }
+        p.1.insert(ptr, h as usize);
+        h
+    });
+    // SAFETY: un curseur charge ci-dessus (partage, jamais detruit).
+    unsafe { SetCursor(h) };
 }
 
 pub fn set_cursor(c: Cursor) {

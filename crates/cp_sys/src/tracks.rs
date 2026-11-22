@@ -42,6 +42,9 @@ pub struct ItemSnap {
     pub takes: Vec<TakeSnap>,
     pub selected: bool,
     pub mute: bool,
+    /// Les fondus (s) : l'automatique s'il y en a un, sinon le manuel.
+    pub fade_in: f64,
+    pub fade_out: f64,
     /// Les donnees privees demandees, dans l'ordre des cles.
     pub ext: Vec<Option<String>>,
 }
@@ -293,6 +296,14 @@ impl Reaper {
             takes,
             selected: val(c"B_UISEL") != 0.0,
             mute: val(c"B_MUTE") != 0.0,
+            fade_in: {
+                let a = val(c"D_FADEINLEN_AUTO");
+                if a > 0.0 { a } else { val(c"D_FADEINLEN") }
+            },
+            fade_out: {
+                let a = val(c"D_FADEOUTLEN_AUTO");
+                if a > 0.0 { a } else { val(c"D_FADEOUTLEN") }
+            },
             ext: keys
                 .iter()
                 .map(|k| {
@@ -653,6 +664,44 @@ impl Reaper {
         };
         // SAFETY: item et piste vivants.
         unsafe { m(it, tr) }
+    }
+
+    /// Coupe un item a `t` (s, temps du projet). Rend le GUID de la partie
+    /// droite (l'item d'origine garde la gauche).
+    pub fn split_item(&self, guid: &str, t: f64) -> Option<String> {
+        type Split = unsafe extern "C" fn(P, f64) -> P;
+        let it = self.find_item(guid, None)?;
+        let f = self.tf::<Split>(c"SplitMediaItem")?;
+        // SAFETY: MediaItem* SplitMediaItem(MediaItem*, double) ; item vivant.
+        let right = unsafe { f(it, t) };
+        if right.is_null() {
+            return None;
+        }
+        self.it_str(right, "GUID", None)
+    }
+
+    /// Le GUID de la prise active d'un item.
+    pub fn active_take_guid(&self, guid: &str) -> Option<String> {
+        type Act = unsafe extern "C" fn(P) -> P;
+        type TStr = unsafe extern "C" fn(P, *const c_char, *mut c_char, bool) -> bool;
+        let it = self.find_item(guid, None)?;
+        let at = self.tf::<Act>(c"GetActiveTake")?;
+        let ts = self.tf::<TStr>(c"GetSetMediaItemTakeInfo_String")?;
+        // SAFETY: item vivant ; prise verifiee non nulle ; tampon de 64 octets.
+        unsafe {
+            let tk = at(it);
+            if tk.is_null() {
+                return None;
+            }
+            let mut buf = [0u8; 64];
+            if !ts(tk, c"GUID".as_ptr(), buf.as_mut_ptr() as *mut c_char, false) {
+                return None;
+            }
+            let s = std::ffi::CStr::from_ptr(buf.as_ptr() as *const c_char)
+                .to_string_lossy()
+                .into_owned();
+            (!s.is_empty()).then_some(s)
+        }
     }
 
     /// Le magnetisme de REAPER sur un temps (s) : sa grille, ses reglages ;
