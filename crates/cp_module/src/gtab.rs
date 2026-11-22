@@ -2463,8 +2463,6 @@ impl App {
             self.gtab_sync();
             self.gt.state_seen = r.state_count();
             if open {
-                self.gtab_follow_selection(playing);
-                self.gtab_select_pending();
                 // Le theme de REAPER.
                 let key: Vec<_> = LOOK.iter().map(|k| r.theme_color(k)).collect();
                 if let Some(w) = &mut self.gt.win {
@@ -2479,6 +2477,12 @@ impl App {
                     }
                 }
             }
+        }
+        // La selection de REAPER, a chaque battement (choisir un item ne
+        // bouge pas le compteur du projet : la relecture ne la voit pas).
+        if !rec && !self.gt.arr.dragging() {
+            self.gtab_follow_selection(playing);
+            self.gtab_select_pending();
         }
         if !open {
             return;
@@ -2683,8 +2687,18 @@ impl App {
             return;
         }
         if let Some(s) = sel_now {
-            let audio = r.item_ext(&s, "CPGT_src").unwrap_or(s);
+            let audio = r.item_ext(&s, "CPGT_src").unwrap_or(s.clone());
             if self.gtab_find(&audio).is_some() {
+                // Le MIDI choisi dans REAPER : sa couche a le focus.
+                let lane = if audio != s {
+                    cp_tabview::Lane::Midi
+                } else {
+                    cp_tabview::Lane::Audio
+                };
+                if self.gt.arr.focus_lane != lane {
+                    self.gt.arr.focus_lane = lane;
+                    self.gt.arr.mark();
+                }
                 self.gt.pending = Some(audio);
             }
         }

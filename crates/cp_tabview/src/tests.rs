@@ -624,6 +624,11 @@ fn glisser_une_prise() {
             ..
         })
     ));
+    // La couche cliquee a le focus : son item est montre choisi.
+    assert_eq!(v.focus_lane, Lane::Midi);
+    b.shot(&mut v, "10_focus_midi");
+    click(&mut v, x, y);
+    assert_eq!(v.focus_lane, Lane::Audio);
     let q0 = v.tracks[0].items[0].qn0;
     let px = v.lay.ppq;
     let m = Mods::default();
@@ -1089,4 +1094,57 @@ fn rogner_fondre_et_editer_au_survol() {
 fn une_vue_neuve_se_dessine_entiere() {
     let mut v = arranger();
     assert_eq!(v.take_damage(800, 600), vec![cp_gfx::IRect::new(0, 0, 800, 600)]);
+}
+
+/// Le clic pose le curseur la ou la ligne a la souris le montre : calee par
+/// le magnetisme si la ligne l'est, libre avec Maj (ses reglages chez
+/// Cedric : guidelines2 = 0x71).
+#[test]
+fn le_clic_suit_la_ligne_a_la_souris() {
+    let mut b = Bench::new(1600, 900);
+    let mut v = arranger();
+    v.rec.clear();
+    v.snapper = Some(Box::new(|q: f64| (q / 4.0).round() * 4.0));
+    v.guide = cp_ui::Guide::from_reaper(0x71, None);
+    b.draw(&mut v);
+    let q0 = v.tracks[0].items[0].qn0;
+    let audio = v
+        .rect_of(Hit::Item {
+            t: 0,
+            i: 0,
+            lane: Lane::Audio,
+        })
+        .expect("la couche audio");
+    let x = v.x_of(q0 + 2.6);
+    let y = audio.1 + audio.3 * 0.6;
+    for (m, want) in [
+        (Mods::default(), ((q0 + 2.6) / 4.0).round() * 4.0),
+        (
+            Mods {
+                shift: true,
+                ..Mods::default()
+            },
+            v.qn_of(x),
+        ),
+    ] {
+        v.event(&Ev::Move { x, y, mods: m });
+        assert_eq!(v.guide_q, Some(want));
+        v.event(&Ev::Down {
+            x,
+            y,
+            b: Button::Left,
+            dbl: false,
+            mods: m,
+        });
+        let a = v.event(&Ev::Up {
+            x,
+            y,
+            b: Button::Left,
+            mods: m,
+        });
+        match a {
+            Some(Act::ClickItem { q, .. }) => assert_eq!(q, want),
+            other => panic!("{other:?}"),
+        }
+    }
 }

@@ -1194,6 +1194,7 @@ impl Arr {
                 y0,
                 y1: y,
                 right,
+                focus: self.focus_lane,
             };
             let fade = self.fade_preview();
             let trim = self.trim_preview();
@@ -1850,6 +1851,8 @@ struct ItemLay<'a> {
     y0: f32,
     y1: f32,
     right: f32,
+    /// L'item qui a le focus dans la prise choisie (audio ou MIDI).
+    focus: Lane,
 }
 
 /// Un item dans toutes les couches de sa piste : l'audio, le MIDI, la
@@ -1879,8 +1882,32 @@ fn draw_item(
     let shown = it.state == Some(State::Ready) || !it.doc.is_empty();
     for &(lane, ly, lh) in lay.lanes {
         match lane {
-            Lane::Audio => draw_audio_item(cv, text, th, it, geo, xa, xb, ly, lh, is_sel),
-            Lane::Midi => draw_midi_item(cv, th, it, geo, xa, xb, ly, lh, nstr),
+            // L'item qui a le focus (l'audio ou le MIDI) : choisi, comme
+            // dans REAPER.
+            Lane::Audio => draw_audio_item(
+                cv,
+                text,
+                th,
+                it,
+                geo,
+                xa,
+                xb,
+                ly,
+                lh,
+                is_sel && lay.focus == Lane::Audio,
+            ),
+            Lane::Midi => draw_midi_item(
+                cv,
+                th,
+                it,
+                geo,
+                xa,
+                xb,
+                ly,
+                lh,
+                nstr,
+                is_sel && lay.focus == Lane::Midi,
+            ),
             _ => {}
         }
         push(
@@ -2143,13 +2170,19 @@ fn draw_midi_item(
     ly: f32,
     lh: f32,
     nstr: usize,
+    sel: bool,
 ) {
     let s = |v: f32| v * geo.s;
     let rp = &th.rp;
+    let (bg, border) = if sel {
+        (rp.item_bg_sel, rp.item_border_sel)
+    } else {
+        (rp.item_bg, rp.item_border)
+    };
     let (x0, x1) = (xa.round(), xb.round().max(xa.round() + 1.0));
     let (y0, y1) = ((ly + s(1.0)).round(), (ly + lh - s(1.0)).round());
-    cv.fill_rect(x0, y0, x1 - x0, y1 - y0, rp.item_bg);
-    cv.stroke_rect(x0, y0, x1 - x0, y1 - y0, 1.0, rp.item_border);
+    cv.fill_rect(x0, y0, x1 - x0, y1 - y0, bg);
+    cv.stroke_rect(x0, y0, x1 - x0, y1 - y0, 1.0, border);
     let (lo, hi) = (38.0f32, 82.0f32);
     for n in &it.doc {
         let x = geo.x(n.qn0);

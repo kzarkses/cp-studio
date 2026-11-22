@@ -798,6 +798,9 @@ pub struct Arr {
     /// La souris : sa place et les touches tenues (les editions au survol,
     /// le curseur).
     mouse: (f32, f32, Mods),
+    /// L'item qui a le focus dans la prise choisie : son audio ou son MIDI
+    /// (celui que REAPER a choisi), montre comme un item choisi de REAPER.
+    pub focus_lane: Lane,
     /// Le bas des pistes a l'ecran (les traits s'y arretent).
     pub(crate) tracks_bottom: f32,
 }
@@ -846,6 +849,7 @@ impl Arr {
             damage: Vec::new(),
             tracks_bottom: 0.0,
             mouse: (0.0, 0.0, Mods::default()),
+            focus_lane: Lane::Audio,
         }
     }
 
@@ -1493,7 +1497,7 @@ impl Arr {
                         return None;
                     }
                     Some(Drag::Range { q0 }) => {
-                        let q = self.snap_any(self.qn_of(x));
+                        let q = self.cursor_q(x, mods);
                         self.range = Some((q0.min(q), q0.max(q)));
                         self.dirty = true;
                         return None;
@@ -1715,7 +1719,7 @@ impl Arr {
                                 t,
                                 i,
                                 lane,
-                                q: self.qn_of(x0),
+                                q: self.cursor_q(x0, self.mouse.2),
                             });
                         }
                         if copy {
@@ -1808,33 +1812,29 @@ impl Arr {
         }
     }
 
-    /// La ligne a la souris : sur le contenu (regle comprise), calee par le
-    /// magnetisme de REAPER si ses reglages le veulent.
+    /// La ligne a la souris : sur le contenu (regle comprise), la ou un clic
+    /// poserait le curseur.
     fn guide_at(&mut self, x: f32, y: f32) {
         let l = self.lay;
         let over = x >= l.sx && x < l.sx + l.sw && y >= l.top && y < l.bottom - l.hs_h;
-        self.guide_q = if self.guide.on && over {
-            let q = self.qn_of(x);
-            Some(if self.guide.snaps(self.mouse.2) {
-                self.snap_item(q)
-            } else {
-                q
-            })
+        self.guide_q = (self.guide.on && over).then(|| self.cursor_q(x, self.mouse.2));
+    }
+
+    /// Ou un clic pose le curseur d'edition : la ou la ligne a la souris le
+    /// montre (Cedric, 2026-11-22 : « le clic doit suivre le snap montre par
+    /// la ligne »). Calee par le magnetisme de REAPER selon les reglages de
+    /// la ligne (Maj ou Ctrl la liberent) ; sans ligne, cale sauf Maj.
+    pub fn cursor_q(&self, x: f32, m: Mods) -> f64 {
+        let q = self.qn_of(x);
+        let snaps = if self.guide.on {
+            self.guide.snaps(m)
         } else {
-            None
+            !m.shift
         };
+        if snaps { self.snap_item(q) } else { q }.max(0.0)
     }
 
-    /// Une position calee sur la grille de l'item choisi (sinon la double
-    /// croche).
-    fn snap_any(&self, qn: f64) -> f64 {
-        match self.sel_item().and_then(|(t, i)| self.item(t, i)) {
-            Some(it) => it.snap(qn),
-            None => (qn * 4.0).round() / 4.0,
-        }
-    }
-
-    fn down(&mut self, x: f32, y: f32, b: Button, dbl: bool, _mods: Mods) -> Option<Act> {
+    fn down(&mut self, x: f32, y: f32, b: Button, dbl: bool, mods: Mods) -> Option<Act> {
         let h = self.hit(x, y);
         self.dirty = true;
         if b == Button::Right {
@@ -1882,8 +1882,7 @@ impl Arr {
                         i: Some(i),
                         n: None,
                     }));
-                    let q = self.item(t, i)?.snap(self.qn_of(x));
-                    Some(Act::Seek(q))
+                    Some(Act::Seek(self.cursor_q(x, mods)))
                 }
             }
             Hit::ItemEdge { t, i, left } => {
@@ -1931,8 +1930,9 @@ impl Arr {
                     return Some(Act::OpenMidi { t, i });
                 }
                 // La prise (son audio, son MIDI) se glisse ; un simple clic
-                // place le curseur.
+                // place le curseur. La couche cliquee prend le focus.
                 if matches!(lane, Lane::Audio | Lane::Midi) {
+                    self.focus_lane = lane;
                     let q = self.item(t, i)?.qn0;
                     self.drag = Some(Drag::Item {
                         t,
@@ -1947,7 +1947,7 @@ impl Arr {
                     });
                     return None;
                 }
-                Some(Act::Seek(self.qn_of(x)))
+                Some(Act::Seek(self.cursor_q(x, mods)))
             }
             Hit::Lane { t, .. } => {
                 self.select(Some(Sel {
@@ -1955,10 +1955,10 @@ impl Arr {
                     i: None,
                     n: None,
                 }));
-                Some(Act::Seek(self.qn_of(x)))
+                Some(Act::Seek(self.cursor_q(x, mods)))
             }
             Hit::Ruler => {
-                let q = self.snap_any(self.qn_of(x));
+                let q = self.cursor_q(x, mods);
                 self.range = None;
                 self.drag = Some(Drag::Range { q0: q });
                 Some(Act::Seek(q))
