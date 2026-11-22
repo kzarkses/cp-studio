@@ -26,6 +26,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "cp_editview"
+version = "0.1.0"
+dependencies = [
+ "cp_gfx",
+ "cp_roll",
+ "cp_sys",
+ "cp_ui",
+]
+
+[[package]]
 name = "cp_engine"
 version = "0.1.0"
 dependencies = [
@@ -68,6 +78,7 @@ version = "0.1.0"
 dependencies = [
  "cp_abi",
  "cp_browser",
+ "cp_editview",
  "cp_gfx",
  "cp_sys",
  "cp_tab",

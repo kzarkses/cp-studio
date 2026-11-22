@@ -1,0 +1,18 @@
+[package]
+name = "cp_editview"
+description = "La fenetre de l'editeur de CP Studio : piano roll (MIDI) et clip audio, gestes de REAPER (sans Windows)"
+edition.workspace = true
+version.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+cp_gfx = { path = "../cp_gfx" }
+cp_roll = { path = "../cp_roll" }
+cp_ui = { path = "../cp_ui" }
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+cp_sys = { path = "../cp_sys" }
