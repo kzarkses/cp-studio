@@ -15,6 +15,7 @@
 
 pub mod draw;
 mod item;
+pub mod print;
 #[cfg(test)]
 mod tests;
 
@@ -498,6 +499,7 @@ pub enum Hit {
     Retranscribe,
     DeleteItem,
     Export,
+    ExportPdf,
     SynthSlider(u8),
     SynthMono,
     VScroll,
@@ -597,6 +599,11 @@ pub enum Act {
         y: f32,
     },
     Export {
+        t: usize,
+        i: usize,
+    },
+    /// La tablature de l'item en pages (PDF).
+    ExportPdf {
         t: usize,
         i: usize,
     },
@@ -2628,6 +2635,10 @@ impl Arr {
                 let (t, i) = self.sel_item()?;
                 Some(Act::Export { t, i })
             }
+            Hit::ExportPdf => {
+                let (t, i) = self.sel_item()?;
+                Some(Act::ExportPdf { t, i })
+            }
             Hit::VScroll => {
                 self.drag = Some(Drag::VScroll {
                     y0: y,
@@ -2923,6 +2934,7 @@ impl Arr {
             }
             Hit::DeleteItem => "Delete the take and its tab (Del)".into(),
             Hit::Export => "Export MusicXML".into(),
+            Hit::ExportPdf => "Export PDF".into(),
             Hit::SynthSlider(1) => "Tone".into(),
             Hit::SynthSlider(_) => "Sustain".into(),
             Hit::SynthMono => "One note per string".into(),

@@ -1890,7 +1890,7 @@ impl App {
         let (xml, st) = write_musicxml(&it.doc, &spec, it.dropped);
         let dir = self.gtab_dir();
         let _ = std::fs::create_dir_all(&dir);
-        let path = free_path(&dir, &clean_name(&it.name));
+        let path = free_path(&dir, &clean_name(&it.name), "musicxml");
         (
             std::fs::write(&path, xml.as_bytes())
                 .is_ok()
@@ -1990,6 +1990,38 @@ impl App {
             r.set_tracks_values("I_SOLO", &a.solos);
         }
         self.gtab_sync();
+    }
+
+    /// La tablature d'un item en pages (PDF) dans `Guitar Tab/<nom>.pdf`,
+    /// ouverte ensuite par le lecteur de PDF de Windows. Les couches de sa
+    /// piste decident : la partition, la tab, ou les deux.
+    fn gtab_export_pdf(&mut self, t: usize, i: usize) {
+        let Some(it) = self.gt.arr.item(t, i).cloned() else {
+            return;
+        };
+        let lanes = self.gt.arr.tracks[t].head.lanes;
+        let t0 = std::time::Instant::now();
+        let p = cp_tabview::print::pdf(&it, lanes, &mut self.text);
+        let dir = self.gtab_dir();
+        let _ = std::fs::create_dir_all(&dir);
+        let path = free_path(&dir, &clean_name(&it.name), "pdf");
+        if std::fs::write(&path, &p.pdf).is_err() {
+            self.gt.arr.status = "Export failed".into();
+            return;
+        }
+        self.host.info(&format!(
+            "Guitar Tab : PDF de {} page(s), {} systemes, {} mesures, {} Kio en {} ms : {}",
+            p.pages,
+            p.systems,
+            p.measures,
+            p.pdf.len() / 1024,
+            t0.elapsed().as_millis(),
+            path.display()
+        ));
+        self.gt.arr.status = format!("Exported: {}", path.display());
+        if !selftest() {
+            cp_sys::tab::open_document(&path);
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -2588,6 +2620,7 @@ impl App {
                 r.refresh_arrange();
                 self.gtab_sync();
             }
+            GAct::ExportPdf { t, i } => self.gtab_export_pdf(t, i),
             GAct::Export { t, i } => {
                 if let Some(it) = self.gt.arr.item(t, i).cloned() {
                     let (p, _) = self.gtab_export_item(&it);
@@ -3795,14 +3828,14 @@ pub(crate) struct Audition {
     was_playing: bool,
 }
 
-/// Un chemin libre : « nom.musicxml », sinon « nom (2).musicxml »...
-fn free_path(dir: &std::path::Path, stem: &str) -> PathBuf {
-    let first = dir.join(format!("{stem}.musicxml"));
+/// Un chemin libre : « nom.ext », sinon « nom (2).ext »...
+fn free_path(dir: &std::path::Path, stem: &str, ext: &str) -> PathBuf {
+    let first = dir.join(format!("{stem}.{ext}"));
     if !first.exists() {
         return first;
     }
     for i in 2..1000 {
-        let p = dir.join(format!("{stem} ({i}).musicxml"));
+        let p = dir.join(format!("{stem} ({i}).{ext}"));
         if !p.exists() {
             return p;
         }

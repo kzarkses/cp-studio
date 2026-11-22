@@ -15,7 +15,7 @@ use cp_ui::{Icon, IconCache, Theme};
 
 use crate::{Arr, HBox, Hit, Item, Lane, Lay, Listen, Sound, State, TUNINGS};
 
-const CLEF: char = '\u{1D11E}';
+pub(crate) const CLEF: char = '\u{1D11E}';
 const SHARP: char = '\u{266F}';
 
 fn rest_char(ty: &str) -> char {
@@ -379,22 +379,86 @@ fn string_color(k: usize) -> Color {
 
 /// La geometrie de l'axe du temps.
 #[derive(Clone, Copy)]
-struct Geo {
-    sx: f32,
-    scroll: f64,
-    ppq: f32,
-    s: f32,
+pub(crate) struct Geo {
+    pub(crate) sx: f32,
+    pub(crate) scroll: f64,
+    pub(crate) ppq: f32,
+    pub(crate) s: f32,
     /// La zone visible (cibles et dessins).
-    clip: (f32, f32, f32, f32),
+    pub(crate) clip: (f32, f32, f32, f32),
+    /// Une note est posee a `pad` de sa date (elle ne touche pas la barre de
+    /// mesure).
+    pub(crate) pad: f32,
+    /// Le trait fin (lignes supplementaires, liaisons, bends) : un pixel a
+    /// l'ecran, plus sur une page imprimee.
+    pub(crate) lw: f32,
+    /// Ce qui se dessine encore hors de la zone visible (une note a cheval
+    /// sur le bord). Rien sur une page : la mesure voisine n'y est pas.
+    pub(crate) margin: f32,
+    /// Sur une page, chaque mesure a sa largeur : l'axe passe par ces
+    /// points (noires, x). Vide a l'ecran : l'axe est droit.
+    pub(crate) warp: Warp,
+}
+
+/// Un axe par morceaux : `n` points (noires croissantes, x croissants),
+/// droit entre deux points et prolonge aux bouts.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct Warp {
+    pub(crate) n: usize,
+    pub(crate) q: [f64; 8],
+    pub(crate) x: [f32; 8],
+}
+
+impl Warp {
+    /// Les points (8 au plus ; les suivants sont ignores).
+    pub(crate) fn new(pts: &[(f64, f32)]) -> Warp {
+        let mut w = Warp::default();
+        for &(q, x) in pts.iter().take(8) {
+            w.q[w.n] = q;
+            w.x[w.n] = x;
+            w.n += 1;
+        }
+        w
+    }
+
+    fn x(&self, q: f64) -> Option<f32> {
+        if self.n < 2 {
+            return None;
+        }
+        // Le segment qui contient q (le premier ou le dernier au-dela).
+        let k = (1..self.n - 1)
+            .find(|&k| q < self.q[k])
+            .unwrap_or(self.n - 1);
+        let (q0, q1) = (self.q[k - 1], self.q[k]);
+        let (x0, x1) = (self.x[k - 1], self.x[k]);
+        Some(x0 + ((q - q0) / (q1 - q0).max(1e-9)) as f32 * (x1 - x0))
+    }
 }
 
 impl Geo {
-    fn x(&self, q: f64) -> f32 {
-        self.sx + ((q - self.scroll) as f32) * self.ppq
+    /// L'axe de la fenetre.
+    fn screen(sx: f32, scroll: f64, ppq: f32, s: f32, clip: (f32, f32, f32, f32)) -> Geo {
+        Geo {
+            sx,
+            scroll,
+            ppq,
+            s,
+            clip,
+            pad: 9.0 * s,
+            lw: 1.0,
+            margin: 40.0 * s,
+            warp: Warp::default(),
+        }
+    }
+
+    pub(crate) fn x(&self, q: f64) -> f32 {
+        self.warp
+            .x(q)
+            .unwrap_or(self.sx + ((q - self.scroll) as f32) * self.ppq)
     }
 
     fn visible(&self, x: f32) -> bool {
-        x > self.clip.0 - 40.0 * self.s && x < self.clip.0 + self.clip.2 + 40.0 * self.s
+        x > self.clip.0 - self.margin && x < self.clip.0 + self.clip.2 + self.margin
     }
 }
 
@@ -742,13 +806,13 @@ impl Arr {
         cv.fill_rect(0.0, ry, l.head_w, l.ruler_h, th.panel);
         cv.fill_rect(l.head_w, ry, 1.0, l.bottom - ry, th.seam);
         cv.fill_rect(l.label_x, ry, l.w, l.ruler_h, th.rp.ruler_bg);
-        let geo = Geo {
-            sx: l.sx,
-            scroll: self.scroll,
-            ppq: l.ppq,
-            s: th.scale,
-            clip: (l.sx, ry, l.sw, tb - ry),
-        };
+        let geo = Geo::screen(
+            l.sx,
+            self.scroll,
+            l.ppq,
+            th.scale,
+            (l.sx, ry, l.sw, tb - ry),
+        );
         let bq = self.bar_qn();
         let q0 = self.scroll;
         let q1 = self.scroll + self.view_qn();
@@ -1866,6 +1930,7 @@ impl Arr {
             for (icon, hit) in [
                 (Icon::Trash, Hit::DeleteItem),
                 (Icon::Download, Hit::Export),
+                (Icon::File, Hit::ExportPdf),
                 (Icon::Refresh, Hit::Retranscribe),
             ] {
                 self.icon_button(cv, icons, th, bx, ix, y, bs, icon, false, hit, false);
@@ -2567,7 +2632,7 @@ fn draw_pending(
 }
 
 /// La partition d'un item (sa portee est deja tracee par la couche).
-fn draw_score(
+pub(crate) fn draw_score(
     cv: &mut Canvas<'_>,
     text: &mut TextCache,
     th: &Theme,
@@ -2588,7 +2653,8 @@ fn draw_score(
     let paper = th.bg;
     let staff_c = th.text_dim.fade(0.75);
     let gap = s(8.0);
-    let pad = s(9.0);
+    let pad = geo.pad;
+    let lw = geo.lw;
     let hx = |cell: i64| geo.x(eng.qn(cell)) + pad;
     let (rx, ry) = (gap * 0.62, gap * 0.46);
     let y_of = |pos: i32| score_y + 4.0 * gap - pos as f32 * gap * 0.5;
@@ -2674,12 +2740,12 @@ fn draw_score(
         let hi = ps.iter().map(|p| p.0).max().unwrap_or(0);
         let mut p = -2;
         while p >= lo {
-            cv.fill_rect(x - rx * 1.7, y_of(p), rx * 3.4, 1.0, staff_c);
+            cv.fill_rect(x - rx * 1.7, y_of(p), rx * 3.4, lw, staff_c);
             p -= 2;
         }
         let mut p = 10;
         while p <= hi {
-            cv.fill_rect(x - rx * 1.7, y_of(p), rx * 3.4, 1.0, staff_c);
+            cv.fill_rect(x - rx * 1.7, y_of(p), rx * 3.4, lw, staff_c);
             p += 2;
         }
         let hollow = sg.ty == "half" || sg.ty == "whole";
@@ -2740,7 +2806,7 @@ fn draw_score(
                         nx - rx,
                         y + b * 0.6,
                         b * 0.5,
-                        1.1,
+                        lw * 1.1,
                         ink,
                     );
                 }
@@ -2806,7 +2872,7 @@ fn draw_score(
                     }
                     _ => {
                         let y = y_of(hi) - gap * 1.2;
-                        arc(cv, px, y, x, y, -gap * 0.7, 1.1, th.text_dim);
+                        arc(cv, px, y, x, y, -gap * 0.7, lw * 1.1, th.text_dim);
                     }
                 }
             }
@@ -2825,7 +2891,10 @@ fn draw_score(
                 if up { x + rx - 0.8 } else { x - rx + 0.2 }
             })
             .collect();
-        if xs.iter().all(|&x| !geo.visible(x)) {
+        // Visible si une de ses notes l'est (pas sa hampe : une hampe vers
+        // le bas passe a gauche de sa note, et la ligature d'une mesure
+        // voisine depassait au bord d'une page).
+        if g.iter().all(|&si| !geo.visible(hx(eng.signs[si].start))) {
             continue;
         }
         let th_b = gap * 0.48;
@@ -2889,7 +2958,7 @@ fn draw_score(
 }
 
 /// La tablature d'un item (ses lignes sont deja tracees par la couche).
-fn draw_tab(
+pub(crate) fn draw_tab(
     cv: &mut Canvas<'_>,
     text: &mut TextCache,
     th: &Theme,
@@ -2909,7 +2978,8 @@ fn draw_tab(
     let eng: Engraved = std::mem::take(&mut it.eng);
     let nstr = it.detect.tuning().strings.len();
     let paper = th.bg;
-    let pad = s(9.0);
+    let pad = geo.pad;
+    let lw = geo.lw;
     let hx = |cell: i64| geo.x(eng.qn(cell)) + pad;
     let fd = Font::new(0, s(11.0) as u16, 600);
     let fl = Font::new(0, s(8.5) as u16, 700);
@@ -2967,7 +3037,7 @@ fn draw_tab(
             if k != 0 {
                 let x1 = x - tw * 0.5 - s(1.5);
                 let d = if k < 0 { s(4.0) } else { -s(4.0) };
-                cv.line(x1 - s(8.0), y + d, x1, y - d * 0.4, 1.0, mark);
+                cv.line(x1 - s(8.0), y + d, x1, y - d * 0.4, lw, mark);
             }
             // Le bend : une fleche qui monte au-dessus de la tablature, sa
             // valeur (« ½ », « full »), et le relachement qui redescend.
@@ -2977,7 +3047,7 @@ fn draw_tab(
                 let xp = (geo.x(note.qn0 + bm.peak) + pad).max(x0 + s(9.0));
                 let mut p = Path::new();
                 p.move_to(x0, y).quad_to(xp, y, xp, top + s(3.5));
-                cv.stroke_path(&p, 1.0, mark);
+                cv.stroke_path(&p, lw, mark);
                 arrow_head(cv, xp, top, s(3.5), true, mark);
                 text.draw_in(
                     cv,
@@ -2995,7 +3065,7 @@ fn draw_tab(
                     let mut p = Path::new();
                     p.move_to(xp + s(1.0), top + s(1.0))
                         .quad_to(xr, top + s(1.0), xr, y - s(9.0));
-                    cv.stroke_path(&p, 1.0, mark);
+                    cv.stroke_path(&p, lw, mark);
                     arrow_head(cv, xr, y - s(5.5), s(3.5), false, mark);
                 }
             }
@@ -3017,18 +3087,16 @@ fn draw_tab(
                         } else {
                             -s(3.0)
                         };
-                        cv.line(
-                            px + pw * 0.5 + s(1.5),
-                            y + d,
-                            x - cw * 0.5 - s(1.5),
-                            y - d,
-                            1.0,
-                            th.text_dim,
-                        );
+                        // Entre les deux cases ; rien si elles se touchent
+                        // (le trait barrait la case d'arrivee).
+                        let (a, b) = (px + pw * 0.5 + s(1.5), x - cw * 0.5 - s(1.5));
+                        if b > a + s(3.0) {
+                            cv.line(a, y + d, b, y - d, lw, th.text_dim);
+                        }
                     }
                     _ => {
                         let y = line_y(cur.string) - s(8.0);
-                        arc(cv, px, y, x, y, -s(4.0), 1.1, th.text_dim);
+                        arc(cv, px, y, x, y, -s(4.0), lw * 1.1, th.text_dim);
                         let lab = if ev.lig_in == Tech::Hammer { "H" } else { "P" };
                         text.draw_in(
                             cv,

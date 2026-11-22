@@ -1716,6 +1716,137 @@ fn la_palette_d_une_note_et_ses_gestes() {
     assert_eq!(v.tracks[0].items[0].doc.len(), 2);
 }
 
+/// Une surface reduite de moitie (pour regarder une page entiere).
+fn half(s: &Surface) -> Surface {
+    let mut o = Surface::new(s.w / 2, s.h / 2);
+    for y in 0..o.h {
+        for x in 0..o.w {
+            let mut acc = [0u32; 4];
+            for (dx, dy) in [(0, 0), (1, 0), (0, 1), (1, 1)] {
+                let p = s.get(2 * x + dx, 2 * y + dy);
+                for (k, a) in acc.iter_mut().enumerate() {
+                    *a += (p >> (8 * k)) & 0xFF;
+                }
+            }
+            let mut v = 0u32;
+            for (k, a) in acc.iter().enumerate() {
+                v |= (a / 4) << (8 * k);
+            }
+            o.px[(y * o.w + x) as usize] = v;
+        }
+    }
+    o
+}
+
+/// La tablature en pages : la partition sur la tab, des systemes de
+/// quelques mesures (moins quand les notes se serrent), les bends et les
+/// glisses comme dans la vue, plusieurs pages numerotees ; puis le PDF.
+#[test]
+fn la_tablature_s_imprime() {
+    use cp_tab::doc::Tech;
+    const EM: &[(usize, i32)] = &[(6, 0), (5, 2), (4, 2), (3, 0), (2, 0), (1, 0)];
+    const C: &[(usize, i32)] = &[(5, 3), (4, 2), (3, 0), (2, 1), (1, 0)];
+    const G: &[(usize, i32)] = &[(6, 3), (5, 2), (4, 0), (3, 0), (2, 0), (1, 3)];
+    const RUN: [&[(usize, i32)]; 8] = [
+        &[(1, 0)],
+        &[(1, 3)],
+        &[(1, 5)],
+        &[(2, 3)],
+        &[(2, 5)],
+        &[(2, 6)],
+        &[(3, 5)],
+        &[(3, 7)],
+    ];
+    const MEL: [&[(usize, i32)]; 4] = [&[(3, 7)], &[(2, 8)], &[(2, 10)], &[(1, 12)]];
+    let bars = 26;
+    let mut raw: Vec<Raw> = Vec::new();
+    for m in 0..bars {
+        match m % 4 {
+            0 => {
+                for (t, ch) in [(0.0, EM), (4.0, C), (8.0, G), (12.0, EM)] {
+                    raw.push((m, t, 4.0, ch, ""));
+                }
+            }
+            1 => {
+                for k in 0..8 {
+                    raw.push((m, k as f64 * 2.0, 2.0, MEL[k % 4], ""));
+                }
+            }
+            2 => {
+                for k in 0..16 {
+                    let mark = if k % 4 == 1 { "L" } else { "" };
+                    raw.push((m, k as f64, 1.0, RUN[k % 8], mark));
+                }
+            }
+            _ => {
+                // Une blanche, un soupir, une noire.
+                raw.push((m, 0.0, 8.0, &[(2, 8)], ""));
+                raw.push((m, 12.0, 4.0, &[(2, 10)], ""));
+            }
+        }
+    }
+    let mut it = item("P", "Riff.wav", 0, bars, &raw);
+    // Des bends (relache ou non), une approche, une glisse.
+    let mut k = 0;
+    for n in 0..it.doc.len() {
+        let q = it.doc[n].qn0;
+        let m = (q / 4.0) as usize;
+        if m % 4 == 3 && (q % 4.0) < 0.5 {
+            it.doc[n].set_bend(Some(if k % 2 == 0 { 2.0 } else { 1.0 }), k % 2 == 0);
+            k += 1;
+        }
+        if m % 4 == 1 && (q % 4.0) < 0.2 {
+            it.doc[n].set_slide_in(-2);
+        }
+        if m % 4 == 1 && (q % 4.0 - 1.0).abs() < 0.2 {
+            it.doc[n].tech = Tech::Slide;
+        }
+    }
+    it.touch();
+    let mut b = Bench::new(10, 10);
+    let lanes = Lanes([true, false, true, true]);
+    let mut n = 0;
+    let (measures, systems) = print::render(&it, lanes, &mut b.t, &mut |s| {
+        n += 1;
+        if n <= 2 {
+            let p = std::env::temp_dir().join(format!("cp_tabview_13_print_p{n}.png"));
+            std::fs::write(&p, png::encode(&half(s))).unwrap();
+        }
+        if n == 1 {
+            // Le premier systeme a pleine taille.
+            let mut top = Surface::new(s.w, 1100);
+            top.px.copy_from_slice(&s.px[..(s.w * 1100) as usize]);
+            let p = std::env::temp_dir().join("cp_tabview_13_print_zoom.png");
+            std::fs::write(&p, png::encode(&top)).unwrap();
+        }
+    });
+    assert_eq!(measures, bars as i64);
+    assert!(n >= 2, "{n} page(s)");
+    // Les doubles croches demandent plus de place que les accords.
+    let eng = it.engraved().clone();
+    let need = print::need_ppq(&eng);
+    assert!(need[2] > need[0] * 2.0, "{need:?}");
+    let (first_w, w) = print::avail();
+    let sys = print::systems(&need, 4.0, first_w, w);
+    assert_eq!(sys.len(), systems);
+    assert_eq!(sys.last().map(|s| s.m1), Some(bars as i64));
+    assert!(sys.windows(2).all(|w| w[0].m1 == w[1].m0));
+    let narrow = sys.iter().find(|s| (s.m0..s.m1).contains(&2)).unwrap();
+    assert!(narrow.m1 - narrow.m0 < 6, "{sys:?}");
+    // Chaque mesure a sa largeur : les doubles croches plus larges que les
+    // accords du meme systeme.
+    let first = &sys[0];
+    assert!(first.m1 - first.m0 >= 3, "{sys:?}");
+    assert!(first.widths[2] > first.widths[0] * 1.5, "{sys:?}");
+    assert!((first.width() - first_w).abs() < 1.0);
+    // Le PDF : ses pages, son en-tete.
+    let p = print::pdf(&it, lanes, &mut b.t);
+    assert_eq!(p.pages, n);
+    assert!(p.pdf.starts_with(b"%PDF-1.4"));
+    assert!(p.pdf.len() < n * 600_000, "{} octets", p.pdf.len());
+    std::fs::write(std::env::temp_dir().join("cp_tabview_13_print.pdf"), &p.pdf).unwrap();
+}
+
 /// La touche d'ecoute de Cedric (², SWS/BR « Play from mouse cursor position
 /// and solo track under mouse ») vise la date sous la souris et la guitare
 /// sous elle ; sur la regle, aucune guitare ; hors de la zone qui defile

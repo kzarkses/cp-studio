@@ -25,7 +25,7 @@ fn crc32(data: &[u8]) -> u32 {
     c ^ 0xFFFF_FFFF
 }
 
-fn adler32(data: &[u8]) -> u32 {
+pub(crate) fn adler32(data: &[u8]) -> u32 {
     let (mut a, mut b) = (1u32, 0u32);
     for chunk in data.chunks(5552) {
         for &x in chunk {

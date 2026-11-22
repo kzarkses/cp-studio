@@ -17,6 +17,7 @@
 pub mod color;
 pub mod layers;
 pub mod path;
+pub mod pdf;
 pub mod png;
 pub mod raster;
 pub mod text;
