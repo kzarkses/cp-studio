@@ -645,6 +645,8 @@ pub enum Act {
         lane: Lane,
         q: f64,
     },
+    /// Le defilement de l'arrangement pendant la lecture (REAPER, 40036).
+    Autoscroll,
     /// Le lasso relache : les prises touchees, (piste, prise, son audio, son
     /// MIDI), choisies dans REAPER selon `pick`.
     SelectItems {
@@ -803,6 +805,10 @@ pub struct Arr {
     /// La hauteur des couches audio et MIDI (Ctrl + molette).
     pub vzoom: f32,
     pub follow: bool,
+    /// La vue est celle de l'arrangement de REAPER (le module la tient) : elle
+    /// ne tourne jamais la page d'elle-meme, REAPER le fait (son
+    /// defilement pendant la lecture), et `follow` montre son reglage.
+    pub synced: bool,
     /// La tete de lecture (en lecture) ; sinon le curseur d'edition.
     pub playhead: Option<f64>,
     pub playing: bool,
@@ -924,6 +930,7 @@ impl Arr {
             vscroll: 0.0,
             vzoom: 1.0,
             follow: true,
+            synced: false,
             playhead: None,
             playing: false,
             rec: Vec::new(),
@@ -1192,7 +1199,7 @@ impl Arr {
                 self.dirty = true;
             }
         }
-        if let (true, true, Some(p)) = (self.follow, playing, qn) {
+        if let (true, true, false, Some(p)) = (self.follow, playing, self.synced, qn) {
             let v = self.view_qn();
             if v > 0.0 && (p < self.scroll || p > self.scroll + v * 0.85) {
                 self.scroll = p - v * 0.1;
@@ -1575,7 +1582,7 @@ impl Arr {
 
     /// Un geste de l'utilisateur sur la vue : elle ne suit plus la lecture.
     fn unfollow(&mut self) {
-        if self.playing {
+        if self.playing && !self.synced {
             self.follow = false;
         }
         self.dirty = true;
@@ -2209,6 +2216,10 @@ impl Arr {
                 Some(Act::Listen)
             }
             Hit::Follow => {
+                if self.synced {
+                    // Le reglage de REAPER (la vue est la sienne).
+                    return Some(Act::Autoscroll);
+                }
                 self.follow = !self.follow;
                 None
             }

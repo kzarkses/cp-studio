@@ -1847,11 +1847,10 @@ impl App {
                 i: Some(i),
                 n: None,
             }));
-            let it = &self.gt.arr.tracks[t].items[i];
-            let v = self.gt.arr.view_qn().max(8.0);
-            if it.qn0 < self.gt.arr.scroll || it.qn0 > self.gt.arr.scroll + v * 0.8 {
-                self.gt.arr.scroll = (it.qn0 - 2.0).max(0.0);
-            }
+            // La vue ne bouge pas : c'est celle de l'arrangement, et REAPER
+            // ne la deplace jamais quand on choisit un item. Avant, elle
+            // sautait au debut de l'item (hors de l'ecran) a chaque clic dans
+            // l'arrangement (2026-11-22).
         }
     }
 
@@ -2203,6 +2202,12 @@ impl App {
                 );
                 r.refresh_arrange();
                 self.gtab_sync();
+            }
+            GAct::Autoscroll => {
+                // View: Toggle auto-view-scroll during playback.
+                r.main_on_command(40036);
+                self.gt.arr.follow = r.toggle_state(40036) == 1;
+                self.gt.arr.mark();
             }
             GAct::SelectItems { items, pick } => {
                 let mut guids = Vec::new();
@@ -2727,8 +2732,16 @@ impl App {
     fn gtab_view_sync(&mut self) {
         let r = self.r;
         let Some((s0, e0)) = r.arrange_view() else {
+            self.gt.arr.synced = false;
             return;
         };
+        // Le bouton « suivre » montre le reglage de REAPER.
+        self.gt.arr.synced = true;
+        let auto = r.toggle_state(40036) == 1;
+        if self.gt.arr.follow != auto {
+            self.gt.arr.follow = auto;
+            self.gt.arr.mark();
+        }
         let hz = r.hzoom();
         let bpm = self.gt.arr.bpm.max(1.0);
         let scale = self.gt.arr.scale.max(0.1);
