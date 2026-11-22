@@ -249,3 +249,61 @@ fn muet_grille_arpege_gardent_le_canal() {
     s.move_sel_free(0.0, 1);
     assert_eq!((s.notes[0].pitch, s.notes[0].chan), (61, 2));
 }
+
+#[test]
+fn accords_arpeges_euclides_gardent_le_canal() {
+    // Deux notes sur le canal 3 (une corde) : des accords majeurs.
+    let mut r = Roll::from_notes([
+        (0.0, 1.0, 60, 3, 100, true, false),
+        (2.0, 1.0, 62, 3, 90, true, false),
+    ]);
+    assert_eq!(r.chordify(1), 4);
+    let mut p: Vec<(i32, i32)> = r.notes.iter().map(|n| (n.pitch, n.chan)).collect();
+    p.sort();
+    assert_eq!(
+        p,
+        vec![(60, 3), (62, 3), (64, 3), (66, 3), (67, 3), (69, 3)]
+    );
+    // En Do majeur, la triade du Re est mineure (Re Fa La).
+    let mut r = Roll::from_notes([(0.0, 1.0, 62, 5, 100, true, false)]);
+    r.scale = Some(Scale { root: 0, kind: 1 });
+    r.chordify(0);
+    let mut p: Vec<i32> = r.notes.iter().map(|n| n.pitch).collect();
+    p.sort();
+    assert_eq!(p, vec![62, 65, 69]);
+    assert!(r.notes.iter().all(|n| n.chan == 5));
+
+    // L'accord arpege : Do Mi Sol sur une noire, en doubles croches,
+    // montant : Do Mi Sol Do.
+    let mut r = Roll::from_notes([
+        (4.0, 1.0, 60, 2, 100, true, false),
+        (4.0, 1.0, 64, 2, 80, true, false),
+        (4.0, 1.0, 67, 2, 90, true, false),
+    ]);
+    assert_eq!(r.arp(0.25, ArpMode::Up, 0.9, 1, 1), 4);
+    let seq: Vec<(f64, i32, i32)> = r.notes.iter().map(|n| (n.qn0, n.pitch, n.chan)).collect();
+    assert_eq!(
+        seq,
+        vec![(4.0, 60, 2), (4.25, 64, 2), (4.5, 67, 2), (4.75, 60, 2)]
+    );
+    assert!(
+        r.notes
+            .iter()
+            .all(|n| n.vel == 90 && (n.len - 0.225).abs() < 1e-9)
+    );
+    // Monte et descend, sur deux octaves.
+    let mut r = Roll::from_notes([
+        (0.0, 2.0, 60, 0, 100, true, false),
+        (0.0, 2.0, 64, 0, 100, true, false),
+    ]);
+    r.arp(0.25, ArpMode::UpDown, 1.0, 2, 1);
+    let ps: Vec<i32> = r.notes.iter().map(|n| n.pitch).collect();
+    assert_eq!(ps, vec![60, 64, 72, 76, 72, 64, 60, 64]);
+
+    // Trois coups sur huit cases (le tresillo), le premier sur le temps.
+    let mut r = Roll::new();
+    assert_eq!(r.euclid(0.0, 2.0, 36, 9, 110, 8, 3, 0), 3);
+    let at: Vec<f64> = r.notes.iter().map(|n| n.qn0).collect();
+    assert_eq!(at, vec![0.0, 0.75, 1.5]);
+    assert!(r.notes.iter().all(|n| n.chan == 9 && n.sel));
+}

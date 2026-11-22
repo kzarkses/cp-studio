@@ -889,3 +889,61 @@ fn le_bend_se_dessine_et_suit_la_note() {
         .fold(f64::MIN, f64::max);
     assert!((top - 26.4).abs() < 1e-9, "{top}");
 }
+
+/// Le menu des notes porte les generateurs de l'ancien editeur : accords,
+/// arpeges, rythmes euclidiens ; chacun s'ecrit en un pas d'annulation et
+/// garde le canal (la corde).
+#[test]
+fn accords_arpeges_et_euclides_du_menu() {
+    let mut v = riff();
+    let menu = v.transform_menu();
+    let has = |t: &str| menu.iter().flatten().any(|m| m.1 == t);
+    assert!(has("Chord: Major") && has("Arpeggio up-down") && has("Euclid 5/16"));
+    // Le Mi (64, canal 0) choisi seul : un accord majeur.
+    let id = v
+        .midi()
+        .unwrap()
+        .roll
+        .notes
+        .iter()
+        .find(|n| n.pitch == 64 && (n.qn0 - 25.0).abs() < 1e-9)
+        .unwrap()
+        .id;
+    v.midi_mut().unwrap().roll.select_only(id);
+    let a = v.transform(71);
+    assert_eq!(a, vec![Act::Commit("CP Editor: chord")]);
+    let sel: Vec<(i32, i32)> = v
+        .midi()
+        .unwrap()
+        .roll
+        .notes
+        .iter()
+        .filter(|n| n.sel)
+        .map(|n| (n.pitch, n.chan))
+        .collect();
+    assert_eq!(sel, vec![(64, 0), (68, 0), (71, 0)]);
+    // Puis arpege, montant : la noire de l'accord en doubles croches.
+    v.set_grid(0.25);
+    assert_eq!(v.transform(80), vec![Act::Commit("CP Editor: arpeggio")]);
+    let arp: Vec<i32> = v
+        .midi()
+        .unwrap()
+        .roll
+        .notes
+        .iter()
+        .filter(|n| n.sel)
+        .map(|n| n.pitch)
+        .collect();
+    assert_eq!(&arp[..3], &[64, 68, 71]);
+    // Un euclide 3/8 sur la mesure du curseur, a la hauteur choisie.
+    assert_eq!(v.transform(90), vec![Act::Commit("CP Editor: euclid")]);
+    let n = v
+        .midi()
+        .unwrap()
+        .roll
+        .notes
+        .iter()
+        .filter(|n| n.sel)
+        .count();
+    assert_eq!(n, 3);
+}

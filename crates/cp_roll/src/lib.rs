@@ -964,5 +964,222 @@ impl Roll {
     }
 }
 
+/// Les accords que l'on pose sur une note : (nom, intervalles depuis
+/// elle). « Triad » suit la gamme posee (deux degres, deux degres : un
+/// accord mineur sur le second degre d'une majeure), sinon c'est l'accord
+/// majeur.
+pub const CHORDS: [(&str, &[i32]); 9] = [
+    ("Triad", &[0, 4, 7]),
+    ("Major", &[0, 4, 7]),
+    ("Minor", &[0, 3, 7]),
+    ("7", &[0, 4, 7, 10]),
+    ("Maj7", &[0, 4, 7, 11]),
+    ("Min7", &[0, 3, 7, 10]),
+    ("Sus4", &[0, 5, 7]),
+    ("Power", &[0, 7, 12]),
+    ("Octave", &[0, 12]),
+];
+
+/// L'ordre d'un arpege.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ArpMode {
+    Up,
+    Down,
+    UpDown,
+    Random,
+}
+
+impl Roll {
+    // -----------------------------------------------------------------------
+    // Les generateurs (portes de Roll.lua) : ils gardent le canal
+    // -----------------------------------------------------------------------
+
+    /// Les hauteurs d'un accord pose sur `p` (la gamme : « Triad » monte de
+    /// deux degres deux fois ; les autres sont calees dans la gamme).
+    fn chord_on(&self, p: i32, k: usize) -> Vec<i32> {
+        let (name, iv) = CHORDS[k.min(CHORDS.len() - 1)];
+        if name == "Triad" {
+            if let Some(s) = self.scale {
+                let mut v = vec![p];
+                let mut q = p;
+                for _ in 0..2 {
+                    let mut steps = 0;
+                    while q < 127 && steps < 2 {
+                        q += 1;
+                        if s.contains(q) {
+                            steps += 1;
+                        }
+                    }
+                    v.push(q);
+                }
+                return v;
+            }
+        }
+        iv.iter()
+            .map(|&i| match self.scale {
+                Some(s) if i != 0 && i != 12 => s.snap(p + i),
+                _ => p + i,
+            })
+            .filter(|q| (0..=127).contains(q))
+            .collect()
+    }
+
+    /// Chaque cible devient un accord (`CHORDS[k]`) : les notes au-dessus
+    /// s'ajoutent, meme debut, meme longueur, meme canal, meme velocite.
+    /// L'accord devient la selection.
+    pub fn chordify(&mut self, k: usize) -> usize {
+        let t = self.targets();
+        let base: Vec<Note> = t.iter().map(|&i| self.notes[i]).collect();
+        for n in &mut self.notes {
+            n.sel = false;
+        }
+        let mut made = 0;
+        for b in &base {
+            for q in self.chord_on(b.pitch, k) {
+                if let Some(x) = self
+                    .notes
+                    .iter_mut()
+                    .find(|x| x.pitch == q && (x.qn0 - b.qn0).abs() < EPS && x.chan == b.chan)
+                {
+                    x.sel = true;
+                    continue;
+                }
+                let id = self.mint();
+                self.notes.push(Note {
+                    id,
+                    pitch: q,
+                    sel: true,
+                    src: id,
+                    anchor: b.qn0,
+                    ..*b
+                });
+                made += 1;
+            }
+        }
+        self.sort();
+        made
+    }
+
+    /// Les notes choisies (un accord) deviennent un arpege qui remplit leur
+    /// etendue : une note tous les `rate` noires, tenue `gate` de son pas,
+    /// sur `octaves` octaves, dans l'ordre `mode` (`seed` : le hasard
+    /// reproductible). Le canal et la velocite sont ceux de l'accord (la
+    /// premiere note, la moyenne). Rend le nombre de notes.
+    pub fn arp(&mut self, rate: f64, mode: ArpMode, gate: f64, octaves: u32, seed: u64) -> usize {
+        if rate <= EPS {
+            return 0;
+        }
+        let sel: Vec<Note> = self.notes.iter().filter(|n| n.sel).copied().collect();
+        let Some(first) = sel.first().copied() else {
+            return 0;
+        };
+        let a = sel.iter().map(|n| n.qn0).fold(f64::INFINITY, f64::min);
+        let b = sel
+            .iter()
+            .map(|n| n.end())
+            .fold(f64::NEG_INFINITY, f64::max);
+        if b <= a {
+            return 0;
+        }
+        let vel = (sel.iter().map(|n| n.vel as f64).sum::<f64>() / sel.len() as f64).round() as i32;
+        let mut ps: Vec<i32> = sel.iter().map(|n| n.pitch).collect();
+        ps.sort_unstable();
+        ps.dedup();
+        let base = ps.clone();
+        for o in 1..octaves.max(1) {
+            ps.extend(base.iter().map(|p| p + 12 * o as i32).filter(|p| *p <= 127));
+        }
+        ps.sort_unstable();
+        ps.dedup();
+        let seq: Vec<i32> = match mode {
+            ArpMode::Up | ArpMode::Random => ps.clone(),
+            ArpMode::Down => ps.iter().rev().copied().collect(),
+            ArpMode::UpDown => {
+                let mut v = ps.clone();
+                if ps.len() > 2 {
+                    v.extend(ps[1..ps.len() - 1].iter().rev());
+                }
+                v
+            }
+        };
+        self.delete_sel();
+        let mut rng = Rng::new(seed.wrapping_mul(40503).wrapping_add(1));
+        let mut t = a;
+        let mut k = 0usize;
+        let mut made = 0;
+        while t < b - 1e-6 && made < 512 {
+            let p = match mode {
+                ArpMode::Random => {
+                    let i =
+                        (((rng.next() + 1.0) * 0.5 * seq.len() as f64) as usize).min(seq.len() - 1);
+                    seq[i]
+                }
+                _ => seq[k % seq.len()],
+            };
+            let len = (rate * gate.clamp(0.05, 1.0)).min(b - t);
+            if len > 1e-4 {
+                let id = self.mint();
+                self.notes.push(Note {
+                    id,
+                    qn0: t,
+                    len: len.max(MIN_LEN),
+                    pitch: p.clamp(0, 127),
+                    vel: vel.clamp(1, 127),
+                    sel: true,
+                    mute: false,
+                    src: id,
+                    anchor: t,
+                    ..first
+                });
+                made += 1;
+            }
+            t += rate;
+            k += 1;
+        }
+        self.sort();
+        made
+    }
+
+    /// Un rythme euclidien : `pulses` coups repartis au plus egal sur `steps`
+    /// cases de `[a, b)`, a la hauteur `pitch` sur le canal `chan`, decale
+    /// de `rotation` cases (le premier coup sur le temps). Les notes
+    /// s'ajoutent et deviennent la selection.
+    #[allow(clippy::too_many_arguments)]
+    pub fn euclid(
+        &mut self,
+        a: f64,
+        b: f64,
+        pitch: i32,
+        chan: i32,
+        vel: i32,
+        steps: usize,
+        pulses: usize,
+        rotation: usize,
+    ) -> usize {
+        if steps == 0 || b <= a {
+            return 0;
+        }
+        let pulses = pulses.min(steps);
+        let cell = (b - a) / steps as f64;
+        for n in &mut self.notes {
+            n.sel = false;
+        }
+        let mut bucket = steps - pulses;
+        let mut made = 0;
+        for i in 0..steps {
+            bucket += pulses;
+            if bucket >= steps {
+                bucket -= steps;
+                let si = (i + rotation) % steps;
+                let q = a + si as f64 * cell;
+                let id = self.insert(q, cell * 0.9, pitch, chan, vel);
+                self.add_sel(id);
+                made += 1;
+            }
+        }
+        made
+    }
+}
+
 #[cfg(test)]
 mod tests;

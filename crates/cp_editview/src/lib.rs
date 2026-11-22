@@ -26,7 +26,7 @@ mod tests;
 
 pub use cp_roll;
 
-use cp_roll::{MIN_LEN, Note, Roll, Scale, note_name};
+use cp_roll::{ArpMode, CHORDS, MIN_LEN, Note, Roll, Scale, note_name};
 use cp_ui::{Button, Ev, Mods, vk};
 
 /// Les rangs montres.
@@ -123,6 +123,9 @@ fn grid_of(cmd: u32) -> Option<f64> {
         _ => return None,
     })
 }
+
+/// Les rythmes euclidiens du menu : (coups, cases).
+const EUCLID: [(usize, usize); 6] = [(3, 8), (5, 8), (5, 16), (7, 16), (9, 16), (11, 16)];
 
 /// Allonge les notes choisies (REAPER : rien sans selection).
 fn lengthen(r: &mut Roll, d: f64) -> usize {
@@ -488,6 +491,8 @@ pub struct Ed {
     last_len: f64,
     last_vel: i32,
     last_chan: i32,
+    /// Le hasard reproductible des arpeges (un tirage par geste).
+    gen_seed: u64,
     dirty: bool,
     /// Les zones a redessiner quand tout ne l'est pas (un survol).
     damage: Vec<cp_gfx::IRect>,
@@ -541,6 +546,7 @@ impl Ed {
             last_len: 0.25,
             last_vel: 100,
             last_chan: 0,
+            gen_seed: 0,
             dirty: true,
             edit_cursor: None,
             guide: cp_ui::Guide::default(),
@@ -2570,6 +2576,29 @@ impl Ed {
                 (self.swing - p as f64 / 100.0).abs() < 1e-6,
             )));
         }
+        // Les generateurs : accords sur les notes choisies, arpeges, rythmes
+        // euclidiens.
+        v.push(None);
+        for (k, (name, _)) in CHORDS.iter().enumerate() {
+            v.push(s(70 + k as u32, &format!("Chord: {name}")));
+        }
+        v.push(None);
+        for (k, t) in [
+            "Arpeggio up",
+            "Arpeggio down",
+            "Arpeggio up-down",
+            "Arpeggio random",
+            "Arpeggio up, 2 octaves",
+        ]
+        .iter()
+        .enumerate()
+        {
+            v.push(s(80 + k as u32, t));
+        }
+        v.push(None);
+        for (k, (p, n)) in EUCLID.iter().enumerate() {
+            v.push(s(90 + k as u32, &format!("Euclid {p}/{n}")));
+        }
         v.push(None);
         v.push(s(60, "Open in REAPER's MIDI editor"));
         v
@@ -2592,11 +2621,50 @@ impl Ed {
             _ => {}
         }
         self.dirty = true;
+        // Le rythme euclidien : sur la plage de la regle, sinon l'etendue des
+        // notes choisies, sinon la mesure du curseur ; a la hauteur de la
+        // premiere note choisie (sinon Do 2), sur son canal.
+        let eu_span = self.range.filter(|(a, b)| b - a > 1e-6).or_else(|| {
+            self.midi()
+                .and_then(|m| m.roll.bounds().filter(|_| m.roll.has_sel()))
+        });
+        let bar = self.bar_qn().max(1e-6);
+        let eu_span = eu_span.unwrap_or_else(|| {
+            let a = (cursor / bar).floor() * bar;
+            (a, a + bar)
+        });
+        let eu_note = self
+            .midi()
+            .and_then(|m| m.roll.notes.iter().find(|n| n.sel).copied());
+        let (eu_p, eu_c, eu_v) = eu_note.map_or((36, self.last_chan, self.last_vel), |n| {
+            (n.pitch, n.chan, n.vel)
+        });
+        let g_arp = if g > 0.0 { g } else { 0.25 };
+        let seed = self.seed_bump();
         let Some(md) = self.midi_mut() else {
             return Vec::new();
         };
         let r = &mut md.roll;
         let (k, label): (usize, &'static str) = match id {
+            70..=78 => (r.chordify((id - 70) as usize), "CP Editor: chord"),
+            80..=84 => {
+                let (mode, oct) = match id {
+                    80 => (ArpMode::Up, 1),
+                    81 => (ArpMode::Down, 1),
+                    82 => (ArpMode::UpDown, 1),
+                    83 => (ArpMode::Random, 1),
+                    _ => (ArpMode::Up, 2),
+                };
+                (r.arp(g_arp, mode, 0.9, oct, seed), "CP Editor: arpeggio")
+            }
+            90..=95 => {
+                let (p, n) = EUCLID[(id - 90) as usize];
+                let (a, b) = eu_span;
+                (
+                    r.euclid(a, b, eu_p, eu_c, eu_v, n, p, 0),
+                    "CP Editor: euclid",
+                )
+            }
             1 => {
                 r.select_all();
                 (0, "")
@@ -2632,6 +2700,12 @@ impl Ed {
             _ => (0, ""),
         };
         self.commit_if(k, label)
+    }
+
+    /// Un nouveau tirage pour un generateur.
+    fn seed_bump(&mut self) -> u64 {
+        self.gen_seed = self.gen_seed.wrapping_add(1);
+        self.gen_seed
     }
 
     pub fn set_grid(&mut self, g: f64) {
