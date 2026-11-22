@@ -1,0 +1,12 @@
+[package]
+name = "cp_roll"
+description = "Le modele de notes de l'editeur MIDI : selection, gestes, transformations (sans REAPER, sans Windows)"
+edition.workspace = true
+version.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+
+[lints]
+workspace = true
