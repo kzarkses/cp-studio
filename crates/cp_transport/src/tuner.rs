@@ -127,69 +127,55 @@ pub fn draw_tuner(
             cv.fill_rect(xc(c).round(), cy - 4.0 * s, 1.0, 8.0 * s, ink.dim.fade(0.7));
         }
         cv.fill_rect(xc(0.0).round(), cy - 8.0 * s, 1.0, 16.0 * s, ink.dim);
-        match tv {
-            Some(t) => {
-                let a = t.cents.abs();
-                let c = if a <= 3.0 {
-                    ink.good
-                } else if a <= 15.0 {
-                    ink.warn
-                } else {
-                    ink.bad
-                };
-                let nx = xc(t.cents);
-                let nh = (h - 8.0 * s).max(8.0);
-                cv.fill_round_rect(nx - 1.5 * s, cy - nh * 0.5, 3.0 * s, nh, 1.5 * s, c);
-                // A droite : l'ecart, puis la frequence (ou la corde).
-                let sign = if t.cents < -0.05 {
-                    "\u{2212}"
-                } else if t.cents > 0.05 {
-                    "+"
-                } else {
-                    ""
-                };
-                let ct = format!("{sign}{:.0} \u{a2}", t.cents.abs());
-                text.draw_in(
-                    cv,
-                    mono,
-                    bx1 + pad * 0.5,
-                    y,
-                    right_w,
-                    h * 0.55,
-                    &ct,
-                    c,
-                    Align::Left,
-                );
-                let sub_t = if t.string.is_empty() {
-                    format!("{:.1} Hz", t.freq)
-                } else {
-                    t.string.clone()
-                };
-                text.draw_in(
-                    cv,
-                    small,
-                    bx1 + pad * 0.5,
-                    y + h * 0.45,
-                    right_w,
-                    h * 0.55,
-                    &sub_t,
-                    ink.dim,
-                    Align::Left,
-                );
-            }
-            None => {
-                text.draw_in(
-                    cv,
-                    small,
-                    bx1 + pad * 0.5,
-                    y,
-                    right_w,
-                    h,
-                    "play a note",
-                    ink.dim,
-                    Align::Left,
-                );
-            }
+        // Sans note : le tiret et l'echelle suffisent.
+        if let Some(t) = tv {
+            let a = t.cents.abs();
+            let c = if a <= 3.0 {
+                ink.good
+            } else if a <= 15.0 {
+                ink.warn
+            } else {
+                ink.bad
+            };
+            let nx = xc(t.cents);
+            let nh = (h - 8.0 * s).max(8.0);
+            cv.fill_round_rect(nx - 1.5 * s, cy - nh * 0.5, 3.0 * s, nh, 1.5 * s, c);
+            // A droite : l'ecart, puis la frequence (ou la corde).
+            let sign = if t.cents < -0.05 {
+                "\u{2212}"
+            } else if t.cents > 0.05 {
+                "+"
+            } else {
+                ""
+            };
+            let ct = format!("{sign}{:.0} \u{a2}", t.cents.abs());
+            text.draw_in(
+                cv,
+                mono,
+                bx1 + pad * 0.5,
+                y,
+                right_w,
+                h * 0.55,
+                &ct,
+                c,
+                Align::Left,
+            );
+            let sub_t = if t.string.is_empty() {
+                format!("{:.1} Hz", t.freq)
+            } else {
+                t.string.clone()
+            };
+            text.draw_in(
+                cv,
+                small,
+                bx1 + pad * 0.5,
+                y + h * 0.45,
+                right_w,
+                h * 0.55,
+                &sub_t,
+                ink.dim,
+                Align::Left,
+            );
         }
     }
 }
