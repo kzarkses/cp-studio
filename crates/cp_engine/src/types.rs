@@ -120,4 +120,10 @@ pub enum Param {
     Gate,
     /// Valide les points recus : la valeur = leur nombre, 0 l'eteint.
     EnvPts,
+    /// L'interpolation hors vitesse 1 : 0 = Hermite (le defaut, celui de
+    /// l'ancien moteur), 1 = sinc (haute qualite, voir [`crate::sinc`]).
+    Interp,
+    /// 1 = a l'envers : la tete recule. Pose avant le depart, elle part de
+    /// la fin de la region.
+    Reverse,
 }

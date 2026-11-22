@@ -126,6 +126,9 @@ fn lock_blocking<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
 
 impl Ctl {
     pub fn new(srate: f64) -> Ctl {
+        // La table du sinc, construite ici (fil principal) : le fil audio
+        // ne fait que la lire.
+        crate::sinc::init();
         let mut producers = Vec::with_capacity(MAX_PORTS);
         let mut ports = Vec::with_capacity(MAX_PORTS);
         for port in 0..MAX_PORTS {
@@ -755,6 +758,12 @@ fn set_param(v: &mut Voice, param: Param, x: f64, srate: f64, xf: i32) {
         }
         Param::EnvPts => {
             v.env_commit((x + 0.5) as i32);
+        }
+        Param::Interp => v.interp = if x >= 0.5 { 1 } else { 0 },
+        Param::Reverse => {
+            v.reverse = x != 0.0;
+            // Pose avant le depart : de la fin de la region.
+            v.rev_arm = v.reverse && v.state == state::SCHEDULED;
         }
         Param::Attack => v.env_a = (if x > 0.0 { x } else { 0.0 }) as f32,
         Param::Decay => v.env_d = (if x > 0.0 { x } else { 0.0 }) as f32,

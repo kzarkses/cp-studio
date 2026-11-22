@@ -24,6 +24,7 @@
 pub mod curve;
 mod engine;
 pub mod pool;
+pub mod sinc;
 pub mod types;
 mod voice;
 

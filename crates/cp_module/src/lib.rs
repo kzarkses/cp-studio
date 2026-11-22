@@ -266,6 +266,9 @@ impl BrowserHost for Adapter<'_> {
     }
     fn set_rate(&mut self, voice: u32, rate: f64) {
         self.host.audio_set(voice, 0, rate);
+        // Hors vitesse 1, l'interpolation de haute qualite (le sinc,
+        // `Param::Interp` = 19) : rien ne se replie quand la hauteur monte.
+        self.host.audio_set(voice, 19, 1.0);
     }
     fn insert_rate(&mut self, rate: f64) {
         self.r.set_selected_item_rate(rate);

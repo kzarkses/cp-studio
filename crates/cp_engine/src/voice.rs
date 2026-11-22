@@ -17,6 +17,7 @@ use std::sync::atomic::{AtomicI32, AtomicI64, AtomicU64, Ordering::Relaxed};
 
 use crate::curve;
 use crate::pool::ClipData;
+use crate::sinc;
 use crate::types::{Frame, MAX_ENV_PTS, PlayMode, state};
 
 /// Sous ce gain, on force zero. Les denormaux coutent 100 a 400 cycles sur un
@@ -114,6 +115,14 @@ pub(crate) struct Voice {
     pub started_at: Frame,
     pub ended_at: Frame,
     pub free_pending: bool,
+    // --- lecture
+    /// 0 = Hermite, 1 = sinc.
+    pub interp: u8,
+    /// La tete recule.
+    pub reverse: bool,
+    /// A l'envers depuis le depart : la tete passe a la fin de la region au
+    /// premier bloc joue.
+    pub rev_arm: bool,
 }
 
 impl Voice {
@@ -165,6 +174,9 @@ impl Voice {
             started_at: -1,
             ended_at: -1,
             free_pending: false,
+            interp: 0,
+            reverse: false,
+            rev_arm: false,
         };
         v.reset();
         v
@@ -173,6 +185,9 @@ impl Voice {
     /// Remet tout a zero sauf la generation et les tableaux de points (ancien
     /// `Voice::reset`). Ne publie pas : l'appelant le fait (il tient la table).
     pub fn reset(&mut self) {
+        self.interp = 0;
+        self.reverse = false;
+        self.rev_arm = false;
         self.state = state::IDLE;
         self.port = -1;
         self.clip = None;
@@ -381,6 +396,43 @@ impl Voice {
 
         // --- l'etat mutable descend en local
         let mut p = self.pos;
+        // A l'envers depuis le depart : la tete part de la fin de la region,
+        // a la place symetrique de son depart.
+        if self.rev_arm && span > 0 {
+            p = (src_start + src_end - 1) as f64 - (p - src_start as f64);
+            p = p.clamp(src_start as f64, (src_end - 1) as f64);
+            self.rev_arm = false;
+        }
+        let rev = self.reverse;
+        let dir = if rev { -step } else { step };
+        // Le sinc (choisi, et sa table construite) hors vitesse 1.
+        let hq = if self.interp == 1 && !unity {
+            sinc::kernel()
+        } else {
+            None
+        };
+        let avail = (data.len() / cnch.max(1)) as Frame;
+        let tap = |m: Frame| -> (f32, f32) {
+            let m = if looping {
+                src_start + (m - src_start).rem_euclid(span)
+            } else if m < src_start || m >= src_end {
+                return (0.0, 0.0);
+            } else {
+                m
+            };
+            if m < 0 || m >= avail {
+                return (0.0, 0.0);
+            }
+            let s = m as usize * cnch;
+            let l = data[s];
+            (l, if cnch > 1 { data[s + 1] } else { l })
+        };
+        let read = |q: f64| -> (f32, f32) {
+            match hq {
+                Some(k) => k.read(q, step, tap),
+                None => read_at(data, cnch, cf, q, unity, looping, src_start, src_end),
+            }
+        };
         let mut st = self.state;
         let mut fip = self.fade_in_pos;
         let mut fop = self.fade_out_pos;
@@ -443,6 +495,20 @@ impl Voice {
 
         let mut i = off;
         while i < n {
+            // --- debut de matiere (a l'envers)
+            if rev && p < src_start as f64 {
+                if looping {
+                    p += span as f64;
+                    if p < src_start as f64 {
+                        let d = p - src_start as f64;
+                        p = src_start as f64 + (d - (d / span as f64).floor() * span as f64);
+                    }
+                } else {
+                    st = state::IDLE;
+                    ended_here = block_start + i as Frame;
+                    break;
+                }
+            }
             // --- fin de matiere
             if p >= src_end as f64 {
                 if looping {
@@ -466,7 +532,7 @@ impl Voice {
             }
 
             // --- lecture interpolee
-            let (mut l, mut r) = read_at(data, cnch, cf, p, unity, looping, src_start, src_end);
+            let (mut l, mut r) = read(p);
             if pon {
                 let ge = envp_eval(ept, (p * inv_csr) as f32, &mut epi);
                 l *= ge;
@@ -479,8 +545,11 @@ impl Voice {
                 if tp >= src_end as f64 && looping {
                     tp -= span as f64;
                 }
+                if tp < src_start as f64 && looping && rev {
+                    tp += span as f64;
+                }
                 if tp >= src_start as f64 && tp < src_end as f64 {
-                    (lo, ro) = read_at(data, cnch, cf, tp, unity, looping, src_start, src_end);
+                    (lo, ro) = read(tp);
                 }
                 if pon {
                     let mut tc = epi;
@@ -491,7 +560,7 @@ impl Voice {
                 let w = ti as f32 / tl as f32;
                 l = l * w + lo * (1.0 - w);
                 r = r * w + ro * (1.0 - w);
-                tp += step;
+                tp += dir;
                 ti += 1;
             }
 
@@ -543,7 +612,12 @@ impl Voice {
                 }
                 env *= elv;
                 if relk > 0.0 {
-                    let rk = (src_end as f64 - 1.0 - p) * relk;
+                    let left = if rev {
+                        p - src_start as f64
+                    } else {
+                        src_end as f64 - 1.0 - p
+                    };
+                    let rk = left * relk;
                     if rk < 1.0 {
                         env *=
                             1.0 - curve::shp((1.0 - if rk > 0.0 { rk } else { 0.0 }) as f32, ekr);
@@ -563,7 +637,7 @@ impl Voice {
                 out[o + 1] += r * gg * gr;
             }
 
-            p += step;
+            p += dir;
             i += 1;
         }
 
