@@ -163,12 +163,20 @@ pub fn write_musicxml(notes: &[TNote], spec: &ScoreSpec, dropped: usize) -> (Str
                 spec.bpm
             );
         }
-        for staff in [1, 2] {
-            if staff == 2 {
+        // Portee 1 puis tablature ; dans chacune la voix 1, puis la 2 si
+        // la mesure en a une (on revient au debut de la mesure entre deux).
+        let two = eng.two_voices.contains(&m);
+        let mut first_pass = true;
+        for (staff, v) in [(1, 1u8), (1, 2), (2, 1), (2, 2)] {
+            if v == 2 && !two {
+                continue;
+            }
+            if !first_pass {
                 let _ = writeln!(x, "      <backup><duration>{mlen}</duration></backup>");
             }
-            let voice = if staff == 1 { 1 } else { 5 };
-            for sg in eng.signs.iter().filter(|s| s.measure == m) {
+            first_pass = false;
+            let voice = if staff == 1 { v as i32 } else { 4 + v as i32 };
+            for sg in eng.signs.iter().filter(|s| s.measure == m && s.voice == v) {
                 let ev = &eng.events[sg.ev];
                 let d = sg.dur;
                 // Un triolet : trois dans le temps de deux, et son crochet.

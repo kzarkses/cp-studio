@@ -6,8 +6,13 @@
 //!
 //! - Le RYTHME : chaque debut et chaque fin tombent sur la grille (`grid`
 //!   cases par noire ; 4 = la double croche).
-//! - Les ACCORDS : les notes qui commencent sur la meme case. Une seule voix :
-//!   l'accord dure jusqu'au suivant au plus.
+//! - Les ACCORDS : les notes qui commencent sur la meme case ; l'accord dure
+//!   jusqu'au suivant au plus. Une corde ne joue qu'une note : une note
+//!   s'arrete a la suivante sur sa corde.
+//! - DEUX VOIX : une note grave tenue sous des notes plus aigues qui
+//!   commencent pendant qu'elle sonne (une basse sous une melodie) passe
+//!   dans la voix 2, hampes en bas ; elle n'est plus raccourcie. La voix 2
+//!   ne s'ecrit que dans les mesures ou elle joue.
 //! - Les MESURES : une note qui deborde est coupee et liee ; une duree qui ne
 //!   s'ecrit pas d'un seul signe (5 doubles croches) devient deux signes lies.
 //! - Les TRIOLETS : chaque temps (une noire) choisit entre la grille droite
@@ -22,6 +27,8 @@ use crate::doc::{TNote, Tech};
 /// Un evenement de la voix : un accord, ou un silence (`notes` vide).
 #[derive(Clone, Debug, PartialEq)]
 pub struct Event {
+    /// 1 (la voix du haut) ou 2 (la basse tenue).
+    pub voice: u8,
     /// En cases depuis l'origine.
     pub start: i64,
     pub dur: i64,
@@ -36,6 +43,8 @@ pub struct Event {
 /// Un signe de duree : une partie d'evenement dans une mesure.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Sign {
+    /// La voix de son evenement.
+    pub voice: u8,
     pub measure: i64,
     pub start: i64,
     pub dur: i64,
@@ -78,6 +87,8 @@ pub struct Engraved {
     pub legato: usize,
     /// Les temps en triolets (rang de la noire depuis l'origine).
     pub triplets: BTreeSet<i64>,
+    /// Les mesures a deux voix (hampes en haut pour la 1, en bas pour la 2).
+    pub two_voices: BTreeSet<i64>,
 }
 
 impl Engraved {
@@ -213,7 +224,6 @@ pub fn engrave(notes: &[TNote], origin_qn: f64, sig: (i32, i32), grid: u32) -> E
         }
         groups.entry(s).or_default().push((i, e));
     }
-    let starts: Vec<i64> = groups.keys().copied().collect();
     let mut eng = Engraved {
         grid: g,
         mlen: (sig.0.max(1) as i64 * g * 4 / sig.1.max(1) as i64).max(1),
@@ -222,67 +232,33 @@ pub fn engrave(notes: &[TNote], origin_qn: f64, sig: (i32, i32), grid: u32) -> E
         triplets: trip.clone(),
         ..Engraved::default()
     };
-    // 2. Les evenements de la voix.
-    let mut t = 0i64;
-    for (k, (&s, gr)) in groups.iter().enumerate() {
-        if s > t {
-            eng.events.push(Event {
-                start: t,
-                dur: s - t,
+    // 2. Les deux voix, puis les evenements de chacune.
+    let (v1, v2) = split_voices(notes, &groups, g);
+    let (mut ev1, t1) = voice_events(notes, &v1, 1, &mut eng);
+    let (mut ev2, t2) = voice_events(notes, &v2, 2, &mut eng);
+    eng.legato += ligatures(notes, &mut ev1) + ligatures(notes, &mut ev2);
+    // 3. Les mesures (chaque voix completee d'un silence).
+    let mlen = eng.mlen;
+    let t = t1.max(t2);
+    let nmeas = ((t.max(1) + mlen - 1) / mlen).max(1);
+    for (evs, tv, voice) in [(&mut ev1, t1, 1u8), (&mut ev2, t2, 2u8)] {
+        if tv < nmeas * mlen {
+            evs.push(Event {
+                voice,
+                start: tv,
+                dur: nmeas * mlen - tv,
                 notes: Vec::new(),
                 lig_in: Tech::Plain,
                 lig_out: Tech::Plain,
             });
         }
-        let next = starts.get(k + 1).copied().unwrap_or(i64::MAX);
-        let end = gr
-            .iter()
-            .map(|x| x.1)
-            .max()
-            .unwrap_or(s + 1)
-            .min(next)
-            .max(s + 1);
-        let mut idx: Vec<usize> = gr.iter().map(|x| x.0).collect();
-        idx.sort_by_key(|&i| notes[i].pitch);
-        eng.notes += idx.len();
-        eng.chords += 1;
-        eng.events.push(Event {
-            start: s,
-            dur: end - s,
-            notes: idx,
-            lig_in: Tech::Plain,
-            lig_out: Tech::Plain,
-        });
-        t = end;
     }
-    // Les liaisons H/P : une note seule, liee, collee a la note seule
-    // d'avant sur la meme corde.
-    for i in 1..eng.events.len() {
-        let (a, b) = (&eng.events[i - 1], &eng.events[i]);
-        if a.notes.len() != 1 || b.notes.len() != 1 || a.start + a.dur != b.start {
-            continue;
-        }
-        let (na, nb) = (&notes[a.notes[0]], &notes[b.notes[0]]);
-        if nb.tech == Tech::Plain || na.string != nb.string || na.pitch == nb.pitch {
-            continue;
-        }
-        let tech = nb.tech;
-        eng.events[i - 1].lig_out = tech;
-        eng.events[i].lig_in = tech;
-        eng.legato += 1;
+    for e in ev2.iter().filter(|e| !e.notes.is_empty()) {
+        let (a, b) = (e.start / mlen, (e.start + e.dur - 1) / mlen);
+        eng.two_voices.extend(a..=b);
     }
-    // 3. Les mesures (la derniere completee d'un silence).
-    let mlen = eng.mlen;
-    let nmeas = ((t.max(1) + mlen - 1) / mlen).max(1);
-    if t < nmeas * mlen {
-        eng.events.push(Event {
-            start: t,
-            dur: nmeas * mlen - t,
-            notes: Vec::new(),
-            lig_in: Tech::Plain,
-            lig_out: Tech::Plain,
-        });
-    }
+    eng.events = ev1;
+    eng.events.extend(ev2);
     eng.measures = nmeas;
     // 4. Les signes. Un temps en triolets coupe ce qui le traverse a ses
     // bords, et s'ecrit en croches (ou noires) de triolet.
@@ -293,7 +269,7 @@ pub fn engrave(notes: &[TNote], origin_qn: f64, sig: (i32, i32), grid: u32) -> E
         let (m0, m1) = (m * mlen, (m + 1) * mlen);
         for (ei, ev) in eng.events.iter().enumerate() {
             let (a, b) = (ev.start.max(m0), (ev.start + ev.dur).min(m1));
-            if b <= a {
+            if b <= a || (ev.voice == 2 && !eng.two_voices.contains(&m)) {
                 continue;
             }
             // Les morceaux : coupes aux bords des temps en triolets.
@@ -326,6 +302,7 @@ pub fn engrave(notes: &[TNote], origin_qn: f64, sig: (i32, i32), grid: u32) -> E
             let mut at = a;
             for (pi, (d, ty, dots, tuplet)) in parts.into_iter().enumerate() {
                 eng.signs.push(Sign {
+                    voice: ev.voice,
                     measure: m,
                     start: at,
                     dur: d,
@@ -345,10 +322,13 @@ pub fn engrave(notes: &[TNote], origin_qn: f64, sig: (i32, i32), grid: u32) -> E
         }
     }
     // Le premier et le dernier signe de chaque temps en triolets.
-    let mut by_beat: BTreeMap<i64, Vec<usize>> = BTreeMap::new();
+    let mut by_beat: BTreeMap<(u8, i64), Vec<usize>> = BTreeMap::new();
     for (si, sg) in eng.signs.iter().enumerate() {
         if sg.tuplet == 3 {
-            by_beat.entry(sg.start.div_euclid(g)).or_default().push(si);
+            by_beat
+                .entry((sg.voice, sg.start.div_euclid(g)))
+                .or_default()
+                .push(si);
         }
     }
     for v in by_beat.values() {
@@ -358,6 +338,132 @@ pub fn engrave(notes: &[TNote], origin_qn: f64, sig: (i32, i32), grid: u32) -> E
         }
     }
     eng
+}
+
+/// Les notes d'une voix par case de debut : (rang, fin en cases).
+type Groups = BTreeMap<i64, Vec<(usize, i64)>>;
+
+/// Les deux voix. Une note s'arrete au plus tard a la note suivante sur sa
+/// corde. Une note tenue au moins une croche au-dela de l'attaque suivante
+/// passe dans la voix 2 si tout ce qui commence pendant qu'elle sonne est
+/// plus aigu, et ressemble a une melodie : deux attaques au moins, aux deux
+/// tiers des notes seules (des accords plaques qui resonnent restent une
+/// seule voix).
+fn split_voices(notes: &[TNote], groups: &Groups, g: i64) -> (Groups, Groups) {
+    let mut flat: Vec<(i64, usize, i64)> = groups
+        .iter()
+        .flat_map(|(&s, v)| v.iter().map(move |&(i, e)| (s, i, e)))
+        .collect();
+    for k in 0..flat.len() {
+        let (s, i, e) = flat[k];
+        let cut = flat[k + 1..]
+            .iter()
+            .find(|x| x.0 > s && notes[x.1].string == notes[i].string)
+            .map(|x| x.0);
+        if let Some(c) = cut.filter(|&c| c < e) {
+            flat[k].2 = c;
+        }
+    }
+    let starts: Vec<i64> = groups.keys().copied().collect();
+    let mut v2: BTreeSet<usize> = BTreeSet::new();
+    for (k, &s) in starts.iter().enumerate() {
+        let Some(&next) = starts.get(k + 1) else {
+            continue;
+        };
+        for &(_, i, e) in flat.iter().filter(|x| x.0 == s) {
+            if e - next < (g / 2).max(1) {
+                continue;
+            }
+            let later: Vec<&(i64, usize, i64)> =
+                flat.iter().filter(|x| x.0 >= next && x.0 < e).collect();
+            if later.is_empty() || !later.iter().all(|x| notes[x.1].pitch > notes[i].pitch) {
+                continue;
+            }
+            let mut onsets: Vec<i64> = later.iter().map(|x| x.0).collect();
+            onsets.dedup();
+            let single = onsets
+                .iter()
+                .filter(|&&o| later.iter().filter(|x| x.0 == o).count() == 1)
+                .count();
+            if onsets.len() >= 2 && single * 3 >= onsets.len() * 2 {
+                v2.insert(i);
+            }
+        }
+    }
+    let (mut a, mut b) = (Groups::new(), Groups::new());
+    for (s, i, e) in flat {
+        let to = if v2.contains(&i) { &mut b } else { &mut a };
+        to.entry(s).or_default().push((i, e));
+    }
+    (a, b)
+}
+
+/// Les evenements d'une voix : ses accords (chacun dure jusqu'au suivant au
+/// plus) et les silences entre eux ; et la case ou elle s'arrete.
+fn voice_events(
+    notes: &[TNote],
+    groups: &Groups,
+    voice: u8,
+    eng: &mut Engraved,
+) -> (Vec<Event>, i64) {
+    let starts: Vec<i64> = groups.keys().copied().collect();
+    let mut out = Vec::new();
+    let mut t = 0i64;
+    for (k, (&s, gr)) in groups.iter().enumerate() {
+        if s > t {
+            out.push(Event {
+                voice,
+                start: t,
+                dur: s - t,
+                notes: Vec::new(),
+                lig_in: Tech::Plain,
+                lig_out: Tech::Plain,
+            });
+        }
+        let next = starts.get(k + 1).copied().unwrap_or(i64::MAX);
+        let end = gr
+            .iter()
+            .map(|x| x.1)
+            .max()
+            .unwrap_or(s + 1)
+            .min(next)
+            .max(s + 1);
+        let mut idx: Vec<usize> = gr.iter().map(|x| x.0).collect();
+        idx.sort_by_key(|&i| notes[i].pitch);
+        eng.notes += idx.len();
+        eng.chords += 1;
+        out.push(Event {
+            voice,
+            start: s,
+            dur: end - s,
+            notes: idx,
+            lig_in: Tech::Plain,
+            lig_out: Tech::Plain,
+        });
+        t = end;
+    }
+    (out, t)
+}
+
+/// Les liaisons H/P d'une voix : une note seule, liee, collee a la note
+/// seule d'avant sur la meme corde. Rend leur nombre.
+fn ligatures(notes: &[TNote], evs: &mut [Event]) -> usize {
+    let mut k = 0;
+    for i in 1..evs.len() {
+        let (a, b) = (&evs[i - 1], &evs[i]);
+        if a.notes.len() != 1 || b.notes.len() != 1 || a.start + a.dur != b.start {
+            continue;
+        }
+        let (na, nb) = (&notes[a.notes[0]], &notes[b.notes[0]]);
+        if nb.tech == Tech::Plain || na.string != nb.string || na.pitch == nb.pitch {
+            continue;
+        }
+        let tech = nb.tech;
+        evs[i - 1].lig_out = tech;
+        evs[i].lig_in = tech;
+        k += 1;
+    }
+    k
 }
 
 fn gcd(a: i64, b: i64) -> i64 {

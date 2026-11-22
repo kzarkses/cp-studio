@@ -2670,6 +2670,7 @@ pub(crate) fn draw_score(
         let joins = si > 0
             && beam_group[si - 1].is_some()
             && eng.signs[si - 1].measure == sg.measure
+            && eng.signs[si - 1].voice == sg.voice
             && eng.signs[si - 1].start / eng.grid.max(1) == beat;
         if joins {
             let g = beam_group[si - 1].unwrap_or(0);
@@ -2687,10 +2688,18 @@ pub(crate) fn draw_score(
             .map(|&n| staff_pos(it.doc[n].pitch).0)
             .collect()
     };
+    // Deux voix dans la mesure : la 1 hampes en haut, la 2 en bas.
+    let forced = |si: usize| -> Option<bool> {
+        let sg = &eng.signs[si];
+        eng.two_voices
+            .contains(&sg.measure)
+            .then_some(sg.voice == 1)
+    };
     let mut stem: Vec<Option<(bool, f32)>> = vec![None; eng.signs.len()];
     for g in &groups {
         let all: Vec<i32> = g.iter().flat_map(|&si| positions(si)).collect();
-        let up = (all.iter().sum::<i32>() as f32 / all.len().max(1) as f32) < 4.0;
+        let up = forced(g[0])
+            .unwrap_or((all.iter().sum::<i32>() as f32 / all.len().max(1) as f32) < 4.0);
         let end = if up {
             all.iter().map(|&p| y_of(p)).fold(f32::MAX, f32::min) - 3.4 * gap
         } else {
@@ -2716,6 +2725,12 @@ pub(crate) fn draw_score(
             } else {
                 y_of(4) + gap * 1.2
             };
+            // Deux voix : le silence de la 1 monte, celui de la 2 descend.
+            let base = match forced(si) {
+                Some(true) => base - gap * 2.0,
+                Some(false) => base + gap * 2.0,
+                None => base,
+            };
             text.draw(cv, fm, x - rw * 0.5, base, &c.to_string(), th.text_dim);
             continue;
         }
@@ -2728,7 +2743,8 @@ pub(crate) fn draw_score(
             })
             .collect();
         let (up, end) = stem[si].unwrap_or_else(|| {
-            let up = (ps.iter().map(|p| p.0).sum::<i32>() as f32 / ps.len() as f32) < 4.0;
+            let up = forced(si)
+                .unwrap_or((ps.iter().map(|p| p.0).sum::<i32>() as f32 / ps.len() as f32) < 4.0);
             let e = if up {
                 y_of(ps.iter().map(|p| p.0).max().unwrap_or(0)) - 3.4 * gap
             } else {

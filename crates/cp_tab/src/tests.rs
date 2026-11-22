@@ -805,3 +805,83 @@ fn des_doubles_croches_jouees_ne_deviennent_pas_des_triolets() {
     assert!(e.triplets.is_empty(), "{:?}", e.triplets);
     assert_eq!(e.grid, 4);
 }
+
+/// Une note sur une corde (0 = Mi grave) de l'accord standard.
+fn on_string(q: f64, len: f64, string: usize, fret: i32) -> TNote {
+    let open = Tuning::standard().strings[string];
+    TNote {
+        qn0: q,
+        qn1: q + len,
+        pitch: open + fret,
+        string,
+        fret,
+        vel: 90,
+        ..Default::default()
+    }
+}
+
+#[test]
+fn une_basse_tenue_sous_la_melodie_fait_une_deuxieme_voix() {
+    let mut tab = vec![
+        // La basse : deux blanches (Mi, La), a vide.
+        on_string(0.0, 2.0, 0, 0),
+        on_string(2.0, 2.0, 1, 0),
+    ];
+    // La melodie : des croches seules au-dessus.
+    for k in 0..8 {
+        tab.push(on_string(k as f64 * 0.5, 0.5, 3 + (k % 2), 2));
+    }
+    // Mesure 2 : des accords plaques qui resonnent, une seule voix.
+    for b in 0..4 {
+        let q = 4.0 + b as f64;
+        tab.push(on_string(q, 2.0, 0, 0));
+        tab.push(on_string(q, 2.0, 2, 2));
+        tab.push(on_string(q, 2.0, 3, 2));
+    }
+    doc::sort(&mut tab);
+    let e = engrave(&tab, 0.0, (4, 4), 4);
+    assert_eq!(e.two_voices.iter().copied().collect::<Vec<_>>(), vec![0]);
+    let sum = |m: i64, v: u8| -> i64 {
+        e.signs
+            .iter()
+            .filter(|s| s.measure == m && s.voice == v)
+            .map(|s| s.dur)
+            .sum()
+    };
+    assert_eq!(sum(0, 1), e.mlen);
+    assert_eq!(sum(0, 2), e.mlen);
+    assert_eq!(sum(1, 2), 0, "la mesure 2 n'a qu'une voix");
+    assert_eq!(sum(1, 1), e.mlen);
+    // La basse garde ses deux blanches.
+    let v2: Vec<(&str, usize)> = e
+        .signs
+        .iter()
+        .filter(|s| s.voice == 2)
+        .map(|s| (s.ty, e.events[s.ev].notes.len()))
+        .collect();
+    assert_eq!(v2, vec![("half", 1), ("half", 1)]);
+    // La melodie : huit croches.
+    let v1: Vec<&str> = e
+        .signs
+        .iter()
+        .filter(|s| s.measure == 0 && s.voice == 1)
+        .map(|s| s.ty)
+        .collect();
+    assert_eq!(v1, vec!["eighth"; 8]);
+    // Le MusicXML : les voix 2 et 6, trois retours au debut de la mesure 1.
+    let spec = ScoreSpec {
+        title: "t".into(),
+        origin_qn: 0.0,
+        sig: (4, 4),
+        bpm: 100.0,
+        grid: 4,
+        tuning: Tuning::standard(),
+    };
+    let (x, _) = crate::score::write_musicxml(&tab, &spec, 0);
+    assert!(x.contains("<voice>2</voice>") && x.contains("<voice>6</voice>"));
+    let m1 = &x[x.find("<measure number=\"1\"").unwrap()..x.find("<measure number=\"2\"").unwrap()];
+    assert_eq!(m1.matches("<backup>").count(), 3);
+    let m2 = &x[x.find("<measure number=\"2\"").unwrap()..];
+    let m2 = m2.split("<measure number=\"3\"").next().unwrap();
+    assert_eq!(m2.matches("<backup>").count(), 1);
+}

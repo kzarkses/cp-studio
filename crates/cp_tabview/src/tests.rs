@@ -2053,3 +2053,34 @@ fn les_triolets_se_dessinent() {
         vec![0, 2, 4]
     );
 }
+
+/// Une basse tenue sous une melodie : deux voix, hampes en haut pour la
+/// melodie, en bas pour la basse.
+#[test]
+fn deux_voix_se_dessinent() {
+    use cp_tab::doc::TNote;
+    let mut b = Bench::new(1600, 900);
+    let mut v = arranger();
+    v.rec.clear();
+    let q0 = v.tracks[0].items[0].qn0;
+    let open = [40, 45, 50, 55, 59, 64];
+    let note = |q: f64, len: f64, string: usize, fret: i32| TNote {
+        qn0: q0 + q,
+        qn1: q0 + q + len,
+        pitch: open[string] + fret,
+        string,
+        fret,
+        vel: 96,
+        ..Default::default()
+    };
+    let mut d = vec![note(0.0, 2.0, 0, 0), note(2.0, 2.0, 1, 0)];
+    for k in 0..8 {
+        d.push(note(k as f64 * 0.5, 0.5, 3 + (k % 2), 2));
+    }
+    cp_tab::doc::sort(&mut d);
+    v.tracks[0].items[0].set_doc(d);
+    v.tracks[0].items[0].ghosts.clear();
+    b.shot(&mut v, "15_deux_voix");
+    let eng = v.tracks[0].items[0].engraved().clone();
+    assert!(eng.two_voices.contains(&0));
+}
