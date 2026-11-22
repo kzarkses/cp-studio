@@ -1116,6 +1116,11 @@ fn rogner_fondre_et_editer_au_survol() {
         Some(H::FadeOut)
     );
     assert_eq!(H::of_name("Item: Split items at time selection"), None);
+    // Chez lui, la virgule efface un point d'enveloppe : pas une prise.
+    assert_eq!(
+        H::of_name("Custom: me2beats_Delete envelope at mouse.lua"),
+        None
+    );
 }
 
 /// Une vue jamais dessinee (ouverture, rechargement du module) redessine

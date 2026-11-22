@@ -175,7 +175,7 @@ impl HoverEdit {
             Some(HoverEdit::FadeIn)
         } else if n.contains("fadeout") || n.contains("fade out") {
             Some(HoverEdit::FadeOut)
-        } else if n.contains("delete") && n.contains("mouse") {
+        } else if n.contains("delete") && n.contains("mouse") && !n.contains("envelope") {
             Some(HoverEdit::Delete)
         } else if n.contains("split") && !n.contains("time selection") && !n.contains("razor") {
             Some(HoverEdit::Split)

@@ -384,10 +384,32 @@ fn file_hash(path: &str) -> String {
 
 /// La tranche de l'analyse d'un fichier qu'un item joue.
 fn slice_of(an: &Analysis, src: &Src) -> Analysis {
+    use cp_tab::model::NOTES;
     let fps = SR as f64 / HOP as f64;
-    let f0 = (src.offs.max(0.0) * fps).round() as usize;
     let n = (src.len.max(0.0) * src.rate.max(1e-6) * fps).ceil() as usize;
-    an.slice(f0, n)
+    if src.offs >= 0.0 {
+        let f0 = (src.offs * fps).round() as usize;
+        return an.slice(f0, n);
+    }
+    // Le debut de l'item tombe avant celui du fichier (son bord gauche tire
+    // au-dela : un decalage negatif). D'abord du silence, puis le fichier.
+    // Avant, le decalage etait ramene a zero : toutes les notes arrivaient
+    // trop tot de la longueur ajoutee (2026-11-22).
+    let lead = ((-src.offs * src.rate.max(1e-6)) * fps).round() as usize;
+    let lead = lead.min(n);
+    let body = an.slice(0, n - lead);
+    let mut note = vec![0u8; lead * NOTES];
+    note.extend_from_slice(&body.note);
+    let mut onset = vec![0u8; lead * NOTES];
+    onset.extend_from_slice(&body.onset);
+    let mut env = vec![0u8; lead];
+    env.extend_from_slice(&body.env);
+    Analysis {
+        frames: lead + body.frames,
+        note,
+        onset,
+        env,
+    }
 }
 
 fn ana_of(an: &Analysis) -> Ana {
@@ -3378,5 +3400,19 @@ mod tests {
         assert!(legacy_ok(&file, &src));
         // Seulement la section de la prise (10 s, faite depuis 2 s) : a refaire.
         assert!(!legacy_ok(&ana(10.0), &src));
+        // Le debut de la prise tire 1,5 s avant celui du fichier : 1,5 s de
+        // silence, puis la premiere trame du fichier.
+        let early = Src {
+            path: String::new(),
+            offs: -1.5,
+            len: 10.0,
+            rate: 1.0,
+        };
+        let s = slice_of(&file, &early);
+        let lead = (1.5 * fps).round() as usize;
+        let nn = cp_tab::model::NOTES;
+        assert_eq!(s.frames, (10.0 * fps).ceil() as usize);
+        assert!(s.note[..lead * nn].iter().all(|&v| v == 0));
+        assert_eq!(s.note[lead * nn..(lead + 1) * nn], file.note[..nn]);
     }
 }
