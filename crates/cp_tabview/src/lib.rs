@@ -560,6 +560,13 @@ pub enum Act {
         t: usize,
         i: usize,
     },
+    /// Une prise audio glissee : son nouveau debut (noires) et sa guitare.
+    MoveItem {
+        t: usize,
+        i: usize,
+        qn0: f64,
+        to: usize,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -592,6 +599,17 @@ enum Drag {
     HScroll {
         x0: f32,
         s0: f64,
+    },
+    /// Une prise audio qu'on glisse : dans le temps, et vers une autre
+    /// guitare. `x0` : ou le geste a commence ; rien ne bouge avant 4 px.
+    Item {
+        t: usize,
+        i: usize,
+        x0: f32,
+        moved: bool,
+        /// Ou elle irait : son debut, sa guitare.
+        qn0: f64,
+        to: usize,
     },
     /// Le bouton du milieu (comme dans REAPER) : la vue suit la main. Sur la
     /// regle, un geste vertical zoome autour de la noire saisie.
@@ -1086,6 +1104,29 @@ impl Arr {
                         self.dirty = true;
                         return None;
                     }
+                    Some(Drag::Item {
+                        t, i, x0, moved, ..
+                    }) => {
+                        if !moved && (x - x0).abs() < 4.0 * self.scale {
+                            return None;
+                        }
+                        let it = self.item(t, i)?;
+                        // Cale sur la double croche ; Maj : sans magnetisme.
+                        let raw = it.qn0 + ((x - x0) / self.lay.ppq.max(1e-3)) as f64;
+                        let free = matches!(ev, Ev::Move { mods, .. } if mods.shift);
+                        let q = if free { raw } else { (raw * 4.0).round() / 4.0 }.max(0.0);
+                        let to = self.track_at(y).unwrap_or(t);
+                        self.drag = Some(Drag::Item {
+                            t,
+                            i,
+                            x0,
+                            moved: true,
+                            qn0: q,
+                            to,
+                        });
+                        self.dirty = true;
+                        return None;
+                    }
                     Some(Drag::Slider(k)) => return self.set_slider(k, x),
                     Some(Drag::SynthSlider(k)) => return self.set_synth_slider(k, x),
                     Some(Drag::Fader { t, tab }) => return self.set_fader(t, tab, x),
@@ -1199,6 +1240,23 @@ impl Arr {
                             self.range = None;
                         }
                         None
+                    }
+                    Some(Drag::Item {
+                        t,
+                        i,
+                        x0,
+                        moved,
+                        qn0,
+                        to,
+                    }) => {
+                        if !moved {
+                            return Some(Act::Seek(self.qn_of(x0)));
+                        }
+                        let it = self.item(t, i)?;
+                        if (it.qn0 - qn0).abs() < 1e-9 && to == t {
+                            return None;
+                        }
+                        Some(Act::MoveItem { t, i, qn0, to })
                     }
                     _ => None,
                 }
@@ -1316,6 +1374,19 @@ impl Arr {
                 }));
                 if dbl && lane == Lane::Midi {
                     return Some(Act::OpenMidi { t, i });
+                }
+                // La prise audio se glisse ; un simple clic place le curseur.
+                if lane == Lane::Audio {
+                    let q = self.item(t, i)?.qn0;
+                    self.drag = Some(Drag::Item {
+                        t,
+                        i,
+                        x0: x,
+                        moved: false,
+                        qn0: q,
+                        to: t,
+                    });
+                    return None;
                 }
                 Some(Act::Seek(self.qn_of(x)))
             }
@@ -1473,6 +1544,36 @@ impl Arr {
         }
     }
 
+    /// La guitare sous l'ordonnee `y` (zone des pistes).
+    pub fn track_at(&self, y: f32) -> Option<usize> {
+        let l = self.lay;
+        let mut yy = l.top + l.ruler_h + 1.0 - self.vscroll;
+        for t in 0..self.tracks.len() {
+            let h =
+                draw::track_h(&self.tracks[t], self.scale, self.vzoom) + (3.0 * self.scale).round();
+            if y >= yy && y < yy + h {
+                return Some(t);
+            }
+            yy += h;
+        }
+        None
+    }
+
+    /// Le geste en cours sur une prise : (piste, item, debut vise, guitare).
+    pub(crate) fn item_drag(&self) -> Option<(usize, usize, f64, usize)> {
+        match self.drag {
+            Some(Drag::Item {
+                t,
+                i,
+                moved: true,
+                qn0,
+                to,
+                ..
+            }) => Some((t, i, qn0, to)),
+            _ => None,
+        }
+    }
+
     /// Le curseur de la barre horizontale : (x, largeur).
     pub fn hthumb(&self) -> (f32, f32) {
         let l = self.lay;
@@ -1546,10 +1647,10 @@ impl Arr {
             Hit::TabLine { .. } => "Double-click: add a note".into(),
             Hit::Item { t, i, lane } => {
                 let it = self.item(t, i)?;
-                if lane == Lane::Midi {
-                    format!("{}\nDouble-click: MIDI editor", it.name)
-                } else {
-                    it.name.clone()
+                match lane {
+                    Lane::Midi => format!("{}\nDouble-click: MIDI editor", it.name),
+                    Lane::Audio => format!("{}\nDrag: move (Shift: no snap)", it.name),
+                    _ => it.name.clone(),
                 }
             }
             Hit::Arm(_) => "Arm for recording (R)".into(),

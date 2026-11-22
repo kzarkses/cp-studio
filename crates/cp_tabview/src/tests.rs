@@ -579,3 +579,63 @@ fn les_reglages_se_relisent() {
     assert_eq!(Lanes::from_text("bad"), Lanes::default());
     assert_eq!(Listen::from_key(Listen::Original.key()), Listen::Original);
 }
+
+/// Glisser une prise audio : dans le temps (calee a la double croche), puis
+/// vers l'autre guitare ; un simple clic place seulement le curseur.
+#[test]
+fn glisser_une_prise() {
+    let mut b = Bench::new(1600, 760);
+    let mut v = arranger();
+    b.draw(&mut v);
+    let audio = |h: &Hit| {
+        *h == Hit::Item {
+            t: 0,
+            i: 0,
+            lane: Lane::Audio,
+        }
+    };
+    let (x, y) = find(&v, audio).expect("la prise audio");
+    // Un clic : le curseur.
+    assert!(matches!(click(&mut v, x, y), Some(Act::Seek(_))));
+    let q0 = v.tracks[0].items[0].qn0;
+    let px = v.lay.ppq;
+    let m = Mods::default();
+    v.event(&Ev::Down {
+        x,
+        y,
+        b: Button::Left,
+        dbl: false,
+        mods: m,
+    });
+    v.event(&Ev::Move {
+        x: x + px * 1.1,
+        y,
+        mods: m,
+    });
+    b.draw(&mut v);
+    // Vers la guitare du dessous.
+    let r1 = v.rect_of(Hit::Arm(1)).unwrap();
+    v.event(&Ev::Move {
+        x: x + px * 1.1,
+        y: r1.1 + 2.0,
+        mods: m,
+    });
+    b.shot(&mut v, "6_glisser");
+    let a = v.event(&Ev::Up {
+        x: x + px * 1.1,
+        y: r1.1 + 2.0,
+        b: Button::Left,
+        mods: m,
+    });
+    match a {
+        Some(Act::MoveItem {
+            t: 0,
+            i: 0,
+            qn0,
+            to: 1,
+        }) => {
+            assert!((qn0 - (q0 + 1.0)).abs() < 1e-9, "{qn0} (depart {q0})");
+        }
+        other => panic!("{other:?}"),
+    }
+}

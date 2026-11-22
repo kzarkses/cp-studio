@@ -75,10 +75,14 @@ const K_LANES: usize = 3;
 const K_TUNING: usize = 4;
 const K_PAN: usize = 5;
 /// ... et sur chaque item.
-const IKEYS: [&str; 3] = ["CPGT_midi", "CPGT_src", "CPGT_take"];
+const IKEYS: [&str; 4] = ["CPGT_midi", "CPGT_src", "CPGT_take", "CPGT_aoffs"];
 const I_MIDI: usize = 0;
 const I_SRC: usize = 1;
 const I_TAKE: usize = 2;
+/// Sur l'item MIDI : le decalage de la prise audio (s) quand il a ete pose.
+/// Un rognage du debut de l'audio decale d'autant le MIDI dans sa source,
+/// pour que les notes restent ou elles sonnent.
+const I_AOFFS: usize = 3;
 
 /// Le synthe : le fichier installe, son nom dans la chaine.
 const SYNTH_SRC: &str = include_str!("cp_guitar_tab_synth.jsfx");
@@ -131,6 +135,9 @@ pub(crate) struct Job {
     item: String,
     take: String,
     akey: String,
+    /// L'analyse porte sur tout le fichier ; l'item en prend sa tranche.
+    fkey: String,
+    src: Src,
     name: String,
     started: Instant,
     last_pct: i32,
@@ -141,6 +148,8 @@ pub(crate) struct GPart {
     pub win: Option<GWin>,
     pub place: Place,
     anas: HashMap<String, Ana>,
+    /// Les analyses de fichiers entiers, par [`file_key`].
+    files: HashMap<String, Analysis>,
     job: Option<Job>,
     /// Les prises a transcrire : (item, prise).
     queue: VecDeque<(String, String)>,
@@ -178,6 +187,7 @@ impl GPart {
                 .and_then(|v| Place::from_key(&v))
                 .unwrap_or(Place::Arrange),
             anas: HashMap::new(),
+            files: HashMap::new(),
             job: None,
             queue: VecDeque::new(),
             failed: HashMap::new(),
@@ -266,6 +276,50 @@ fn work(mut src: CppSource, item: ItemAudio, progress: Arc<Progress>) -> Out {
 }
 
 /// La cle d'un son : le fichier, le decalage, la longueur, la vitesse (FNV-1a).
+/// Le son qu'un item joue dans son fichier.
+struct Src {
+    path: String,
+    /// Decalage dans le fichier (s), longueur de l'item (s), vitesse.
+    offs: f64,
+    len: f64,
+    rate: f64,
+}
+
+/// La cle de l'analyse d'un FICHIER : son chemin, sa taille et sa date (un
+/// fichier reecrit est analyse de nouveau).
+fn file_key(path: &str) -> String {
+    let meta = std::fs::metadata(path).ok();
+    let size = meta.as_ref().map_or(0, |m| m.len());
+    let date = meta
+        .and_then(|m| m.modified().ok())
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map_or(0, |d| d.as_secs());
+    let mut h: u64 = 0xcbf29ce484222325;
+    let s = format!("{}|{size}|{date}", path.to_lowercase());
+    for b in s.bytes() {
+        h ^= b as u64;
+        h = h.wrapping_mul(0x100000001b3);
+    }
+    format!("f{h:016x}")
+}
+
+/// La tranche de l'analyse d'un fichier qu'un item joue.
+fn slice_of(an: &Analysis, src: &Src) -> Analysis {
+    let fps = SR as f64 / HOP as f64;
+    let f0 = (src.offs.max(0.0) * fps).round() as usize;
+    let n = (src.len.max(0.0) * src.rate.max(1e-6) * fps).ceil() as usize;
+    an.slice(f0, n)
+}
+
+fn ana_of(an: &Analysis) -> Ana {
+    Ana {
+        post: an.posteriors(),
+        frames: an.frames,
+        env: an.env.iter().map(|&v| v as f32 / 255.0).collect(),
+        onset: an.onset_curve(),
+    }
+}
+
 fn sound_key(path: &str, offs: f64, len: f64, rate: f64) -> String {
     let mut h: u64 = 0xcbf29ce484222325;
     let s = format!("{}|{:.4}|{:.4}|{:.6}", path.to_lowercase(), offs, len, rate);
@@ -344,34 +398,38 @@ impl App {
 
     /// L'analyse d'un son : en memoire, sinon en cache (ou dans l'ancien cache
     /// de la V1, par GUID d'item).
-    fn gtab_ana(&mut self, akey: &str, item: &str) -> bool {
+    /// L'analyse du son d'un item. D'abord celle de tout son FICHIER, dont on
+    /// tire la tranche que l'item joue : couper, rogner ou deplacer un item ne
+    /// relance donc jamais le reseau. Sinon l'ancien cache par son d'item.
+    fn gtab_ana(&mut self, akey: &str, item: &str, src: &Src) -> bool {
         if self.gt.anas.contains_key(akey) {
             return true;
         }
         let read = |p: PathBuf| std::fs::read(p).ok().and_then(|b| Analysis::from_bytes(&b));
-        let an = read(self.gtab_cache(akey, "cpga")).or_else(|| {
-            let old = read(self.gtab_cache(item, "cpga"))?;
-            let p = self.gtab_cache(akey, "cpga");
-            let _ = std::fs::write(p, old.to_bytes());
-            Some(old)
-        });
+        let fkey = file_key(&src.path);
+        if !self.gt.files.contains_key(&fkey) {
+            if let Some(an) = read(self.gtab_cache(&fkey, "cpga")) {
+                self.gt.files.insert(fkey.clone(), an);
+            }
+        }
+        let an = match self.gt.files.get(&fkey) {
+            Some(f) => Some(slice_of(f, src)),
+            None => {
+                read(self.gtab_cache(akey, "cpga")).or_else(|| read(self.gtab_cache(item, "cpga")))
+            }
+        };
         let Some(an) = an else {
             return false;
         };
-        self.gt.anas.insert(
-            akey.to_string(),
-            Ana {
-                post: an.posteriors(),
-                frames: an.frames,
-                env: an.env.iter().map(|&v| v as f32 / 255.0).collect(),
-                onset: an.onset_curve(),
-            },
-        );
+        self.gt.anas.insert(akey.to_string(), ana_of(&an));
         true
     }
 
-    fn gtab_has_ana(&self, akey: &str) -> bool {
-        self.gt.anas.contains_key(akey) || self.gtab_cache(akey, "cpga").exists()
+    fn gtab_has_ana(&self, akey: &str, path: &str) -> bool {
+        self.gt.anas.contains_key(akey)
+            || self.gt.files.contains_key(&file_key(path))
+            || self.gtab_cache(&file_key(path), "cpga").exists()
+            || self.gtab_cache(akey, "cpga").exists()
     }
 
     /// La tablature d'une prise, gardee a cote de son analyse.
@@ -692,6 +750,9 @@ impl App {
             if let Some(g) = &midi {
                 r.set_item_ext(&it.guid, "CPGT_midi", g);
                 r.set_item_ext(g, "CPGT_src", &it.guid);
+                if let Some(a) = r.item_audio(&it.guid) {
+                    r.set_item_ext(g, "CPGT_aoffs", &format!("{:.9}", a.offs));
+                }
             }
         }
         let Some(g) = midi else {
@@ -727,8 +788,10 @@ impl App {
             Some((d, sup, _)) => Sidecar::of(&d, &sup),
             None => Sidecar::from_text(&self.r.item_ext(midi, "CPGT_side").unwrap_or_default()),
         };
+        // Seules les notes que l'item joue (un rognage cache les autres).
         let m: Vec<MidiQn> = notes
             .iter()
+            .filter(|n| n.qn0 >= it.qn0 - 1e-6 && n.qn0 < it.qn1 - 1e-6)
             .map(|n| MidiQn {
                 qn0: n.qn0,
                 qn1: n.qn1,
@@ -770,6 +833,8 @@ impl App {
         let mut tracks: Vec<Track> = Vec::new();
         let mut to_write: Vec<(String, String)> = Vec::new();
         let mut to_fix: Vec<(String, f64, f64, i32)> = Vec::new();
+        let mut to_offs: Vec<(String, f64)> = Vec::new();
+        let mut to_mark: Vec<(String, f64)> = Vec::new();
         let mut todos: Vec<(String, Todo)> = Vec::new();
         for a in snap
             .iter()
@@ -841,6 +906,24 @@ impl App {
                     {
                         to_fix.push((m.guid.clone(), is.pos, is.len, is.lane));
                     }
+                    // Le debut de l'audio rogne : le MIDI se decale dans sa
+                    // source d'autant, ses notes restent ou elles sonnent.
+                    match m.ext[I_AOFFS]
+                        .as_deref()
+                        .and_then(|v| v.parse::<f64>().ok())
+                    {
+                        Some(a0) => {
+                            let want = ((tk.offs - a0) / tk.rate.max(1e-6)).max(0.0);
+                            let cur = m.take().map_or(0.0, |x| x.offs);
+                            if (want - cur).abs() > 1e-6 {
+                                to_offs.push((m.guid.clone(), want));
+                            }
+                        }
+                        None => {
+                            let cur = m.take().map_or(0.0, |x| x.offs);
+                            to_mark.push((m.guid.clone(), tk.offs - cur * tk.rate));
+                        }
+                    }
                 }
                 let needs_midi = it.state == Some(State::Ready)
                     && (redo
@@ -894,6 +977,12 @@ impl App {
             r.set_item_value(&g, "D_POSITION", pos);
             r.set_item_value(&g, "D_LENGTH", len);
             r.set_item_value(&g, "I_FIXEDLANE", lane as f64);
+        }
+        for (g, offs) in to_offs {
+            r.set_active_take_value(&g, "D_STARTOFFS", offs);
+        }
+        for (g, a0) in to_mark {
+            r.set_item_ext(&g, "CPGT_aoffs", &format!("{a0:.9}"));
         }
         if cleaned > 0 {
             r.refresh_arrange();
@@ -1004,7 +1093,8 @@ impl App {
             .iter()
             .map(|x| TakeInfo {
                 name: take_name(&x.name),
-                done: !x.midi && self.gtab_has_ana(&sound_key(&x.path, x.offs, is.len, x.rate)),
+                done: !x.midi
+                    && self.gtab_has_ana(&sound_key(&x.path, x.offs, is.len, x.rate), &x.path),
             })
             .collect();
         let mut it = Item::new(is.guid.clone(), tk.guid.clone(), akey.clone());
@@ -1018,7 +1108,13 @@ impl App {
         it.active = is.active;
         it.midi = midi.is_some();
         it.detect.tuning = head.tuning;
-        let ready = self.gtab_ana(&akey, &is.guid);
+        let src = Src {
+            path: tk.path.clone(),
+            offs: tk.offs,
+            len: is.len,
+            rate: tk.rate,
+        };
+        let ready = self.gtab_ana(&akey, &is.guid, &src);
         if !ready {
             it.state = self.gtab_state(&tk.guid, &akey).or(Some(State::Waiting));
             return (it, Todo::Nothing);
@@ -1186,15 +1282,33 @@ impl App {
             let Some(audio) = self.r.item_audio(&item) else {
                 continue;
             };
-            let Some(src) = cp_sys::audio::open_file(&self.r, &audio.path) else {
+            let Some(mut src) = cp_sys::audio::open_file(&self.r, &audio.path) else {
                 self.gt
                     .failed
                     .insert(take, "REAPER cannot open the file".into());
                 continue;
             };
+            // Tout le fichier : chaque item qui en joue une partie (apres une
+            // coupe, un rognage) y prendra sa tranche sans relancer le reseau.
+            let whole = src.length();
             let progress = Arc::new(Progress::default());
             let p2 = progress.clone();
-            let a2 = audio.clone();
+            let a2 = if whole > 0.0 {
+                ItemAudio {
+                    offs: 0.0,
+                    len: whole,
+                    rate: 1.0,
+                    ..audio.clone()
+                }
+            } else {
+                audio.clone()
+            };
+            let item_src = Src {
+                path: audio.path.clone(),
+                offs: if whole > 0.0 { audio.offs } else { 0.0 },
+                len: audio.len,
+                rate: audio.rate,
+            };
             let handle = std::thread::Builder::new()
                 .name("cp_guitar_tab".into())
                 .spawn(move || work(src, a2, p2))
@@ -1214,6 +1328,8 @@ impl App {
                 item,
                 take,
                 akey: snap_take.0,
+                fkey: file_key(&audio.path),
+                src: item_src,
                 name: snap_take.1,
                 started: Instant::now(),
                 last_pct: 0,
@@ -1259,20 +1375,15 @@ impl App {
     /// La transcription est finie : l'analyse en cache, la tablature, le MIDI.
     fn gtab_finish(&mut self, job: Job, post: Posteriors, an: Analysis) {
         let elapsed = job.started.elapsed().as_secs_f64();
-        let path = self.gtab_cache(&job.akey, "cpga");
+        drop(post);
+        let path = self.gtab_cache(&job.fkey, "cpga");
         if let Some(d) = path.parent() {
             let _ = std::fs::create_dir_all(d);
         }
         let _ = std::fs::write(&path, an.to_bytes());
-        self.gt.anas.insert(
-            job.akey.clone(),
-            Ana {
-                post,
-                frames: an.frames,
-                env: an.env.iter().map(|&v| v as f32 / 255.0).collect(),
-                onset: an.onset_curve(),
-            },
-        );
+        let mine = slice_of(&an, &job.src);
+        self.gt.files.insert(job.fkey.clone(), an);
+        self.gt.anas.insert(job.akey.clone(), ana_of(&mine));
         self.gt.failed.remove(&job.take);
         // Le decodage avec la nouvelle analyse (les corrections tenues
         // restent), puis le MIDI : par le rafraichissement.
@@ -1373,6 +1484,9 @@ impl App {
                     {
                         let k = sound_key(&tk.path, tk.offs, is.len, tk.rate);
                         self.gt.anas.remove(&k);
+                        let fk = file_key(&tk.path);
+                        self.gt.files.remove(&fk);
+                        let _ = std::fs::remove_file(self.gtab_cache(&fk, "cpga"));
                         let _ = std::fs::remove_file(self.gtab_cache(&k, "cpga"));
                         let _ = std::fs::remove_file(self.gtab_cache(&is.guid, "cpga"));
                         self.gt.selftest_take = Some(tk.guid.clone());
@@ -1484,7 +1598,8 @@ impl App {
                     .item(t, i)
                     .map(|x| x.guid.clone())
                     .unwrap_or_default();
-                if self.gtab_ana(&k, &g) {
+                let _ = g;
+                if self.gt.anas.contains_key(&k) {
                     self.gtab_decode(t, i, range);
                     self.gtab_write(t, i, "CP Guitar Tab: detection");
                 }
@@ -1606,6 +1721,35 @@ impl App {
             GAct::AddTrack => self.gtab_add_menu(),
             GAct::TrackMenu { t, x, y } => self.gtab_track_menu(t, x, y),
             GAct::ViewMenu { x, y } => self.gtab_place_menu(x, y),
+            GAct::MoveItem { t, i, qn0, to } => {
+                // La prise et son MIDI bougent ensemble, en un pas
+                // d'annulation ; vers une autre guitare, le MIDI suit sur sa
+                // piste tab.
+                let Some(it) = self.gt.arr.item(t, i).cloned() else {
+                    return;
+                };
+                let dest = head(self, to);
+                let pos = r.qn_to_time(qn0);
+                let midi = r
+                    .item_ext(&it.guid, "CPGT_midi")
+                    .filter(|g| r.item_ext(g, "CPGT_src").as_deref() == Some(it.guid.as_str()));
+                r.undo_begin();
+                r.set_item_value(&it.guid, "D_POSITION", pos);
+                if let Some(m) = &midi {
+                    r.set_item_value(m, "D_POSITION", pos);
+                }
+                if to != t {
+                    if let Some(d) = &dest {
+                        r.move_item_to_track(&it.guid, &d.guid);
+                        if let (Some(m), Some(tab)) = (&midi, self.gtab_tab_track(&d.guid)) {
+                            r.move_item_to_track(m, &tab);
+                        }
+                    }
+                }
+                r.undo_end("CP Guitar Tab: move take", -1);
+                r.refresh_arrange();
+                self.gtab_sync();
+            }
             GAct::Export { t, i } => {
                 if let Some(it) = self.gt.arr.item(t, i).cloned() {
                     let (p, _) = self.gtab_export_item(&it);
@@ -1861,8 +2005,19 @@ impl App {
                 }
             }
         }
-        self.gtab_next_job();
+        // Fenetre fermee, Guitar Tab ne fait rien : ni transcription, ni MIDI
+        // pose, ni rafraichissement (decide par Cedric le 2026-11-22 : « ca
+        // reanalyse tout le temps, meme quand je ne suis pas dans Guitar
+        // Tab »). Une transcription deja lancee finit, rien d'autre ne part ;
+        // tout se rattrape a l'ouverture.
         let open = self.gt.win.is_some();
+        if !open {
+            self.gt.recording = false;
+            self.gt.arr.rec.clear();
+            self.gt.since_sync = 1000;
+            return;
+        }
+        self.gtab_next_job();
         let r = self.r;
         let ps = r.play_state();
         let playing = ps & (play::PLAYING | play::RECORDING) != 0;
@@ -1907,11 +2062,9 @@ impl App {
                 self.gt.since_sync = 1000;
             }
         }
-        // Le rafraichissement : souvent fenetre ouverte, de loin en loin sinon
-        // (les prises s'enregistrent et se transcrivent aussi fenetre fermee).
+        // Le rafraichissement, fenetre ouverte.
         self.gt.since_sync += 1;
-        let every = if open { 15 } else { 60 };
-        if self.gt.since_sync >= every && !rec {
+        if self.gt.since_sync >= 15 && !rec {
             self.gt.since_sync = 0;
             self.gtab_sync();
             if open {

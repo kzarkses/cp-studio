@@ -636,6 +636,20 @@ impl Arr {
                     );
                 }
             }
+            // Une prise qu'on glisse : ou elle irait, sur sa guitare.
+            if let Some((t, i, q, to)) = self.item_drag() {
+                let len = self.item(t, i).map_or(0.0, |it| it.qn1 - it.qn0);
+                let mut ty = top - self.vscroll;
+                for tr in self.tracks.iter().take(to) {
+                    ty += track_h(tr, th.scale, vz) + s(TRACK_SEP);
+                }
+                if let Some(tr) = self.tracks.get(to) {
+                    let th_ = track_h(tr, th.scale, vz);
+                    let (xa, xb) = (geo.x(q), geo.x(q + len));
+                    cv.fill_rect(xa, ty, xb - xa, th_, th.accent.with_alpha(40));
+                    cv.stroke_rect(xa, ty, xb - xa, th_, s(1.5), th.accent);
+                }
+            }
         }
         cv.pop_clip();
         // La tete de lecture dans la regle.

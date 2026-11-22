@@ -768,6 +768,27 @@ impl Reaper {
         })
     }
 
+    /// Une valeur de la prise active d'un item (`D_STARTOFFS`, `D_PITCH`...).
+    pub fn set_active_take_value(&self, item: &str, key: &str, v: f64) -> bool {
+        type Active = unsafe extern "C" fn(P) -> P;
+        type SetTk = unsafe extern "C" fn(P, *const c_char, f64) -> bool;
+        let (Some(it), Some(act), Some(f)) = (
+            self.find_item(item, None),
+            self.tf::<Active>(c"GetActiveTake"),
+            self.tf::<SetTk>(c"SetMediaItemTakeInfo_Value"),
+        ) else {
+            return false;
+        };
+        let Ok(c) = CString::new(key) else {
+            return false;
+        };
+        // SAFETY: item vivant ; prise active verifiee non nulle.
+        unsafe {
+            let tk = act(it);
+            !tk.is_null() && f(tk, c.as_ptr(), v)
+        }
+    }
+
     fn take_of(&self, it: P, guid: &str) -> Option<P> {
         type CountTakes = unsafe extern "C" fn(P) -> i32;
         type GetTake = unsafe extern "C" fn(P, i32) -> P;

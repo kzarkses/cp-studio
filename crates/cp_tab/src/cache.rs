@@ -43,6 +43,20 @@ impl Analysis {
         }
     }
 
+    /// Les trames `f0 .. f0 + n` (bornees au fichier) : l'analyse d'un item
+    /// tiree de celle de tout son fichier. Couper, rogner ou deplacer un item
+    /// ne relance donc jamais le reseau.
+    pub fn slice(&self, f0: usize, n: usize) -> Analysis {
+        let a = f0.min(self.frames);
+        let b = (a + n).min(self.frames);
+        Analysis {
+            frames: b - a,
+            note: self.note[a * NOTES..b * NOTES].to_vec(),
+            onset: self.onset[a * NOTES..b * NOTES].to_vec(),
+            env: self.env[a..b].to_vec(),
+        }
+    }
+
     /// Les matrices pour le decodage (sans contour : pas de bends).
     pub fn posteriors(&self) -> Posteriors {
         Posteriors {
