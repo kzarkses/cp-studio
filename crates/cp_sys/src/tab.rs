@@ -21,8 +21,9 @@ pub struct ItemAudio {
     pub offs: f64,
     pub rate: f64,
     pub name: String,
-    /// Le numero de sa piste (1 = la premiere).
+    /// Le numero de sa piste (1 = la premiere), et son nom.
     pub track: i32,
+    pub track_name: String,
 }
 
 /// Une note a poser en MIDI (temps du projet).
@@ -105,6 +106,7 @@ impl Reaper {
                 rate: if rate > 0.0 { rate } else { 1.0 },
                 name,
                 track,
+                track_name: String::new(),
             })
         }
     }

@@ -174,7 +174,10 @@ impl App {
             // La police du transport du theme : famille 2 du texte.
             self.face = face;
             self.text = TextCache::new(Box::new(GdiGlyphs::new(&[
-                "Segoe UI", "Consolas", &self.face,
+                "Segoe UI",
+                "Consolas",
+                &self.face,
+                "Segoe UI Symbol",
             ])));
         }
         let id = self.tp.skin_id;
@@ -333,6 +336,15 @@ impl App {
                 name: "Browser".into(),
                 active: browser_in_band,
                 open: browser_open_elsewhere,
+            },
+            ViewTab {
+                name: "Guitar Tab".into(),
+                active: self.gtab_in_band(),
+                open: self
+                    .gt
+                    .win
+                    .as_ref()
+                    .is_some_and(|w| w.place != Place::Arrange),
             },
         ]
     }
@@ -673,14 +685,19 @@ impl App {
             Act::AddItem => self.add_item(),
             Act::BarMenu { x, y } => self.bar_menu(x, y),
             // Les vues changent au battement, jamais pendant un message.
-            Act::View(i) => self.queue(if i == 0 {
-                crate::WinOp::ViewArrange
-            } else {
-                crate::WinOp::ViewBrowser
+            Act::View(i) => self.queue(match i {
+                0 => crate::WinOp::ViewArrange,
+                1 => crate::WinOp::ViewBrowser,
+                _ => crate::WinOp::GtabOpen,
             }),
             Act::ViewMenu { i, x, y } => {
                 if i == 1 {
                     self.browser_place_menu(x, y);
+                } else if i == 2 {
+                    if let Some(h) = self.tp.view.as_ref().map(|v| v.hwnd) {
+                        let (sx, sy) = ui::client_to_screen(h, x as i32, y as i32);
+                        self.gtab_place_menu_at(h, sx, sy);
+                    }
                 }
             }
         }

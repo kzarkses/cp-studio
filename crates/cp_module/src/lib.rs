@@ -290,6 +290,9 @@ pub(crate) enum WinOp {
     ViewBrowser,
     TransportOn,
     TransportOff,
+    GtabOpen,
+    GtabClose,
+    GtabPlace(Place),
 }
 
 /// La fenetre du navigateur.
@@ -331,8 +334,10 @@ pub(crate) struct App {
     cmd_place_float: i32,
     cmd_gtab: i32,
     cmd_gtab_set: i32,
+    cmd_view_gtab: i32,
     /// Une transcription Guitar Tab en cours.
-    gtab: Option<gtab::Job>,
+    /// Guitar Tab : la fenetre, la prise, la transcription.
+    gt: gtab::GPart,
     browser: Browser,
     view: Option<View>,
     /// La place choisie pour le navigateur.
@@ -634,6 +639,9 @@ impl App {
                 WinOp::ViewBrowser => self.view_browser(),
                 WinOp::TransportOn => self.transport_start(),
                 WinOp::TransportOff => self.transport_stop(true),
+                WinOp::GtabOpen => self.gtab_open(),
+                WinOp::GtabClose => self.gtab_close(true),
+                WinOp::GtabPlace(p) => self.gtab_set_place(p),
             }
         }
         if self.tp.view.is_some() {
@@ -1202,8 +1210,10 @@ impl Module for App {
         );
         let cmd_gtab = host.register_action(
             "CPSTUDIO_GUITARTAB",
-            "CP Studio: Guitar Tab - transcribe the selected item",
+            "CP Studio: Guitar Tab - open (transcribe the selected item)",
         );
+        let cmd_view_gtab =
+            host.register_action("CPSTUDIO_VIEW_GUITARTAB", "CP Studio: View - Guitar Tab");
         let cmd_gtab_set = host.register_action(
             "CPSTUDIO_GUITARTAB_SETTINGS",
             "CP Studio: Guitar Tab - settings",
@@ -1224,14 +1234,20 @@ impl Module for App {
             cmd_place_float,
             cmd_gtab,
             cmd_gtab_set,
-            gtab: None,
+            cmd_view_gtab,
+            gt: gtab::GPart::new(&r),
             browser,
             view: None,
             place,
             tp,
             bskin: None,
             blook: None,
-            text: TextCache::new(Box::new(GdiGlyphs::new(&["Segoe UI", "Consolas"]))),
+            text: TextCache::new(Box::new(GdiGlyphs::new(&[
+                "Segoe UI",
+                "Consolas",
+                "Segoe UI",
+                "Segoe UI Symbol",
+            ]))),
             face: String::new(),
             icons: IconCache::default(),
             scratch: Scratch::default(),
@@ -1268,8 +1284,21 @@ impl Module for App {
                 if app.ext("browser_open").as_deref() == Some("1") {
                     app.queue(WinOp::Open);
                 }
+                if app.ext("gtab_open").as_deref() == Some("1") {
+                    app.queue(WinOp::GtabOpen);
+                }
             }
         }
+        // Guitar Tab : sa fenetre reprise apres un rechargement, et sa prise.
+        let gh = app
+            .ext("gtab_hwnd")
+            .and_then(|v| v.parse::<isize>().ok())
+            .map(Hwnd)
+            .filter(|&h| h.0 != 0 && win::is_window(h));
+        if let Some(h) = gh {
+            app.gtab_adopt(h);
+        }
+        app.gt.pending = app.ext("gtab_take");
         host.info(&format!(
             "module pret : generation {}, navigateur {} ({}), transport {}",
             host.generation(),
@@ -1304,7 +1333,7 @@ impl Module for App {
         if self.tp.prompt {
             self.r.prompt_for_action(-1);
         }
-        self.gtab_cancel();
+        self.gtab_shutdown();
         // Les fenetres restent au chargeur : le module suivant les reprend.
         // Elles ne recevront plus d'images d'ici la.
         if let Some(v) = &self.view {
@@ -1403,6 +1432,9 @@ impl Module for App {
         } else if cmd == self.cmd_place_float {
             self.queue(WinOp::Place(Place::Float));
             true
+        } else if cmd == self.cmd_view_gtab {
+            self.queue(WinOp::GtabOpen);
+            true
         } else if cmd == self.cmd_gtab {
             self.gtab_start();
             true
@@ -1433,8 +1465,8 @@ impl Module for App {
             Some(self.place == Place::Dock)
         } else if cmd == self.cmd_place_float {
             Some(self.place == Place::Float)
-        } else if cmd == self.cmd_gtab {
-            Some(self.gtab_running())
+        } else if cmd == self.cmd_gtab || cmd == self.cmd_view_gtab {
+            Some(self.gt.win.is_some() || self.gtab_running())
         } else {
             None
         }
@@ -1442,6 +1474,9 @@ impl Module for App {
 
     fn wnd_proc(&mut self, m: &WinMsg) -> Option<isize> {
         if let Some(r) = self.transport_wnd(m) {
+            return Some(r);
+        }
+        if let Some(r) = self.gtab_wnd(m) {
             return Some(r);
         }
         self.browser_wnd(m)

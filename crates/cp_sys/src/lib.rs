@@ -31,6 +31,7 @@ pub mod grow;
 pub mod guard;
 pub mod host;
 pub mod image;
+pub mod items;
 pub mod module;
 pub mod pcm;
 pub mod project;
