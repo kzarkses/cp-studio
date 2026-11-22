@@ -29,7 +29,7 @@ use std::sync::{Mutex, MutexGuard, OnceLock};
 use std::time::{Duration, Instant};
 
 use cp_abi::{
-    ClipInfo, FAULT, FrameInfo, HostApi, KeyEvent, LOG_ERROR, LOG_INFO, LOG_WARN, WM_CP_FRAME,
+    BUSY, ClipInfo, FAULT, FrameInfo, HostApi, KeyEvent, LOG_ERROR, LOG_INFO, LOG_WARN, WM_CP_FRAME,
 };
 use cp_audio::{AudioHost, ClipH, Load};
 use cp_engine::VoiceH;
@@ -68,6 +68,10 @@ static ACTIONS: Mutex<Actions> = Mutex::new(Actions {
 static WINDOWS: Mutex<Vec<Hwnd>> = Mutex::new(Vec::new());
 static LAST_POLL: Mutex<Option<Instant>> = Mutex::new(None);
 static LAST_RELOAD: Mutex<Option<String>> = Mutex::new(None);
+/// Les actions du module arrivees pendant qu'il etait occupe (une action
+/// lancee depuis l'une de ses fenetres, une macro qui la contient) : rejouees
+/// au battement suivant au lieu d'etre perdues.
+static PENDING: Mutex<Vec<i32>> = Mutex::new(Vec::new());
 /// Battements du chargeur depuis le demarrage.
 static TICKS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 /// Le moteur audio. Fil principal seulement ; pris en `try_lock` par ce que le
@@ -560,6 +564,14 @@ fn on_timer() {
     test_file_poll();
     selftest_tick();
     if let Some(hot) = HOT.get() {
+        // Les actions reportees, hors de tout message du module.
+        let pending: Vec<i32> = std::mem::take(&mut *lock(&PENDING));
+        for cmd in pending {
+            let sane = hot.fault().is_none();
+            if hot.call(|api| (api.on_action)(cmd)) == Some(FAULT) {
+                check_fault(sane, "action reportee");
+            }
+        }
         let sane = hot.fault().is_none();
         hot.call(|api| (api.tick)());
         check_fault(sane, "battement");
@@ -664,6 +676,16 @@ fn on_command(cmd: i32) -> bool {
             let sane = hot.is_some_and(|h| h.fault().is_none());
             match hot.and_then(|h| h.call(|api| (api.on_action)(cmd))) {
                 Some(FAULT) => check_fault(sane, "action"),
+                Some(BUSY) => {
+                    let mut p = lock(&PENDING);
+                    if p.len() < 16 {
+                        p.push(cmd);
+                    }
+                    log(
+                        LOG_INFO,
+                        "action du module reportee au battement (module occupe)",
+                    );
+                }
                 Some(_) => {}
                 None => log(
                     LOG_WARN,
