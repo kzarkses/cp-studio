@@ -93,17 +93,48 @@ fn install() -> ExitCode {
         .join("reaper_cp_studio.dll");
     let dst = plugins.join("reaper_cp_studio.dll");
     let tmp = plugins.join("reaper_cp_studio.dll.new");
+    // Les anciens chargeurs mis de cote par une installation precedente
+    // (encore tenus si REAPER tourne : on les laisse).
+    if let Ok(rd) = fs::read_dir(&plugins) {
+        for e in rd.flatten() {
+            let name = e.file_name().to_string_lossy().to_string();
+            if name.starts_with("reaper_cp_studio.dll.old") {
+                let _ = fs::remove_file(e.path());
+            }
+        }
+    }
     if let Err(e) = fs::copy(&built, &tmp) {
         eprintln!("copie vers {} : {e}", tmp.display());
         return ExitCode::FAILURE;
     }
-    if let Err(e) = fs::rename(&tmp, &dst) {
-        let _ = fs::remove_file(&tmp);
-        eprintln!(
-            "REAPER tourne et tient {} ({e}) : le fermer pour installer le chargeur",
-            dst.display()
-        );
-        return ExitCode::from(2);
+    let mut staged = false;
+    if fs::rename(&tmp, &dst).is_err() {
+        // REAPER tourne et tient le chargeur : Windows laisse renommer une DLL
+        // chargee. On la met de cote ; la nouvelle prend effet au prochain
+        // demarrage de REAPER.
+        let aside = (0..100)
+            .map(|k| plugins.join(format!("reaper_cp_studio.dll.old{k}")))
+            .find(|p| !p.exists());
+        let ok = match aside {
+            Some(a) if fs::rename(&dst, &a).is_ok() => {
+                let placed = fs::rename(&tmp, &dst).is_ok();
+                if !placed {
+                    // Jamais sans chargeur : l'ancien revient a sa place.
+                    let _ = fs::rename(&a, &dst);
+                }
+                placed
+            }
+            _ => false,
+        };
+        if !ok {
+            let _ = fs::remove_file(&tmp);
+            eprintln!(
+                "REAPER tient {} : le fermer pour installer le chargeur",
+                dst.display()
+            );
+            return ExitCode::from(2);
+        }
+        staged = true;
     }
     let module = root().join("target").join("debug").join("cp_module.dll");
     let cfg = plugins.join("reaper_cp_studio.module");
@@ -112,6 +143,9 @@ fn install() -> ExitCode {
         return ExitCode::FAILURE;
     }
     println!("chargeur installe : {}", dst.display());
+    if staged {
+        println!("REAPER est ouvert : le nouveau chargeur prendra effet a son prochain demarrage");
+    }
     println!("module de developpement : {}", module.display());
     ExitCode::SUCCESS
 }
