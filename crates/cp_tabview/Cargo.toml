@@ -1,0 +1,18 @@
+[package]
+name = "cp_tabview"
+description = "La fenetre de CP Guitar Tab : partition et tablature liees, detection reglable, notes fantomes (sans Windows)"
+edition.workspace = true
+version.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+cp_gfx = { path = "../cp_gfx" }
+cp_tab = { path = "../cp_tab" }
+cp_ui = { path = "../cp_ui" }
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+cp_sys = { path = "../cp_sys" }
