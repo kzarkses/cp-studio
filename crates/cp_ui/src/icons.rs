@@ -49,6 +49,14 @@ pub enum Icon {
     Headphones,
     Locate,
     Help,
+    Magnet,
+    Palette,
+    Fold,
+    Wand,
+    Piano,
+    Reverse,
+    Normalize,
+    Bars,
 }
 
 impl Icon {
@@ -143,6 +151,28 @@ impl Icon {
             Icon::Help => {
                 r#"<circle cx="12" cy="12" r="10" /><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3" /><path d="M12 17h.01" />"#
             }
+            Icon::Magnet => {
+                r#"<path d="m12 15 4 4" /><path d="M2.352 10.648a1.205 1.205 0 0 0 0 1.704l2.296 2.296a1.205 1.205 0 0 0 1.704 0l6.029-6.029a1 1 0 1 1 3 3l-6.029 6.029a1.205 1.205 0 0 0 0 1.704l2.296 2.296a1.205 1.205 0 0 0 1.704 0l6.365-6.367A1 1 0 0 0 8.716 4.282z" /><path d="m5 8 4 4" />"#
+            }
+            Icon::Palette => {
+                r#"<path d="M12 22a1 1 0 0 1 0-20 10 9 0 0 1 10 9 5 5 0 0 1-5 5h-2.25a1.75 1.75 0 0 0-1.4 2.8l.3.4a1.75 1.75 0 0 1-1.4 2.8z" /><circle cx="13.5" cy="6.5" r=".5" /><circle cx="17.5" cy="10.5" r=".5" /><circle cx="6.5" cy="12.5" r=".5" /><circle cx="8.5" cy="7.5" r=".5" />"#
+            }
+            Icon::Fold => {
+                r#"<path d="M12 22v-6" /><path d="M12 8V2" /><path d="M4 12H2" /><path d="M10 12H8" /><path d="M16 12h-2" /><path d="M22 12h-2" /><path d="m15 19-3-3-3 3" /><path d="m15 5-3 3-3-3" />"#
+            }
+            Icon::Wand => {
+                r#"<path d="M15 4V2" /><path d="M15 16v-2" /><path d="M8 9h2" /><path d="M20 9h2" /><path d="M17.8 11.8 19 13" /><path d="M15 9h.01" /><path d="M17.8 6.2 19 5" /><path d="m3 21 9-9" /><path d="M12.2 6.2 11 5" />"#
+            }
+            Icon::Piano => {
+                r#"<path d="M18.5 8c-1.4 0-2.6-.8-3.2-2A6.87 6.87 0 0 0 2 9v11a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-8.5C22 9.6 20.4 8 18.5 8" /><path d="M2 14h20" /><path d="M6 14v4" /><path d="M10 14v4" /><path d="M14 14v4" /><path d="M18 14v4" />"#
+            }
+            Icon::Reverse => {
+                r#"<path d="M8 3 4 7l4 4" /><path d="M4 7h16" /><path d="m16 21 4-4-4-4" /><path d="M20 17H4" />"#
+            }
+            Icon::Normalize => {
+                r#"<path d="M12 2v20" /><path d="m8 18 4 4 4-4" /><path d="m8 6 4-4 4 4" />"#
+            }
+            Icon::Bars => r#"<path d="M5 21v-6" /><path d="M12 21V3" /><path d="M19 21V9" />"#,
         }
     }
 }
@@ -257,6 +287,14 @@ mod tests {
             Icon::Headphones,
             Icon::Locate,
             Icon::Help,
+            Icon::Magnet,
+            Icon::Palette,
+            Icon::Fold,
+            Icon::Wand,
+            Icon::Piano,
+            Icon::Reverse,
+            Icon::Normalize,
+            Icon::Bars,
         ];
         for i in all {
             let (n, m) = c.mask(i, 24, false);
