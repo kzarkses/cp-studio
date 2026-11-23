@@ -30,6 +30,7 @@ name = "cp_editview"
 version = "0.1.0"
 dependencies = [
  "cp_gfx",
+ "cp_palette",
  "cp_roll",
  "cp_sys",
  "cp_ui",
@@ -97,6 +98,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "cp_palette"
+version = "0.1.0"
+dependencies = [
+ "cp_gfx",
+ "cp_roll",
+ "cp_ui",
+]
+
+[[package]]
 name = "cp_roll"
 version = "0.1.0"
 
@@ -118,6 +128,8 @@ name = "cp_tabview"
 version = "0.1.0"
 dependencies = [
  "cp_gfx",
+ "cp_palette",
+ "cp_roll",
  "cp_sys",
  "cp_tab",
  "cp_ui",

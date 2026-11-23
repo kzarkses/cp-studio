@@ -28,7 +28,7 @@ mod tests;
 pub use cp_roll;
 pub use palette::{Cat, Glyph, Op, Palette};
 
-use cp_roll::{ArpMode, MIN_LEN, Note, Roll, Scale, note_name};
+use cp_roll::{MIN_LEN, Note, Roll, Scale, note_name};
 use cp_ui::{Button, Ev, Mods, vk};
 
 /// Les rangs montres.
@@ -127,7 +127,7 @@ fn grid_of(cmd: u32) -> Option<f64> {
 }
 
 /// Les rythmes euclidiens de la palette, au depart : (coups, cases).
-pub const EUCLID: [(usize, usize); 6] = [(3, 8), (5, 8), (5, 16), (7, 16), (9, 16), (11, 16)];
+pub use cp_palette::EUCLID;
 
 /// Allonge les notes choisies (REAPER : rien sans selection).
 fn lengthen(r: &mut Roll, d: f64) -> usize {
@@ -2046,8 +2046,8 @@ impl Ed {
                     // Un groupe s'ouvre au survol, si l'on y va (pas en
                     // descendant vers les icones du groupe ouvert).
                     Hit::PalCat(k) if (x - px).abs() >= (y - py).abs() => {
-                        let c = Cat::ALL[k as usize % Cat::ALL.len()];
                         if let Some(p) = &mut self.palette {
+                            let c = p.cat_at(k).unwrap_or(p.cat);
                             if p.cat != c {
                                 p.cat = c;
                                 p.preview = None;
@@ -2704,12 +2704,8 @@ impl Ed {
 
     pub fn transform(&mut self, id: u32) -> Vec<Act> {
         match id {
-            40..=43 => {
-                self.strength = [1.0, 0.75, 0.5, 0.25][(id - 40) as usize];
-                return Vec::new();
-            }
-            44..=47 => {
-                self.swing = [0.0, 0.08, 0.16, 0.24][(id - 44) as usize];
+            40..=47 => {
+                cp_palette::set_setting(id, &mut self.strength, &mut self.swing);
                 return Vec::new();
             }
             60 => return vec![Act::OpenReaper],
@@ -2737,89 +2733,10 @@ impl Ed {
     /// copie pour l'apercu) : (combien de notes, le nom du pas
     /// d'annulation ; vide : rien a ecrire).
     pub(crate) fn op_on(&self, id: u32, md: &mut Midi, seed: u64) -> (usize, &'static str) {
-        let cursor = self.playhead.unwrap_or(0.0);
-        let g = self.grid;
         if (100..=107).contains(&id) {
             return (self.bend_op(id, md), "CP Editor: bend");
         }
-        if id == 54 {
-            return (
-                md.roll.quantize(g, self.strength, self.swing),
-                "CP Editor: quantize",
-            );
-        }
-        // Le rythme euclidien : sur la plage de la regle, sinon l'etendue des
-        // notes choisies, sinon la mesure du curseur ; a la hauteur de la
-        // premiere note choisie (sinon Do 2), sur son canal.
-        let eu_span = self
-            .range
-            .filter(|(a, b)| b - a > 1e-6)
-            .or_else(|| md.roll.bounds().filter(|_| md.roll.has_sel()));
-        let bar = self.bar_qn().max(1e-6);
-        let eu_span = eu_span.unwrap_or_else(|| {
-            let a = (cursor / bar).floor() * bar;
-            (a, a + bar)
-        });
-        let eu_note = md.roll.notes.iter().find(|n| n.sel).copied();
-        let (eu_p, eu_c, eu_v) = eu_note.map_or((36, self.last_chan, self.last_vel), |n| {
-            (n.pitch, n.chan, n.vel)
-        });
-        let g_arp = if g > 0.0 { g } else { 0.25 };
-        let r = &mut md.roll;
-        match id {
-            70..=78 => (r.chordify((id - 70) as usize), "CP Editor: chord"),
-            80..=84 => {
-                let (mode, oct) = match id {
-                    80 => (ArpMode::Up, 1),
-                    81 => (ArpMode::Down, 1),
-                    82 => (ArpMode::UpDown, 1),
-                    83 => (ArpMode::Random, 1),
-                    _ => (ArpMode::Up, 2),
-                };
-                (r.arp(g_arp, mode, 0.9, oct, seed), "CP Editor: arpeggio")
-            }
-            90..=95 => {
-                let (p, n) = self.euclid[(id - 90) as usize];
-                let (a, b) = eu_span;
-                (
-                    r.euclid(a, b, eu_p, eu_c, eu_v, n, p, 0),
-                    "CP Editor: euclid",
-                )
-            }
-            1 => {
-                r.select_all();
-                (0, "")
-            }
-            2 => {
-                r.invert_sel();
-                (0, "")
-            }
-            3 => {
-                r.select_same_pitch();
-                (0, "")
-            }
-            10 => (r.legato(), "CP Editor: legato"),
-            11 => (r.reverse(), "CP Editor: reverse"),
-            12 => (r.invert_pitch(), "CP Editor: mirror"),
-            13 => (r.glue(), "CP Editor: glue"),
-            14 => (r.split_at(cursor), "CP Editor: split"),
-            15 => (r.snap_to_scale(), "CP Editor: snap to scale"),
-            20 => (r.vel_set(127), "CP Editor: velocity"),
-            21 => (r.vel_set(100), "CP Editor: velocity"),
-            22 => (r.vel_set(80), "CP Editor: velocity"),
-            23 => (r.vel_set(64), "CP Editor: velocity"),
-            24 => (r.vel_ramp(40, 120), "CP Editor: velocity ramp"),
-            25 => (r.vel_ramp(120, 40), "CP Editor: velocity ramp"),
-            26 => (r.vel_scale(0.5, 80), "CP Editor: velocity"),
-            27 => (r.vel_scale(1.5, 80), "CP Editor: velocity"),
-            30 => (r.humanize(1, g * 0.05, 4), "CP Editor: humanize"),
-            31 => (r.humanize(2, g * 0.12, 10), "CP Editor: humanize"),
-            32 => (r.humanize(3, g * 0.25, 20), "CP Editor: humanize"),
-            50 => (r.scale_len(2.0), "CP Editor: length"),
-            51 => (r.scale_len(0.5), "CP Editor: length"),
-            52 => (r.set_len(g), "CP Editor: length"),
-            _ => (0, ""),
-        }
+        cp_palette::apply(id, &mut md.roll, &self.pal_ctx(), seed)
     }
 
     /// Les bends de la palette sur les notes choisies : `id` 100..=106 une
@@ -3696,7 +3613,7 @@ impl Ed {
                 (self.swing * 100.0).round()
             ),
             Hit::Transform => "The palette (also: right-click the notes)".into(),
-            Hit::PalCat(k) => Cat::ALL.get(k as usize)?.label().into(),
+            Hit::PalCat(k) => Cat::EDITOR.get(k as usize)?.label().into(),
             Hit::PalOp(id) => self.palette_ops().into_iter().find(|o| o.id == id)?.label,
             Hit::BendPeak(_) => {
                 "Drag: how far and how fast it bends (Shift: free) \u{00b7} Alt+click: remove".into()

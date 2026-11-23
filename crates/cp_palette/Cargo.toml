@@ -1,0 +1,15 @@
+[package]
+name = "cp_palette"
+description = "La palette du clic droit, commune a l'editeur et a Guitar Tab : groupes, icones, operations sur les notes (sans Windows)"
+edition.workspace = true
+version.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+cp_gfx = { path = "../cp_gfx" }
+cp_roll = { path = "../cp_roll" }
+cp_ui = { path = "../cp_ui" }
+
+[lints]
+workspace = true
