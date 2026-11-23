@@ -45,70 +45,95 @@ frontière tombe à l'échantillon, même si le fil principal s'arrête.
 
 ## Ce qu'elle fait — l'état
 
-✅ fait, ▶ en cours, ☐ à faire.
+✅ fait (avec ses essais), ☐ à faire. Construite dans la nuit du 23 au
+24 novembre ; l'auto-test dans le vrai REAPER passe (voir plus bas).
 
-**Le moteur**
-- ✅ Les lanes MIDI, l'arrêt daté, l'annulation, la prise en WAV.
+**Le moteur** (dans le chargeur, réinstallé cette nuit-là)
+- ✅ Les lanes MIDI : un clip par port, daté à l'échantillon, dans le fil
+  audio. Dix minutes sans une note décalée, des blocs de 97 frames.
+- ✅ Un autre clip remplace le premier au frame exact. Un arrêt daté. Un
+  tempo qui change sans saut. Une édition sans relance.
+- ✅ L'annulation d'un lancement qui attend.
+- ✅ Les notes probables, tirées à chaque passe.
+- ✅ L'arrêt daté d'une voix. La prise écrite en WAV.
+- ✅ 128 ports : pas de plafond au nombre de colonnes (127 colonnes).
 
-**Le modèle**
-- ▶ Colonnes et cases :
+**Le modèle** (`cp_session`, 28 essais)
+- ✅ Les colonnes et les cases :
   - une colonne = une piste montrée dans la console ;
-  - une case = un clip MIDI ou audio ;
-  - les scènes : 8, puis une rangée vide toujours en bas.
-- ▶ Le lancement :
-  - Q (Off / Beat / Bar / 2 / 4 mesures) ;
-  - une tolérance de 1/8 de Q, au plus 0,25 noire ;
-  - une case part de son début (l'accolade), ou en verrou de phase (option par case) ;
-  - recliquer une case qui joue l'arrête à la frontière ;
-  - recliquer une case qui attend annule son lancement.
-- ▶ Arrêter une colonne (à la frontière), tout arrêter, la panique.
-- ▶ Lancer une scène :
-  - chaque colonne qui a un clip le lance, les autres s'arrêtent ;
-  - avec Ctrl, les autres colonnes ne s'arrêtent pas ;
-  - une case qui joue déjà n'est PAS arrêtée : l'ancien code le faisait, c'était un défaut.
-- ☐ Capturer une scène : les clips qui jouent sont copiés dans la première rangée vide sous la sélection.
-- ▶ La prise MIDI :
-  - Rec : N mesures fixe à la fois l'attente et la durée (voulu) ;
-  - la prise part à la frontière de N mesures, tout de suite si rien ne joue ;
-  - elle s'arrête seule, puis tourne.
-- ▶ La prise audio : pareil, l'entrée de la piste, un WAV dans le dossier d'enregistrement du projet.
-- ☐ L'overdub : passe par passe, les notes jouées rejoignent la boucle au tour suivant.
-- ▶ Les cases audio :
-  - deux longueurs : la région (ce qu'on entend) et la passe (au bout de combien elle recommence) ;
-  - Loop : la matière boucle sur la région ;
-  - One-shot : la région rejoue à chaque passe ;
-  - le tempo de la source (déclaré > lu dans le fichier > lu dans le nom > deviné) ;
+  - une piste disparue qui porte des clips reste, « tenue » (son menu leur
+    donne une piste) ;
+  - les scènes : au moins 8, et une rangée vide en bas.
+- ✅ Le lancement :
+  - Q, et sa tolérance ;
+  - le début de la case ou le verrou de phase ;
+  - recliquer annule un lancement qui attend, ou arrête à la frontière ;
+  - un arrêt n'a pas de tolérance.
+- ✅ Les scènes. Ctrl garde les autres colonnes. Une case qui joue déjà n'est
+  plus arrêtée.
+- ✅ La capture d'une scène : rien ne se relance, rien n'est écrasé.
+- ✅ La prise MIDI et la prise audio :
+  - Rec : N mesures ;
+  - la colonne s'arrête au début de la prise, à la même frontière ;
+  - le clip tourne en phase à la fin de la prise ;
+  - recliquer annule la prise ou la finit (arrondie à la mesure).
+- ✅ L'overdub : une prise par passe, fondue dans la boucle.
+- ✅ Les cases audio :
+  - la région et la passe ;
+  - Loop, ou one-shot à chaque passe ;
+  - le tempo de la source, avec sa raison ;
   - le taux ajusté à 2 % près ;
-  - l'étirement cuit.
-- ☐ Motion, une par colonne : Stay, One shot, March & wrap, March & stay, March & stop, Random, Exclusive random. Datée à la fin de la passe.
-- ▶ L'enregistrement dans le projet (ProjExtState `CP_Session2`) et la reprise de l'ancien format (`CP_Session/grid` + `CP_Loop/dest<n>`).
+  - Stretch : la version cuite, et la hauteur qui change le temps d'une
+    passe en attendant ;
+  - sur une piste à instrument, une piste de son sœur.
+- ✅ Motion : les 7 suites de lecture, datées à la fin de la passe.
+- ✅ Free et Follow :
+  - un tempo qui change re-ancre sans saut ;
+  - un saut du transport recale ce qui joue et revise ce qui attend.
+- ✅ Arrange Rec : un journal de ce qui joue, écrit à l'arrêt.
+- ✅ L'enregistrement dans le projet (`CP_Session2`) et la reprise de
+  l'ancienne Session.
 
-**La vue**
-- ☐ La grille :
-  - en-têtes (nom, couleur, armement) ;
-  - cases (nom, couleur, état, barre de passe) ;
-  - les triangles des scènes, la ligne d'arrêt, la colonne fantôme (une piste neuve) ;
-  - le défilement par colonnes entières.
-- ☐ La barre d'outils : Clock, Q, Rec, overdub, tout arrêter, panique, Arrange Rec, Back to Arrangement.
-- ☐ Les gestes :
-  - la bande gauche d'une case lance, arrête ou enregistre ;
-  - un clic sur le contenu ouvre l'éditeur ;
-  - Alt+clic efface ;
-  - glisser déplace (une case pleine échange) ; Ctrl copie ;
-  - le clic droit ouvre le menu de la case ;
-  - le double-clic sur un en-tête renomme.
-- ☐ Le clavier : flèches, PgUp/PgDn, Entrée, Suppr, Maj+Entrée, Ctrl+Entrée, Ctrl+Maj+I, Ctrl+Z (la dernière case effacée).
-- ☐ La tranche de mixage : entrée, sortie MIDI, écoute, fader, pan, M, S, mode d'automation, vumètre ; puis effets et envois.
-- ☐ Des fichiers déposés dans une case (navigateur, Explorateur).
+**La vue** (`cp_sessionview`, planches PNG et gestes)
+- ✅ La grille, la barre d'outils, les tranches de mixage, la colonne
+  fantôme, le défilement.
+- ✅ Les gestes et le clavier de l'ancienne Session ; Espace reste à REAPER.
+- ✅ Tout se nomme au survol : aucune phrase à l'écran.
 
-**L'application**
-- ☐ L'action, l'icône dans CP Transport, l'onglet du sélecteur, les trois places.
-- ☐ Ouvrir une case MIDI dans l'éditeur, et écrire ce qu'il change.
-- ☐ Vers l'arrangement :
-  - glisser une case dans l'arrangement ;
-  - Arrange Rec ;
-  - taire l'arrangement (lanes fixes), Back to Arrangement.
-- ☐ L'auto-test dans le vrai REAPER : une lane joue un instrument, une prise MIDI, une scène.
+**L'application** (`cp_module/src/session.rs`)
+- ✅ L'action, l'icône dans CP Transport, l'onglet du sélecteur, les trois
+  places.
+- ✅ Les menus :
+  - de la case : couleur, longueur, signature, tempo, lecture, lancement ;
+  - de la colonne : suites de lecture, cacher, effacer, piste neuve ;
+  - de Q et de Rec ;
+  - de la tranche : entrée, sortie MIDI, automation, effets.
+- ✅ Une case MIDI s'ouvre dans l'éditeur : ses notes reviennent à la case
+  et s'entendent tout de suite. La tête suit la lane.
+- ✅ Des fichiers déposés :
+  - de l'Explorateur, ou du navigateur avec son passage ;
+  - sur une case, puis les cases vides en dessous ;
+  - sur « + », une piste neuve.
+- ✅ Une case glissée dans l'arrangement : un item sur la piste sous la
+  souris, à l'instant sous la souris (calé).
+- ✅ L'auto-test dans le vrai REAPER :
+  - un clip MIDI joué par sa lane fait sonner ReaSynth dans sa piste ;
+  - une case audio sonne dans la sienne ;
+  - la panique arrête tout ;
+  - Arrange Rec écrit un item de 12 notes, ce qui a joué.
+
+**Reste**
+- ☐ Taire l'arrangement sous une colonne qui joue (l'ancienne passait par
+  les lanes fixes, jamais mesurées), et le vrai Back to Arrangement (pour
+  l'instant : tout s'arrête).
+- ☐ L'automation d'un clip (les courbes de l'ancien AUTO) ; ouvrir une case
+  audio dans l'éditeur (sa région).
+- ☐ Le clavier virtuel de REAPER n'entre pas dans une prise : elle lit les
+  entrées matérielles.
+- ☐ L'arrangement sous Arrange Rec : les items s'ajoutent par-dessus ceux
+  qui y sont.
+- ☐ L'oreille de Cedric : les prises, l'overdub, Follow avec une clock
+  externe.
 
 ## Ce qu'on refuse (repris de l'ancienne Session)
 

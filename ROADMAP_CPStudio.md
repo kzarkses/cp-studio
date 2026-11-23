@@ -66,6 +66,7 @@ Ce que ces mots veulent dire, en critères :
 | ✅ CP Guitar Tab en Rust : l'item choisi devient une piste MIDI (pour comparer à l'oreille) et une partition MusicXML (portée et tablature, rythme calé sur le tempo du projet, marteaux et tirés), ouverte dans MuseScore ; réglages (seuils, note la plus courte, grille, accordage) ; icône dans CP Transport | 2026-11-22 | réseau à 3,8e-5 d'onnxruntime ; vrai REAPER : un riff de 8 noires retrouvé note pour note en 0,5 s |
 | ✅ Le mode sombre de CP Studio, la part sûre : barres de titre (DWM) et menus (mode d'application de Windows), jamais le contenu des boîtes ; éteint par défaut, action « CP Studio: Dark title bars and menus » | 2026-11-22 | vrai REAPER : la boîte de fichiers « Load Script » ouverte 5 s mode sombre allumé, sombre et sans plantage (l'extension « Reaper Dark Mode » y faisait planter SHELL32 depuis la mise à jour de Windows du 21) |
 | ✅ La nuit du 22 au 23 novembre (autonomie complète) : le moteur audio complété (A2 lecture en flux, A4, A5 cuit et temps réel mesuré, A7 avec la phase, A8 audio et MIDI, A9, A10, fondu de boucle), Guitar Tab complété (triolets, deux voix, armure, techniques de jeu, noms d'accords, rythme sous la tab, chiffrages qui changent, reprises), l'éditeur (bends qui suivent leur note, accords, arpèges, euclides, saisie pas à pas), les onglets des dockers cachés dès le démarrage | 2026-11-23 | `cargo xtask reaper-test` PASS dans le vrai REAPER après chaque morceau ; détails dans chaque section ci-dessous |
+| ✅ La nuit du 23 au 24 novembre : **CP Session**, le lanceur de clips (demande de Cedric : « Session, implémenté complètement ») ; les lanes MIDI dans le moteur, une extension du chargeur sans changer l'ABI, 128 ports ; plan et état dans `ROADMAP_Session.md` | 2026-11-24 | `cargo xtask reaper-test` PASS dans le vrai REAPER : un clip MIDI joué par sa lane fait sonner ReaSynth dans sa piste, une case audio sonne dans la sienne, Arrange Rec écrit ce qui a joué |
 | ▶ **Maintenant : le jalon 1 à l'usage.** Cedric s'en sert au quotidien ; on corrige et on polit à partir de ses retours. Ensuite, le choix de l'application suivante | | |
 
 **Le but immédiat est le jalon 1** (voir plus bas) : un navigateur de fichiers
@@ -280,6 +281,14 @@ et 85 à 139 ms d'amorçage. D'où deux chemins.
   fichiers de Claude, ni dans les transcriptions (cherché). Le port ne peut
   donc pas être comparé à l'ancien : les lanes seront à repenser avec la
   Session, avec Cedric.
+- ✅ **Écrites à neuf la nuit du 23 au 24 novembre** (`cp_engine::lanes`) :
+  un clip par port, daté à l'échantillon, joué dans le fil audio (une boîte
+  modale ne coupe plus une boucle). Le moteur ne connaît toujours que
+  l'échantillon : un clip part à un frame, avec des frames par noire, et
+  le fil principal reposte le tempo quand il change. Un clip en remplace
+  un autre au frame exact (les fins de notes avant les débuts) ; arrêt
+  daté ; annulation ; édition sans relance ; notes probables. Dix minutes
+  sans une note décalée. Vrai REAPER : ReaSynth sonne sous la lane.
 
 ### A7. La clock MIDI externe
 
@@ -826,7 +835,7 @@ celui de REAPER.
 |---|---|---|
 | Navigateur de fichiers (Media Explorer) | parcourir, écouter, glisser dans REAPER, à la FL Studio | mémoire `project-media-explorer`, `reference-reaper-browser-scripts` |
 | Éditeur de clips | audio et MIDI, piano roll, enveloppes, établi d'un son | **v1 construite le 2026-11-22** (section ci-dessus) ; ancien `ROADMAP_Editeur.md`, mémoires `project-midi-command-layer`, `project-keymap`, `project-editor-sound-workbench` |
-| Session | lanceur de clips, prises, vers l'arrangeur, sortie MIDI par colonne | mémoires `project-session-*`, `ROADMAP_Chantiers.md` (ancien dépôt) |
+| Session | lanceur de clips, prises, vers l'arrangeur, sortie MIDI par colonne | **construite la nuit du 23 au 24 novembre** : `ROADMAP_Session.md` |
 | Sampler | kits de pads, un effet par kit | mémoires `project-kit-sampler-jsfx`, `project-sampler` |
 | Transport | le transport à la place de celui de REAPER, clock externe | **construit le 2026-11-22** (`cp_transport`) ; reste la clock externe : mémoire `project-ext-clock` |
 | FX Constellation | moteur de modulation, pad, graphe, liens | mémoires `project-fx-constellation-refonte`, `project-moteur-modulation-plan`, `ROADMAP_FXConstellation.md` |
@@ -876,7 +885,7 @@ moment de la commencer.
 | le chemin de présentation | GDI (`SetDIBitsToDevice` des seules rangées changées), calé sur `D3DKMTWaitForVerticalBlankEvent` ; `DwmFlush` écarté (il bloque sur un écran immobile) ; DXGI si la mesure le demande |
 | le rendu du texte | GDI pour l'instant (`GGO_GRAY8_BITMAP`), net dans les captures ; DirectWrite si les retours le demandent (idéogrammes, emoji) |
 | ~~la première application~~ | **tranché** : le navigateur de fichiers (Cedric, 2026-11-21) |
-| l'application suivante | Guitar Tab v2 est en cours ; l'éditeur de clips est demandé (2026-11-22), son ordre reste à fixer avec Cedric |
+| ~~l'application suivante~~ | **tranché** : la Session (Cedric, 2026-11-23), construite la nuit même |
 
 ## Ce que CP Studio ne fera pas
 
