@@ -195,6 +195,18 @@ impl HostRef {
         self.ext().map_or(0, |e| (e.midi_sent)(port))
     }
 
+    /// Retire les lancements et arrets de la lane qui attendent encore.
+    pub fn lane_cancel(&self, port: u32) -> bool {
+        self.ext().is_some_and(|e| (e.lane_cancel)(port) == 1)
+    }
+
+    /// Ecrit un clip du moteur en WAV. Faux sans extension ou si l'ecriture
+    /// echoue.
+    pub fn clip_save(&self, clip: u32, path: &str) -> bool {
+        self.ext()
+            .is_some_and(|e| (e.clip_save)(clip, path.as_ptr(), path.len()) == 1)
+    }
+
     // --- le moteur audio (il vit dans le chargeur)
 
     /// Ouvre et decode un fichier sur un fil de travail. Rend un ticket.

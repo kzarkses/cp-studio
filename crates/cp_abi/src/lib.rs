@@ -393,6 +393,11 @@ pub struct ExtApi {
     pub stop_at: extern "C" fn(voice: u32, at: i64, fade_s: f64) -> i32,
     /// Les messages MIDI qu'un port a poses dans les listes de REAPER.
     pub midi_sent: extern "C" fn(port: u32) -> u64,
+    /// Retire les lancements et arrets de la lane qui attendent encore.
+    pub lane_cancel: extern "C" fn(port: u32) -> i32,
+    /// Ecrit un clip en WAV (32 bits flottants) au chemin UTF-8 donne. 1 si
+    /// ecrit.
+    pub clip_save: extern "C" fn(clip: u32, path: *const u8, len: usize) -> i32,
 }
 
 /// Ce que le module offre au chargeur. Tous les appels se font sur le fil

@@ -508,6 +508,25 @@ impl Host for LoaderHost {
         audio(0, |a| a.port_midi_sent(port as usize))
     }
 
+    fn lane_cancel(&self, port: u32) -> bool {
+        audio(false, |a| {
+            a.lane(port as usize, None, cp_engine::LaneOp::Cancel)
+        })
+    }
+
+    fn clip_save(&self, clip: u32, path: &str) -> bool {
+        let r = audio(Err("no audio".to_string()), |a| {
+            a.save_wav(ClipH(clip), std::path::Path::new(path))
+        });
+        if let Err(e) = &r {
+            log(
+                cp_abi::LOG_WARN,
+                &format!("prise : {path} non ecrite ({e})"),
+            );
+        }
+        r.is_ok()
+    }
+
     fn audio_levels(&self, port: u32) -> Option<[f32; 2]> {
         audio(None, |a| Some(a.port_levels(port as usize)))
     }

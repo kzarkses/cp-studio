@@ -1421,6 +1421,35 @@ impl AudioHost {
         })
     }
 
+    /// Ecrit un clip dans un fichier WAV (32 bits flottants, son taux et ses
+    /// canaux) : une prise gardee sur le disque.
+    pub fn save_wav(&self, h: ClipH, path: &std::path::Path) -> Result<(), String> {
+        let (frames, nch, srate) = self.clip_info(h).ok_or("no such clip")?;
+        let data = self.clip_samples(h).ok_or("clip not in memory")?;
+        let n = (frames.max(0) as usize * nch).min(data.len());
+        let mut b = Vec::with_capacity(44 + n * 4);
+        let bytes = (n * 4) as u32;
+        b.extend(b"RIFF");
+        b.extend((36 + bytes).to_le_bytes());
+        b.extend(b"WAVEfmt ");
+        b.extend(16u32.to_le_bytes());
+        b.extend(3u16.to_le_bytes()); // IEEE float
+        b.extend((nch as u16).to_le_bytes());
+        b.extend((srate as u32).to_le_bytes());
+        b.extend((srate as u32 * nch as u32 * 4).to_le_bytes());
+        b.extend((nch as u16 * 4).to_le_bytes());
+        b.extend(32u16.to_le_bytes());
+        b.extend(b"data");
+        b.extend(bytes.to_le_bytes());
+        for v in &data[..n] {
+            b.extend(v.to_le_bytes());
+        }
+        if let Some(d) = path.parent() {
+            std::fs::create_dir_all(d).map_err(|e| e.to_string())?;
+        }
+        std::fs::write(path, b).map_err(|e| e.to_string())
+    }
+
     /// Arrete une voix au temps du moteur `at` (le fondu finit pile a ce
     /// frame), puis la rend quand elle s'est tue.
     pub fn stop_at(&mut self, v: VoiceH, at: i64, fade_s: f64) -> bool {

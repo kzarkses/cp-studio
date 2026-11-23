@@ -208,6 +208,12 @@ pub trait Host: Send + Sync {
     fn midi_sent(&self, _port: u32) -> u64 {
         0
     }
+    fn lane_cancel(&self, _port: u32) -> bool {
+        false
+    }
+    fn clip_save(&self, _clip: u32, _path: &str) -> bool {
+        false
+    }
 
     fn audio_input(&self, _ch0: i32, _ch1: i32, _out: &mut [f32]) -> usize {
         0
@@ -245,6 +251,8 @@ static EXT: ExtApi = ExtApi {
     lane_query: e_lane_query,
     stop_at: e_stop_at,
     midi_sent: e_midi_sent,
+    lane_cancel: e_lane_cancel,
+    clip_save: e_clip_save,
 };
 
 static API: HostApi = HostApi {
@@ -787,4 +795,14 @@ extern "C" fn e_stop_at(voice: u32, at: i64, fade_s: f64) -> i32 {
 
 extern "C" fn e_midi_sent(port: u32) -> u64 {
     with(0, |h| h.midi_sent(port))
+}
+
+extern "C" fn e_lane_cancel(port: u32) -> i32 {
+    with(false, |h| h.lane_cancel(port)) as i32
+}
+
+extern "C" fn e_clip_save(clip: u32, path: *const u8, len: usize) -> i32 {
+    // SAFETY: tranche valide pendant l'appel.
+    let p = unsafe { bytes(path, len) };
+    with(false, |h| h.clip_save(clip, &String::from_utf8_lossy(p))) as i32
 }

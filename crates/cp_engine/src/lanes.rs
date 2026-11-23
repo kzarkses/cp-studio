@@ -102,6 +102,10 @@ pub enum LaneOp {
     Rate { fpb: f64 },
     /// Un message court, envoye tel quel (une note jouee a la main, un CC).
     Msg { len: u8, msg: [u8; 3] },
+    /// Retire les lancements et les arrets qui n'ont pas encore eu lieu
+    /// (une case qu'on rappuie avant sa frontiere). Applique tout de suite,
+    /// quel que soit son frame.
+    Cancel,
 }
 
 /// Ce que le fil principal lit d'une lane.
@@ -257,6 +261,11 @@ impl Lane {
     /// Une commande datee (fil audio, au drainage). Faux si la file est
     /// pleine.
     pub(crate) fn post(&mut self, at: Frame, op: LaneOp) -> bool {
+        if let LaneOp::Cancel = op {
+            self.pending
+                .retain(|p| !matches!(p.op, LaneOp::Play { .. } | LaneOp::Stop));
+            return true;
+        }
         if self.pending.len() >= MAX_PENDING {
             return false;
         }
@@ -431,6 +440,8 @@ impl Lane {
                 let len = len.clamp(1, 3);
                 push_ev(&mut self.evs, off, 1, len, msg);
             }
+            // Traite a l'arrivee (voir `post`).
+            LaneOp::Cancel => {}
         }
     }
 
@@ -867,6 +878,39 @@ mod tests {
         // 62 a la noire 3 (30 + 0,5 * 10 = 35), puis la boucle : 60 a 30 +
         // (1,5 + 1) * 10 = 55, 62 a 75.
         assert_eq!(&ons[..3], &[(35, 62), (55, 60), (75, 62)]);
+    }
+
+    #[test]
+    fn annuler_retire_le_lancement_qui_attend() {
+        let mut l = Lane::new();
+        let a = clip(&[(0.0, 0.5, 60)], 4.0);
+        let mut bm = (*clip(&[(0.0, 0.5, 72)], 4.0)).clone();
+        bm.id = 9;
+        l.post(
+            0,
+            LaneOp::Play {
+                clip: a,
+                from: 0.0,
+                fpb: 100.0,
+            },
+        );
+        l.post(
+            200,
+            LaneOp::Play {
+                clip: Arc::new(bm),
+                from: 0.0,
+                fpb: 100.0,
+            },
+        );
+        l.post(300, LaneOp::Stop);
+        let p = LanePub::new();
+        let mut r = Rec(Vec::new(), 0);
+        l.render(0, 64, Some(&mut r), &p);
+        l.post(64, LaneOp::Cancel);
+        let ev = run(&mut l, 64, 10, 64);
+        // Le premier clip continue : sa note revient a chaque mesure.
+        assert!(ev.iter().any(|e| e.0 == 400 && e.1 == vec![0x90, 60, 100]));
+        assert!(!ev.iter().any(|e| e.1[1] == 72));
     }
 
     #[test]
