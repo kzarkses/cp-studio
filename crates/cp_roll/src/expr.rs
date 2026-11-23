@@ -209,6 +209,45 @@ impl Expr {
         out
     }
 
+    /// Les evenements que porte la note `n` seule (sans ceux qui ne
+    /// suivent aucune note), au temps du projet.
+    pub fn own(&self, n: &Note) -> Vec<Ev> {
+        let free = &self.free;
+        self.carry(std::slice::from_ref(n))
+            .into_iter()
+            .filter(|e| !free.contains(e))
+            .collect()
+    }
+
+    /// La note `src` porte desormais `evs` (temps du projet) : une copie
+    /// qu'on modifie prend sa propre expression.
+    pub fn adopt(&mut self, src: u64, anchor: f64, evs: Vec<Ev>) {
+        self.owned.insert(src, (anchor, evs));
+    }
+
+    /// La hauteur de la note `n` au fil du temps : ses pitch bends (pas sa
+    /// pedale) deviennent la courbe `pts`, (noires depuis son debut,
+    /// demi-tons) ; vide, la note reste droite. La courbe revient a zero a la
+    /// fin de la note (la suivante sur le canal part droite). Les demi-tons
+    /// au-dela de l'etendue du canal sont rabotes.
+    pub fn set_bend(&mut self, n: &Note, pts: &[(f64, f32)]) {
+        let r = self.range(n.chan).max(0.01);
+        let e = self
+            .owned
+            .entry(n.src)
+            .or_insert_with(|| (n.anchor, Vec::new()));
+        // Le temps du projet = celui retenu + d.
+        let d = n.anchor - e.0;
+        e.1.retain(|x| x.status != 0xE0);
+        if !pts.is_empty() {
+            for &(dq, st) in pts {
+                e.1.push(Ev::pitch_bend(n.qn0 + dq - d, n.chan, st / r));
+            }
+            e.1.push(Ev::pitch_bend(n.end() - d, n.chan, 0.0));
+        }
+        e.1.sort_by(|a, b| a.qn.total_cmp(&b.qn));
+    }
+
     /// La courbe de hauteur d'une note, pour la dessiner : (temps du projet,
     /// demi-tons) de son debut a sa fin ; rien si elle reste droite.
     pub fn curve(&self, n: &Note) -> Vec<(f64, f32)> {
@@ -243,6 +282,38 @@ impl Expr {
 mod tests {
     use super::*;
     use crate::Roll;
+
+    /// Un bend pose sur une note : sa courbe se relit telle quelle, il
+    /// revient a zero a sa fin, la pedale reste ; une courbe vide la rend
+    /// droite.
+    #[test]
+    fn un_bend_pose_sur_une_note() {
+        let r = Roll::from_notes([
+            (0.0, 1.0, 64, 0, 100, false, false),
+            (1.0, 1.0, 67, 0, 100, false, false),
+        ]);
+        let n = r.notes[0];
+        let mut x = Expr::new(&r.notes, &[Ev::cc(0.0, 0, 68, 127)]);
+        x.set_bend(&n, &[(0.0, 0.0), (0.25, 1.0), (0.5, 2.0)]);
+        let c = x.curve(&n);
+        assert_eq!(c.len(), 4, "{c:?}");
+        assert!((c[2].1 - 2.0).abs() < 0.01);
+        assert!((c[3].0 - 1.0).abs() < 1e-9 && (c[3].1 - 2.0).abs() < 0.01);
+        let all = x.carry(&r.notes);
+        // Le retour a zero, a la fin de la note.
+        let back = all
+            .iter()
+            .filter_map(|e| e.bend().map(|b| (e.qn, b)))
+            .next_back()
+            .expect("des bends");
+        assert!((back.0 - 1.0).abs() < 1e-9 && back.1.abs() < 1e-3);
+        assert!(all.iter().any(|e| e.status == 0xB0 && e.d1 == 68));
+        // La note suivante n'a rien.
+        assert!(x.curve(&r.notes[1]).is_empty());
+        x.set_bend(&n, &[]);
+        assert!(x.curve(&n).is_empty());
+        assert!(x.carry(&r.notes).iter().all(|e| e.status != 0xE0));
+    }
 
     /// Une guitare : deux notes sur la corde 1 (canal 0), la premiere avec
     /// un bend d'un ton, la seconde droite ; une note sur le canal 1. Le

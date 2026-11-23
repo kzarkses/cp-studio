@@ -1776,6 +1776,11 @@ impl SelfTest {
                         && ed.contains("annule=1"),
                     format!("Editeur : un demi-ton plus haut ecrit dans l'item, canaux gardes, annule ; {ed}"),
                 );
+                // Un bend d'un ton pose par la palette, relu dans REAPER.
+                self.say(
+                    ed.contains("bend=2.00,annule"),
+                    format!("Editeur : un bend d'un ton ecrit, relu sur sa note, annule ; {ed}"),
+                );
                 return true;
             }
             _ => return true,

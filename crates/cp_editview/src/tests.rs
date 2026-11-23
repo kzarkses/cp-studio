@@ -295,13 +295,16 @@ fn poser_allonger_effacer() {
     let a = up(&mut v, x, y, Button::Left, alt);
     assert!(a.contains(&Act::Commit("CP Editor: erase notes")));
     assert!(!v.midi().unwrap().roll.notes.iter().any(|n| n.pitch == 69));
-    // Clic droit sur une note : le menu (comme REAPER), la note choisie.
+    // Clic droit sur une note : la palette, la note choisie.
     b.draw(&mut v);
     let (id, x, y) = note_xy(&v, 71, 29.5);
     down(&mut v, x, y, Button::Right, m0());
     let a = up(&mut v, x, y, Button::Right, m0());
-    assert!(a.contains(&Act::ContextMenu { x, y }), "{a:?}");
+    assert_eq!(a, vec![Act::AuditionOff]);
+    assert!(v.palette.is_some());
     assert!(v.midi().unwrap().roll.get(id).unwrap().sel);
+    key(&mut v, vk::ESCAPE, m0());
+    assert!(v.palette.is_none());
     b.shot(&mut v, "3_gestes");
 }
 
@@ -361,12 +364,7 @@ fn lasso_touches_velocite() {
     // Les transformations.
     v.midi_mut().unwrap().roll.select_all();
     assert_eq!(v.transform(51), vec![Act::Commit("CP Editor: length")]);
-    assert!(
-        v.transform_menu()
-            .iter()
-            .flatten()
-            .any(|x| x.1.contains("REAPER"))
-    );
+    assert!(v.palette_ops().iter().any(|o| o.label.contains("REAPER")));
 }
 
 #[test]
@@ -544,10 +542,11 @@ fn la_table_souris_de_reaper() {
         .map(|n| n.pitch)
         .collect();
     assert_eq!(chord, vec![42, 43, 44]);
-    // Clic droit sur la grille : le menu.
+    // Clic droit sur la grille : la palette.
     down(&mut v, gx, gy, Button::Right, m0());
     let a = up(&mut v, gx, gy, Button::Right, m0());
-    assert!(matches!(a.as_slice(), [Act::ContextMenu { .. }]));
+    assert!(a.is_empty() && v.palette.is_some());
+    v.close_palette();
     // L'ecoute coupee : plus d'Audition.
     v.hear = false;
     b.draw(&mut v);
@@ -896,8 +895,8 @@ fn le_bend_se_dessine_et_suit_la_note() {
 #[test]
 fn accords_arpeges_et_euclides_du_menu() {
     let mut v = riff();
-    let menu = v.transform_menu();
-    let has = |t: &str| menu.iter().flatten().any(|m| m.1 == t);
+    let ops = v.palette_ops();
+    let has = |t: &str| ops.iter().any(|o| o.label.starts_with(t));
     assert!(has("Chord: Major") && has("Arpeggio up-down") && has("Euclid 5/16"));
     // Le Mi (64, canal 0) choisi seul : un accord majeur.
     let id = v
@@ -955,8 +954,8 @@ fn la_saisie_pas_a_pas() {
     v.edit_cursor = Some(40.0);
     // Eteinte : rien.
     assert!(v.step_notes(&[0x90 | 60 << 8 | 100 << 16]).is_empty());
-    let menu = v.transform_menu();
-    assert!(menu.iter().flatten().any(|m| m.0 == 61 && !m.2));
+    let ops = v.palette_ops();
+    assert!(ops.iter().any(|o| o.id == 61 && o.setting == Some(false)));
     assert_eq!(v.transform(61), vec![Act::StepListen(true)]);
     // Une note : posee au curseur, longue d'un pas, le curseur avance.
     let a = v.step_notes(&[0x90 | 60 << 8 | 90 << 16, 0x80 | 60 << 8]);
@@ -1034,4 +1033,200 @@ fn la_saisie_pas_a_pas_avance_sur_une_note_deja_la() {
         t1 + std::time::Duration::from_millis(80),
     );
     assert!(a.iter().any(|x| matches!(x, Act::Seek(_))), "{a:?}");
+}
+
+/// La palette du clic droit : neuf groupes ; le survol d'un groupe l'ouvre,
+/// le survol d'une icone montre son resultat sans rien toucher, une icone
+/// qui ne changerait rien est eteinte ; un clic applique (un pas
+/// d'annulation) et ferme, Maj+clic la garde ; la molette change un rythme
+/// euclidien ; le dernier groupe revient.
+#[test]
+fn la_palette_du_clic_droit() {
+    let mut b = Bench::new(1280, 760);
+    let mut v = riff();
+    b.draw(&mut v);
+    // Le Mi (64) choisi, clic droit dessus.
+    let (id, x, y) = note_xy(&v, 64, 25.0);
+    down(&mut v, x, y, Button::Right, m0());
+    up(&mut v, x, y, Button::Right, m0());
+    assert!(v.palette.is_some());
+    assert!(v.midi().unwrap().roll.get(id).unwrap().sel);
+    b.draw(&mut v);
+    let cell = |v: &Ed, h: Hit| {
+        v.boxes
+            .iter()
+            .rev()
+            .find(|b| b.4 == h)
+            .map(|b| (b.0 + b.2 * 0.5, b.1 + b.3 * 0.5))
+            .unwrap_or_else(|| panic!("{h:?} n'est pas dessinee"))
+    };
+    // Neuf groupes ; les arpeges ouverts d'office.
+    let cats = v
+        .boxes
+        .iter()
+        .filter(|b| matches!(b.4, Hit::PalCat(_)))
+        .count();
+    assert_eq!(cats, 9);
+    assert_eq!(v.palette.as_ref().unwrap().cat, Cat::Arp);
+    // Survoler les accords (en glissant de cote) : leurs pastilles.
+    let (cx, cy) = cell(&v, Hit::PalCat(4));
+    mv(&mut v, cx - 30.0, cy, m0());
+    mv(&mut v, cx, cy, m0());
+    assert_eq!(v.palette.as_ref().unwrap().cat, Cat::Chord);
+    b.draw(&mut v);
+    // Une seule note choisie : « Major » l'apercoit, rien ne change encore.
+    let before = v.midi().unwrap().roll.notes.len();
+    let (mx, my) = cell(&v, Hit::PalOp(71));
+    mv(&mut v, mx, my, m0());
+    let pv = v
+        .palette
+        .as_ref()
+        .unwrap()
+        .preview
+        .as_ref()
+        .expect("un apercu");
+    assert_eq!(pv.0, 71);
+    assert_eq!(pv.1.roll.notes.len(), before + 2);
+    assert_eq!(v.midi().unwrap().roll.notes.len(), before);
+    b.shot(&mut v, "20_palette_apercu");
+    // Le clic : applique, ferme.
+    let a = down(&mut v, mx, my, Button::Left, m0());
+    assert_eq!(a, vec![Act::Commit("CP Editor: chord")]);
+    assert!(v.palette.is_none());
+    assert_eq!(v.midi().unwrap().roll.notes.len(), before + 2);
+    // Rouverte : sur les accords (le dernier groupe utilise).
+    v.open_palette(x, y);
+    assert_eq!(v.palette.as_ref().unwrap().cat, Cat::Chord);
+    // Rien de choisi : les operations portent sur toutes les notes (comme
+    // REAPER). Sans gamme, « caler sur la gamme » ne ferait rien, ni
+    // « enlever le bend » sans bend : eteintes.
+    v.midi_mut().unwrap().roll.clear_sel();
+    v.pal_refresh();
+    let ok = &v.palette.as_ref().unwrap().ok;
+    assert!(!ok.contains(&15) && !ok.contains(&107));
+    assert!(ok.contains(&1) && ok.contains(&11));
+    // Maj+clic : applique et reste ouverte.
+    v.palette.as_mut().unwrap().cat = Cat::Select;
+    b.draw(&mut v);
+    let (sx, sy) = cell(&v, Hit::PalOp(1));
+    down(
+        &mut v,
+        sx,
+        sy,
+        Button::Left,
+        Mods {
+            shift: true,
+            ..m0()
+        },
+    );
+    assert!(v.palette.is_some());
+    assert!(v.midi().unwrap().roll.notes.iter().all(|n| n.sel));
+    // La molette sur un euclide : un coup de plus.
+    v.palette.as_mut().unwrap().cat = Cat::Euclid;
+    b.draw(&mut v);
+    let (ex, ey) = cell(&v, Hit::PalOp(90));
+    assert_eq!(v.euclid[0], (3, 8));
+    v.event(&Ev::Wheel {
+        x: ex,
+        y: ey,
+        dx: 0.0,
+        dy: 1.0,
+        mods: m0(),
+    });
+    assert_eq!(v.euclid[0], (4, 8));
+    b.shot(&mut v, "21_palette_euclide");
+    // Un clic hors de la palette la ferme, sans rien faire d'autre.
+    let n0 = v.midi().unwrap().roll.notes.len();
+    let a = down(&mut v, 700.0, 400.0, Button::Left, m0());
+    assert!(a.is_empty() && v.palette.is_none());
+    assert_eq!(v.midi().unwrap().roll.notes.len(), n0);
+}
+
+/// Un bend pose par la palette, puis ses poignees : le sommet monte d'un
+/// ton (cale au quart de ton), Alt+clic l'enleve ; une copie de la note ne
+/// change pas avec elle.
+#[test]
+fn les_bends_de_l_editeur_et_leurs_poignees() {
+    let mut b = Bench::new(1280, 760);
+    let mut v = riff();
+    // Une etendue de 12 demi-tons sur la corde 0 (comme Guitar Tab).
+    {
+        let md = v.midi_mut().unwrap();
+        let evs = [
+            cp_roll::expr::Ev::cc(0.0, 0, 101, 0),
+            cp_roll::expr::Ev::cc(0.0, 0, 100, 0),
+            cp_roll::expr::Ev::cc(0.0, 0, 6, 12),
+        ];
+        md.expr = cp_roll::expr::Expr::new(&md.roll.notes, &evs);
+    }
+    b.draw(&mut v);
+    let (id, _, _) = note_xy(&v, 64, 25.0);
+    v.midi_mut().unwrap().roll.select_only(id);
+    // Un bend d'un ton.
+    assert_eq!(v.transform(101), vec![Act::Commit("CP Editor: bend")]);
+    let n = *v.midi().unwrap().roll.get(id).unwrap();
+    let c = v.midi().unwrap().expr.curve(&n);
+    let top = c.iter().map(|p| p.1).fold(0.0f32, f32::max);
+    assert!((top - 2.0).abs() < 0.01, "{c:?}");
+    b.draw(&mut v);
+    // La poignee du sommet : on la tire d'un rang vers le haut, un demi-ton.
+    let (_, peak) = v.bend_points(&n).expect("les poignees");
+    assert_eq!(v.hit(peak.0, peak.1), Hit::BendPeak(id));
+    let rh = v.lay.rh;
+    down(&mut v, peak.0, peak.1, Button::Left, m0());
+    mv(&mut v, peak.0, peak.1 - rh * 2.1, m0());
+    b.shot(&mut v, "22_bend_poignee");
+    let a = up(&mut v, peak.0, peak.1 - rh * 2.1, Button::Left, m0());
+    assert_eq!(a, vec![Act::Commit("CP Editor: bend")]);
+    let n = *v.midi().unwrap().roll.get(id).unwrap();
+    let c = v.midi().unwrap().expr.curve(&n);
+    let top = c.iter().map(|p| p.1).fold(0.0f32, f32::max);
+    assert!((top - 4.0).abs() < 0.01, "cale au quart de ton : {top}");
+    assert_eq!(bend_label(top), "2");
+    // Une copie de la note (meme expression) : son bend ne bouge pas quand
+    // on change celui de l'original.
+    {
+        let md = v.midi_mut().unwrap();
+        let mut cp = *md.roll.get(id).unwrap();
+        cp.id = 9_999;
+        cp.qn0 += 4.0;
+        cp.anchor += 4.0;
+        cp.sel = false;
+        md.roll.notes.push(cp);
+    }
+    let copy = *v.midi().unwrap().roll.get(9_999).unwrap();
+    let copy_top = |v: &Ed| {
+        v.midi()
+            .unwrap()
+            .expr
+            .curve(&copy)
+            .iter()
+            .map(|p| p.1)
+            .fold(0.0f32, f32::max)
+    };
+    assert!((copy_top(&v) - 4.0).abs() < 0.01);
+    // Alt+clic sur le sommet : l'original redevient droit, la copie garde
+    // son bend.
+    b.draw(&mut v);
+    let n = *v.midi().unwrap().roll.get(id).unwrap();
+    let (_, peak) = v.bend_points(&n).expect("les poignees");
+    let a = down(
+        &mut v,
+        peak.0,
+        peak.1,
+        Button::Left,
+        Mods { alt: true, ..m0() },
+    );
+    assert_eq!(a, vec![Act::Commit("CP Editor: remove bend")]);
+    let n = *v.midi().unwrap().roll.get(id).unwrap();
+    assert!(v.midi().unwrap().expr.curve(&n).is_empty());
+    assert!((copy_top(&v) - 4.0).abs() < 0.01, "la copie garde son bend");
+    // Au-dela de l'etendue (2 demi-tons sans reglage), « 1½ » est eteint.
+    let mut w = riff();
+    b.draw(&mut w);
+    let (id2, x2, y2) = note_xy(&w, 64, 25.0);
+    w.midi_mut().unwrap().roll.select_only(id2);
+    w.open_palette(x2, y2);
+    let ok = &w.palette.as_ref().unwrap().ok;
+    assert!(ok.contains(&101) && !ok.contains(&102));
 }

@@ -3,7 +3,7 @@
 //! clip audio (onde, fondus, gain, bords).
 
 use cp_gfx::text::{Align, Font, TextCache};
-use cp_gfx::{Canvas, Color, hex};
+use cp_gfx::{Canvas, Color, Path, hex};
 use cp_roll::{Note, note_name};
 use cp_ui::{Icon, IconCache, Theme};
 
@@ -165,6 +165,8 @@ impl Ed {
         // La tete de lecture et les curseurs sont des traits, poses par-dessus
         // la scene (`strokes`).
         self.draw_scrollbars(cv, th);
+        // La palette du clic droit, par-dessus tout (ses cibles d'abord).
+        self.draw_palette(cv, text, th, &mut bx);
         self.boxes = bx;
     }
 
@@ -713,6 +715,12 @@ impl Ed {
             Hit::Note { id, .. } => Some(id),
             _ => None,
         };
+        // L'apercu de la palette : ce que l'operation survolee donnerait.
+        let pv = self
+            .palette
+            .as_ref()
+            .and_then(|p| p.preview.as_ref())
+            .map(|x| &x.1);
         // Les choisies par-dessus.
         for pass in [false, true] {
             for n in m.roll.notes.iter().filter(|n| n.sel == pass) {
@@ -729,23 +737,22 @@ impl Ed {
                 if n.mute {
                     c = th.rp.m_note_mute;
                 }
+                let mut border = if n.sel {
+                    th.rp.m_note_sel
+                } else {
+                    th.rp.m_note_border
+                };
+                // Pendant un apercu, les notes d'aujourd'hui s'effacent.
+                if pv.is_some() {
+                    c = c.with_alpha(55);
+                    border = border.with_alpha(55);
+                }
                 cv.fill_rect(x, y, w, h, c);
-                cv.stroke_rect(
-                    x,
-                    y,
-                    w,
-                    h,
-                    1.0,
-                    if n.sel {
-                        th.rp.m_note_sel
-                    } else {
-                        th.rp.m_note_border
-                    },
-                );
+                cv.stroke_rect(x, y, w, h, 1.0, border);
                 // Le bend de la note (Guitar Tab : bends et glisses) : sa
                 // hauteur au fil du temps, depuis le milieu de son rang.
                 let curve = m.expr.curve(n);
-                if curve.len() >= 2 {
+                if curve.len() >= 2 && pv.is_none() {
                     let yc = y + h * 0.5;
                     let pt = |(q, st): (f64, f32)| (self.x_of(q), yc - st * l.rh);
                     let line = if n.sel {
@@ -785,6 +792,38 @@ impl Ed {
                     );
                 }
             }
+        }
+        // L'apercu : les notes qu'on aurait, en pointilles, et leurs bends.
+        if let Some(pm) = pv {
+            for n in &pm.roll.notes {
+                if n.end() < q0 || n.qn0 > q1 {
+                    continue;
+                }
+                let Some((x, y, w, h)) = self.note_rect(n) else {
+                    continue;
+                };
+                cv.fill_rect(x, y, w, h, self.note_color(n).with_alpha(150));
+                cv.dash_rect(
+                    x,
+                    y,
+                    w,
+                    h,
+                    3.0,
+                    2.0,
+                    if n.sel { th.accent } else { th.text_dim },
+                );
+                let curve = pm.expr.curve(n);
+                if curve.len() >= 2 {
+                    let yc = y + h * 0.5;
+                    for w2 in curve.windows(2) {
+                        let (xa, ya) = (self.x_of(w2[0].0), yc - w2[0].1 * l.rh);
+                        let (xb, yb) = (self.x_of(w2[1].0), yc - w2[1].1 * l.rh);
+                        cv.line(xa, ya, xb, yb, s(1.6), th.accent);
+                    }
+                }
+            }
+        } else {
+            self.draw_bend_handles(cv, text, th);
         }
         // Le lasso.
         if let Some((x0, y0, x1, y1)) = self.marquee() {
@@ -904,6 +943,56 @@ impl Ed {
         let _ = icons;
     }
 
+    /// Les poignees du bend de la note retenue et des notes choisies : le
+    /// pied (quand il part) et le sommet (de combien), sa valeur au survol.
+    fn draw_bend_handles(&self, cv: &mut Canvas<'_>, text: &mut TextCache, th: &Theme) {
+        let s = |v: f32| th.s(v);
+        let Some(m) = self.midi() else { return };
+        let dragged = match &self.drag {
+            Some(crate::Drag::Bend { id, peak, .. }) => Some((*id, *peak)),
+            _ => None,
+        };
+        let mut seen: Vec<u64> = Vec::new();
+        let cands = self
+            .bend_note
+            .into_iter()
+            .chain(m.roll.notes.iter().filter(|n| n.sel).take(64).map(|n| n.id));
+        for id in cands {
+            if seen.contains(&id) {
+                continue;
+            }
+            seen.push(id);
+            let Some(n) = m.roll.get(id) else { continue };
+            let Some((foot, peak)) = self.bend_points(n) else {
+                continue;
+            };
+            for (pt, top) in [(foot, false), (Some(peak), true)] {
+                let Some((hx, hy)) = pt else { continue };
+                let hit = if top {
+                    Hit::BendPeak(id)
+                } else {
+                    Hit::BendFoot(id)
+                };
+                let hot = self.hover == hit || dragged == Some((id, top));
+                let r = s(4.5);
+                cv.fill_circle(hx, hy, r + s(1.5), th.bg.with_alpha(200));
+                cv.fill_circle(hx, hy, r, if hot { th.accent } else { th.bg });
+                let mut p = Path::new();
+                p.circle(hx, hy, r);
+                cv.stroke_path(&p, s(1.6), th.accent);
+                if top && hot {
+                    let v = crate::palette::bend_handles(&m.expr.curve(n)).map_or(0.0, |x| x.1.1);
+                    let lab = crate::bend_label(v);
+                    let f = Font::new(0, s(10.0) as u16, 700);
+                    let tw = text.measure(f, &lab).ceil() + s(8.0);
+                    let (bx, by) = (hx + s(8.0), hy - s(18.0));
+                    cv.fill_round_rect(bx, by, tw, s(14.0), s(3.0), th.panel);
+                    text.draw_in(cv, f, bx, by, tw, s(14.0), &lab, th.text, Align::Center);
+                }
+            }
+        }
+    }
+
     fn draw_vel(&self, cv: &mut Canvas<'_>, icons: &mut IconCache, th: &Theme) {
         let l = self.lay;
         let s = |v: f32| th.s(v);
@@ -944,6 +1033,25 @@ impl Ed {
                 let c = self.note_color(n);
                 cv.fill_rect(x, bottom - h, w, h, if n.sel { c } else { c.fade(0.75) });
                 cv.fill_rect(x - s(1.5), bottom - h - s(1.0), w + s(3.0), s(2.0), c);
+            }
+        }
+        // L'apercu de la palette : les velocites qu'on aurait.
+        if let Some((_, pm)) = self.palette.as_ref().and_then(|p| p.preview.as_ref()) {
+            for n in &pm.roll.notes {
+                if n.qn0 < q0 - 1.0 || n.qn0 > q1 {
+                    continue;
+                }
+                let x = self.x_of(n.qn0);
+                let h = n.vel as f32 / 127.0 * span;
+                cv.dash_rect(
+                    x - s(1.5),
+                    bottom - h - s(1.0),
+                    s(7.0),
+                    h + s(1.0),
+                    2.0,
+                    2.0,
+                    th.accent,
+                );
             }
         }
         cv.pop_clip();

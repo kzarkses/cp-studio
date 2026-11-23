@@ -407,14 +407,12 @@ impl App {
                 Act::AuditionOff => self.ed_audition_off(),
                 Act::GridMenu { x, y } => self.ed_grid_menu(x, y),
                 Act::ScaleMenu { x, y } => self.ed_scale_menu(x, y),
-                Act::TransformMenu { x, y } => self.ed_transform_menu(x, y),
                 Act::ViewMenu { x, y } => {
                     if let Some(h) = self.ed.win.as_ref().map(|w| w.hwnd) {
                         let (sx, sy) = ui::client_to_screen(h, x as i32, y as i32);
                         self.ed_place_menu_at(h, sx, sy);
                     }
                 }
-                Act::ContextMenu { x, y } => self.ed_transform_menu(x, y),
                 Act::Main(c) => r.main_on_command(c as i32),
                 Act::Close => self.queue(WinOp::EdClose),
                 Act::OpenReaper => {
@@ -524,26 +522,6 @@ impl App {
                 kind: (k - 200) as usize,
             })),
             _ => {}
-        }
-    }
-
-    fn ed_transform_menu(&mut self, x: f32, y: f32) {
-        let menu = self.ed.ed.transform_menu();
-        let items: Vec<Option<MenuItem<'_>>> = menu
-            .iter()
-            .map(|m| {
-                m.as_ref().map(|(id, t, c)| MenuItem {
-                    id: *id,
-                    text: t.as_str(),
-                    checked: *c,
-                    enabled: true,
-                })
-            })
-            .collect();
-        let k = self.ed_menu(x, y, &items);
-        if k > 0 {
-            let acts = self.ed.ed.transform(k);
-            self.ed_act(acts);
         }
     }
 
@@ -1310,12 +1288,87 @@ impl App {
         let up = !before.is_empty()
             && before.len() == after.len()
             && before.iter().zip(&after).all(|(a, b)| b - a == 1);
+        let bend = self.ed_selftest_bend(item);
         format!(
-            "notes={} transpose={} canaux={} annule={}",
+            "notes={} transpose={} canaux={} annule={} bend={}",
             before.len(),
             up as u8,
             (chans == chans_after) as u8,
-            (undone == before) as u8
+            (undone == before) as u8,
+            bend
+        )
+    }
+
+    /// L'auto-test d'un bend : un ton pose par la palette sur la premiere
+    /// note, relu dans REAPER (ses pitch bends rattaches a la note), annule.
+    /// Rend le sommet relu, en demi-tons (2 attendu), et « annule » ou non.
+    fn ed_selftest_bend(&mut self, item: &str) -> String {
+        let r = self.r;
+        if !self.ed_load(item, true) {
+            return "illisible".into();
+        }
+        let Some(first) = self
+            .ed
+            .ed
+            .midi()
+            .and_then(|m| m.roll.notes.first().copied())
+        else {
+            return "sans note".into();
+        };
+        if let Some(m) = self.ed.ed.midi_mut() {
+            m.roll.select_only(first.id);
+        }
+        let acts = self.ed.ed.transform(101);
+        self.ed_act(
+            acts.into_iter()
+                .filter(|a| matches!(a, Act::Commit(_)))
+                .collect(),
+        );
+        let top = |r: cp_sys::reaper::Reaper| -> f32 {
+            let notes = r.ed_notes(item).unwrap_or_default();
+            let roll = Roll::from_notes(notes.iter().map(|n| {
+                (
+                    n.qn0,
+                    (n.qn1 - n.qn0).max(1e-3),
+                    n.pitch,
+                    n.chan,
+                    n.vel,
+                    n.sel,
+                    n.mute,
+                )
+            }));
+            let evs: Vec<expr::Ev> = r
+                .ed_events(item)
+                .unwrap_or_default()
+                .into_iter()
+                .map(|e| expr::Ev {
+                    qn: e.qn,
+                    chan: e.chan,
+                    status: e.status,
+                    d1: e.d1,
+                    d2: e.d2,
+                    sel: e.sel,
+                    mute: e.mute,
+                })
+                .collect();
+            let x = Expr::new(&roll.notes, &evs);
+            roll.notes
+                .iter()
+                .find(|n| (n.qn0 - first.qn0).abs() < 1e-6 && n.pitch == first.pitch)
+                .map_or(0.0, |n| {
+                    x.curve(n).iter().map(|p| p.1).fold(0.0f32, f32::max)
+                })
+        };
+        let written = top(r);
+        r.main_on_command(40029);
+        let after_undo = top(r);
+        format!(
+            "{written:.2}{}",
+            if after_undo.abs() < 0.01 {
+                ",annule"
+            } else {
+                ""
+            }
         )
     }
 }

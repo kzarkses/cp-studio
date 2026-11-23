@@ -21,12 +21,14 @@
 
 mod draw;
 pub mod keys;
+pub mod palette;
 #[cfg(test)]
 mod tests;
 
 pub use cp_roll;
+pub use palette::{Cat, Glyph, Op, Palette};
 
-use cp_roll::{ArpMode, CHORDS, MIN_LEN, Note, Roll, Scale, note_name};
+use cp_roll::{ArpMode, MIN_LEN, Note, Roll, Scale, note_name};
 use cp_ui::{Button, Ev, Mods, vk};
 
 /// Les rangs montres.
@@ -124,8 +126,8 @@ fn grid_of(cmd: u32) -> Option<f64> {
     })
 }
 
-/// Les rythmes euclidiens du menu : (coups, cases).
-const EUCLID: [(usize, usize); 6] = [(3, 8), (5, 8), (5, 16), (7, 16), (9, 16), (11, 16)];
+/// Les rythmes euclidiens de la palette, au depart : (coups, cases).
+pub const EUCLID: [(usize, usize); 6] = [(3, 8), (5, 8), (5, 16), (7, 16), (9, 16), (11, 16)];
 
 /// Allonge les notes choisies (REAPER : rien sans selection).
 fn lengthen(r: &mut Roll, d: f64) -> usize {
@@ -229,6 +231,16 @@ pub enum Hit {
     RateChip,
     Reverse,
     Normalize,
+    // La palette du clic droit
+    /// Un groupe (rang dans [`Cat::ALL`]).
+    PalCat(u8),
+    /// Une operation (son numero).
+    PalOp(u32),
+    /// Le fond de la palette (le clic n'y fait rien).
+    Palette,
+    /// Les poignees du bend d'une note : son sommet, son pied.
+    BendPeak(u64),
+    BendFoot(u64),
 }
 
 /// Ce que le module doit faire.
@@ -256,10 +268,6 @@ pub enum Act {
         x: f32,
         y: f32,
     },
-    TransformMenu {
-        x: f32,
-        y: f32,
-    },
     /// Clic droit sur la barre : la place de la fenetre.
     ViewMenu {
         x: f32,
@@ -267,11 +275,6 @@ pub enum Act {
     },
     /// Ouvrir l'item dans l'editeur MIDI de REAPER.
     OpenReaper,
-    /// Clic droit : le menu des notes, sous la souris.
-    ContextMenu {
-        x: f32,
-        y: f32,
-    },
     /// Une action de la fenetre principale de REAPER (le transport).
     Main(u32),
     /// Fermer l'editeur (« File: Close window »).
@@ -420,6 +423,19 @@ enum Drag {
         y0: f32,
         v0: f64,
     },
+    /// Une poignee du bend d'une note : le sommet (de combien, et quand il
+    /// y arrive) ou le pied (quand il part). La courbe au depart, relative a
+    /// la note, et ses deux poignees (noires depuis la note, demi-tons).
+    Bend {
+        id: u64,
+        peak: bool,
+        x0: f32,
+        y0: f32,
+        orig: Vec<(f64, f32)>,
+        foot: Option<(f64, f32)>,
+        top: (f64, f32),
+        moved: bool,
+    },
 }
 
 /// L'aide : les gestes (l'infobulle du « ? »). Les touches sont celles de
@@ -435,7 +451,7 @@ Edges: length   \u{00b7}   Ctrl: this note only   \u{00b7}   Alt: stretch\n\
 Empty grid\n\
 Click or drag: a new note   \u{00b7}   Ctrl: cursor, drag copies the selection\n\
 Alt: erase   \u{00b7}   Ctrl+Alt drag: a line   \u{00b7}   Shift+Ctrl+Alt drag: notes and chords\n\
-Right drag: lasso   \u{00b7}   right click: menu\n\
+Right drag: lasso   \u{00b7}   right click: the palette\n\
 \n\
 Keys: your REAPER MIDI editor shortcuts\n\
 \n\
@@ -503,6 +519,15 @@ pub struct Ed {
     dirty: bool,
     /// Les zones a redessiner quand tout ne l'est pas (un survol).
     damage: Vec<cp_gfx::IRect>,
+    /// La palette du clic droit, ouverte.
+    pub palette: Option<Palette>,
+    /// Le groupe qu'elle ouvre (le dernier utilise).
+    pub pal_last: Cat,
+    /// Les rythmes euclidiens de la palette (la molette les change).
+    pub euclid: [(usize, usize); 6],
+    /// La note dont on montre les poignees du bend (survolee, ou qu'on
+    /// vient de quitter vers une poignee).
+    pub(crate) bend_note: Option<u64>,
 }
 
 /// La hauteur d'un rang par defaut, et ses bornes (px a 96 DPI).
@@ -561,6 +586,10 @@ impl Ed {
             guide: cp_ui::Guide::default(),
             guide_q: None,
             damage: Vec::new(),
+            palette: None,
+            pal_last: Cat::default(),
+            euclid: EUCLID,
+            bend_note: None,
         }
     }
 
@@ -767,6 +796,9 @@ impl Ed {
                 Drag::Range { .. } => return P::TimeSelEdge,
                 Drag::HScroll { .. } | Drag::VScroll { .. } => return P::Arrow,
                 Drag::Audio { what, .. } => return Self::audio_pointer(*what),
+                Drag::Bend { peak, .. } => {
+                    return if *peak { P::NoteMoveV } else { P::NoteMoveH };
+                }
                 Drag::Press { .. } => {}
             }
         }
@@ -792,6 +824,10 @@ impl Ed {
                 _ => P::NoteDraw,
             },
             Hit::Vel(_) | Hit::VelLane => P::NoteVel,
+            Hit::BendPeak(_) if m.alt => P::NoteErase,
+            Hit::BendFoot(_) if m.alt => P::NoteErase,
+            Hit::BendPeak(_) => P::NoteMoveV,
+            Hit::BendFoot(_) => P::NoteMoveH,
             h @ (Hit::Wave | Hit::EdgeL | Hit::EdgeR | Hit::FadeIn | Hit::FadeOut | Hit::Gain) => {
                 Self::audio_pointer(h)
             }
@@ -1244,6 +1280,9 @@ impl Ed {
         {
             return b.4;
         }
+        if let Some(h) = self.bend_hit(x, y) {
+            return h;
+        }
         let l = self.lay;
         if y < l.top {
             return Hit::None;
@@ -1405,6 +1444,17 @@ impl Ed {
     }
 
     fn on_wheel(&mut self, x: f32, y: f32, dx: f32, dy: f32, mods: Mods) -> Vec<Act> {
+        if self.palette.is_some() {
+            match self.hit(x, y) {
+                Hit::PalOp(id) if (90..=95).contains(&id) => {
+                    let up = if dy != 0.0 { dy > 0.0 } else { dx > 0.0 };
+                    self.pal_wheel(id, up, mods.shift);
+                    return Vec::new();
+                }
+                Hit::PalOp(_) | Hit::PalCat(_) | Hit::Palette => return Vec::new(),
+                _ => {}
+            }
+        }
         let l = self.lay;
         let _ = y;
         let x = x.clamp(l.sx, l.sx + l.sw);
@@ -1448,6 +1498,31 @@ impl Ed {
     fn on_down(&mut self, x: f32, y: f32, b: Button, dbl: bool, m: Mods) -> Vec<Act> {
         let h = self.hit(x, y);
         self.dirty = true;
+        // La palette ouverte : ses clics ; ailleurs, elle se ferme (un clic
+        // droit ailleurs la rouvre la).
+        if self.palette.is_some() {
+            match h {
+                Hit::PalCat(_) | Hit::PalOp(_) => {
+                    return if b == Button::Left {
+                        self.pal_click(h, m.shift)
+                    } else {
+                        Vec::new()
+                    };
+                }
+                Hit::Palette => return Vec::new(),
+                _ => {
+                    self.close_palette();
+                    if b != Button::Right {
+                        return Vec::new();
+                    }
+                }
+            }
+        }
+        if b == Button::Left {
+            if let Hit::BendPeak(id) | Hit::BendFoot(id) = h {
+                return self.down_bend(id, matches!(h, Hit::BendPeak(_)), x, y, m);
+            }
+        }
         if b == Button::Right {
             // Clic droit : le menu ; glisser : le lasso (comme REAPER).
             return match h {
@@ -1546,7 +1621,14 @@ impl Ed {
             }
             Hit::GridMenu => vec![Act::GridMenu { x, y }],
             Hit::ScaleMenu => vec![Act::ScaleMenu { x, y }],
-            Hit::Transform => vec![Act::TransformMenu { x, y }],
+            Hit::Transform => {
+                // La palette, sous le bouton.
+                let (px, py) = self.rect_of(Hit::Transform).map_or((x, y), |r| {
+                    (r.0 - 4.0 * self.scale, r.1 + r.3 - 6.0 * self.scale)
+                });
+                self.open_palette(px, py);
+                Vec::new()
+            }
             Hit::Color => {
                 self.colors = self.colors.next();
                 Vec::new()
@@ -1577,7 +1659,14 @@ impl Ed {
                 self.follow = !self.follow;
                 Vec::new()
             }
-            Hit::Help | Hit::None | Hit::VelLane => Vec::new(),
+            Hit::Help
+            | Hit::None
+            | Hit::VelLane
+            | Hit::PalCat(_)
+            | Hit::PalOp(_)
+            | Hit::Palette
+            | Hit::BendPeak(_)
+            | Hit::BendFoot(_) => Vec::new(),
             // Le clip audio.
             Hit::Wave => vec![Act::Seek(self.snap_q(self.qn_of(x), !m.shift))],
             Hit::EdgeL | Hit::EdgeR | Hit::FadeIn | Hit::FadeOut | Hit::Gain => {
@@ -1926,15 +2015,53 @@ impl Ed {
     }
 
     fn on_move(&mut self, x: f32, y: f32, mods: Mods) -> Vec<Act> {
+        let (px, py) = (self.mouse.0, self.mouse.1);
         self.mouse = (x, y, mods);
         self.guide_at(x, y);
         let Some(d) = self.drag.clone() else {
             let h = self.hit(x, y);
             self.set_hover(h);
+            if self.palette.is_some() {
+                match h {
+                    // Un groupe s'ouvre au survol, si l'on y va (pas en
+                    // descendant vers les icones du groupe ouvert).
+                    Hit::PalCat(k) if (x - px).abs() >= (y - py).abs() => {
+                        let c = Cat::ALL[k as usize % Cat::ALL.len()];
+                        if let Some(p) = &mut self.palette {
+                            if p.cat != c {
+                                p.cat = c;
+                                p.preview = None;
+                                self.dirty = true;
+                            }
+                        }
+                    }
+                    Hit::PalOp(id) => self.pal_hover(Some(id)),
+                    Hit::Palette | Hit::PalCat(_) => {}
+                    _ => self.pal_hover(None),
+                }
+                return Vec::new();
+            }
+            self.track_bend_note(h, x, y);
             return Vec::new();
         };
         self.dirty = true;
         match d {
+            Drag::Bend {
+                id,
+                peak,
+                x0,
+                y0,
+                orig,
+                foot,
+                top,
+                ..
+            } => {
+                self.bend_drag(id, peak, x - x0, y - y0, &orig, foot, top, mods.shift);
+                if let Some(Drag::Bend { moved, .. }) = &mut self.drag {
+                    *moved = true;
+                }
+                Vec::new()
+            }
             Drag::Press {
                 x0,
                 y0,
@@ -2322,6 +2449,12 @@ impl Ed {
         self.dirty = true;
         let _ = b;
         match d {
+            Drag::Bend { moved, .. } => {
+                if moved {
+                    return vec![Act::Commit("CP Editor: bend")];
+                }
+                Vec::new()
+            }
             // Un clic sur une note, selon les modificateurs (REAPER).
             Drag::Press {
                 id: Some(id),
@@ -2343,7 +2476,8 @@ impl Ed {
                     if !n.sel {
                         md.roll.select_only(id);
                     }
-                    return vec![Act::AuditionOff, Act::ContextMenu { x, y }];
+                    self.open_palette(x, y);
+                    return vec![Act::AuditionOff];
                 }
                 let mut out = vec![Act::AuditionOff];
                 match (m.shift, m.ctrl, m.alt, m.win) {
@@ -2393,7 +2527,8 @@ impl Ed {
                 y0,
             } => {
                 if right {
-                    return vec![Act::ContextMenu { x, y }];
+                    self.open_palette(x, y);
+                    return Vec::new();
                 }
                 let q = self.qn_of(x0);
                 let p = self.pitch_at(y0);
@@ -2538,90 +2673,7 @@ impl Ed {
         self.commit_if(k, "CP Editor: quantize")
     }
 
-    /// Le menu des transformations : (identifiant, texte, coche).
-    pub fn transform_menu(&self) -> Vec<Option<(u32, String, bool)>> {
-        let s = |id: u32, t: &str| Some((id, t.to_string(), false));
-        let mut v = vec![
-            s(1, "Select all"),
-            s(2, "Invert selection"),
-            s(3, "Select same pitch"),
-            None,
-            s(10, "Legato"),
-            s(11, "Reverse"),
-            s(12, "Mirror pitches"),
-            s(13, "Glue"),
-            s(14, "Split at cursor"),
-            s(15, "Snap to scale"),
-            None,
-            s(20, "Velocity 127"),
-            s(21, "Velocity 100"),
-            s(22, "Velocity 80"),
-            s(23, "Velocity 64"),
-            s(24, "Velocity ramp up"),
-            s(25, "Velocity ramp down"),
-            s(26, "Velocity compress"),
-            s(27, "Velocity expand"),
-            None,
-            s(30, "Humanize light"),
-            s(31, "Humanize medium"),
-            s(32, "Humanize heavy"),
-            None,
-            s(50, "Double length"),
-            s(51, "Halve length"),
-            s(52, "Length = grid"),
-            None,
-        ];
-        for (k, p) in [100, 75, 50, 25].into_iter().enumerate() {
-            v.push(Some((
-                40 + k as u32,
-                format!("Quantize strength {p} %"),
-                (self.strength - p as f64 / 100.0).abs() < 1e-6,
-            )));
-        }
-        for (k, p) in [0, 8, 16, 24].into_iter().enumerate() {
-            v.push(Some((
-                44 + k as u32,
-                format!("Swing {p} %"),
-                (self.swing - p as f64 / 100.0).abs() < 1e-6,
-            )));
-        }
-        // Les generateurs : accords sur les notes choisies, arpeges, rythmes
-        // euclidiens.
-        v.push(None);
-        for (k, (name, _)) in CHORDS.iter().enumerate() {
-            v.push(s(70 + k as u32, &format!("Chord: {name}")));
-        }
-        v.push(None);
-        for (k, t) in [
-            "Arpeggio up",
-            "Arpeggio down",
-            "Arpeggio up-down",
-            "Arpeggio random",
-            "Arpeggio up, 2 octaves",
-        ]
-        .iter()
-        .enumerate()
-        {
-            v.push(s(80 + k as u32, t));
-        }
-        v.push(None);
-        for (k, (p, n)) in EUCLID.iter().enumerate() {
-            v.push(s(90 + k as u32, &format!("Euclid {p}/{n}")));
-        }
-        v.push(None);
-        v.push(Some((
-            61,
-            "Step input from MIDI keyboard".to_string(),
-            self.step_input,
-        )));
-        v.push(s(60, "Open in REAPER's MIDI editor"));
-        v
-    }
-
     pub fn transform(&mut self, id: u32) -> Vec<Act> {
-        let cursor = self.playhead.unwrap_or(0.0);
-        let (g, bar) = (self.grid, self.bar_qn());
-        let _ = bar;
         match id {
             40..=43 => {
                 self.strength = [1.0, 0.75, 0.5, 0.25][(id - 40) as usize];
@@ -2640,31 +2692,52 @@ impl Ed {
             _ => {}
         }
         self.dirty = true;
+        let seed = self.seed_bump();
+        let mut md = match &mut self.clip {
+            Clip::Midi(m) => std::mem::take(m),
+            _ => return Vec::new(),
+        };
+        let (k, label) = self.op_on(id, &mut md, seed);
+        if let Clip::Midi(m) = &mut self.clip {
+            *m = md;
+        }
+        self.commit_if(k, label)
+    }
+
+    /// L'operation `id` de la palette sur des notes (les vraies, ou une
+    /// copie pour l'apercu) : (combien de notes, le nom du pas
+    /// d'annulation ; vide : rien a ecrire).
+    pub(crate) fn op_on(&self, id: u32, md: &mut Midi, seed: u64) -> (usize, &'static str) {
+        let cursor = self.playhead.unwrap_or(0.0);
+        let g = self.grid;
+        if (100..=107).contains(&id) {
+            return (self.bend_op(id, md), "CP Editor: bend");
+        }
+        if id == 54 {
+            return (
+                md.roll.quantize(g, self.strength, self.swing),
+                "CP Editor: quantize",
+            );
+        }
         // Le rythme euclidien : sur la plage de la regle, sinon l'etendue des
         // notes choisies, sinon la mesure du curseur ; a la hauteur de la
         // premiere note choisie (sinon Do 2), sur son canal.
-        let eu_span = self.range.filter(|(a, b)| b - a > 1e-6).or_else(|| {
-            self.midi()
-                .and_then(|m| m.roll.bounds().filter(|_| m.roll.has_sel()))
-        });
+        let eu_span = self
+            .range
+            .filter(|(a, b)| b - a > 1e-6)
+            .or_else(|| md.roll.bounds().filter(|_| md.roll.has_sel()));
         let bar = self.bar_qn().max(1e-6);
         let eu_span = eu_span.unwrap_or_else(|| {
             let a = (cursor / bar).floor() * bar;
             (a, a + bar)
         });
-        let eu_note = self
-            .midi()
-            .and_then(|m| m.roll.notes.iter().find(|n| n.sel).copied());
+        let eu_note = md.roll.notes.iter().find(|n| n.sel).copied();
         let (eu_p, eu_c, eu_v) = eu_note.map_or((36, self.last_chan, self.last_vel), |n| {
             (n.pitch, n.chan, n.vel)
         });
         let g_arp = if g > 0.0 { g } else { 0.25 };
-        let seed = self.seed_bump();
-        let Some(md) = self.midi_mut() else {
-            return Vec::new();
-        };
         let r = &mut md.roll;
-        let (k, label): (usize, &'static str) = match id {
+        match id {
             70..=78 => (r.chordify((id - 70) as usize), "CP Editor: chord"),
             80..=84 => {
                 let (mode, oct) = match id {
@@ -2677,7 +2750,7 @@ impl Ed {
                 (r.arp(g_arp, mode, 0.9, oct, seed), "CP Editor: arpeggio")
             }
             90..=95 => {
-                let (p, n) = EUCLID[(id - 90) as usize];
+                let (p, n) = self.euclid[(id - 90) as usize];
                 let (a, b) = eu_span;
                 (
                     r.euclid(a, b, eu_p, eu_c, eu_v, n, p, 0),
@@ -2717,8 +2790,227 @@ impl Ed {
             51 => (r.scale_len(0.5), "CP Editor: length"),
             52 => (r.set_len(g), "CP Editor: length"),
             _ => (0, ""),
+        }
+    }
+
+    /// Les bends de la palette sur les notes choisies : `id` 100..=106 une
+    /// courbe, 107 l'enleve. Rend combien de notes ont change.
+    fn bend_op(&self, id: u32, md: &mut Midi) -> usize {
+        let ids: Vec<u64> = md
+            .roll
+            .notes
+            .iter()
+            .filter(|n| n.sel)
+            .map(|n| n.id)
+            .collect();
+        let mut k = 0;
+        for nid in ids {
+            let Some(n) = md.roll.get(nid).copied() else {
+                continue;
+            };
+            let had = !md.expr.curve(&n).is_empty();
+            if id == 107 && !had {
+                continue;
+            }
+            let pts = if id == 107 {
+                Vec::new()
+            } else {
+                palette::bend_curve(id, n.len, self.bpm)
+            };
+            let n = own_expression(md, n);
+            md.expr.set_bend(&n, &pts);
+            k += 1;
+        }
+        k
+    }
+
+    /// Les poignees du bend sous la souris : celles de la note retenue et
+    /// des notes choisies.
+    fn bend_hit(&self, x: f32, y: f32) -> Option<Hit> {
+        let m = self.midi()?;
+        let l = self.lay;
+        if y < l.gy || y >= l.gy + l.gh || x < l.sx {
+            return None;
+        }
+        let r = 7.0 * self.scale;
+        let cands = self
+            .bend_note
+            .into_iter()
+            .chain(m.roll.notes.iter().filter(|n| n.sel).take(64).map(|n| n.id));
+        for id in cands {
+            let Some(n) = m.roll.get(id) else { continue };
+            let Some((foot, peak)) = self.bend_points(n) else {
+                continue;
+            };
+            if (peak.0 - x).hypot(peak.1 - y) <= r {
+                return Some(Hit::BendPeak(id));
+            }
+            if foot.is_some_and(|f| (f.0 - x).hypot(f.1 - y) <= r) {
+                return Some(Hit::BendFoot(id));
+            }
+        }
+        None
+    }
+
+    /// Les poignees du bend d'une note a l'ecran : (pied, sommet).
+    pub(crate) fn bend_points(&self, n: &Note) -> Option<palette::Handles<f32>> {
+        let m = self.midi()?;
+        let c = m.expr.curve(n);
+        let (foot, peak) = palette::bend_handles(&c)?;
+        let (_, y, _, h) = self.note_rect(n)?;
+        let yc = y + h * 0.5;
+        let at = |(q, v): (f64, f32)| (self.x_of(q), yc - v * self.lay.rh);
+        Some((foot.map(at), at(peak)))
+    }
+
+    /// Les poignees se montrent sur la note survolee qui a un bend, et le
+    /// restent tant que la souris va vers elles.
+    fn track_bend_note(&mut self, h: Hit, x: f32, y: f32) {
+        let keep = match h {
+            Hit::Note { id, .. } => self
+                .midi()
+                .and_then(|m| m.roll.get(id))
+                .and_then(|n| self.bend_points(n))
+                .map(|_| id),
+            Hit::BendPeak(id) | Hit::BendFoot(id) => Some(id),
+            _ => self.bend_note.filter(|&id| {
+                let Some(n) = self.midi().and_then(|m| m.roll.get(id)) else {
+                    return false;
+                };
+                let (Some(r), Some((foot, peak))) = (self.note_rect(n), self.bend_points(n)) else {
+                    return false;
+                };
+                let pad = 18.0 * self.scale;
+                let mut x0 = r.0.min(peak.0);
+                let mut x1 = (r.0 + r.2).max(peak.0);
+                let mut y0 = r.1.min(peak.1);
+                let mut y1 = (r.1 + r.3).max(peak.1);
+                if let Some(f) = foot {
+                    x0 = x0.min(f.0);
+                    x1 = x1.max(f.0);
+                    y0 = y0.min(f.1);
+                    y1 = y1.max(f.1);
+                }
+                x >= x0 - pad && x <= x1 + pad && y >= y0 - pad && y <= y1 + pad
+            }),
         };
-        self.commit_if(k, label)
+        if keep != self.bend_note {
+            self.bend_note = keep;
+            self.dirty = true;
+        }
+    }
+
+    /// Saisir une poignee : le geste commence (Alt : le bend s'en va).
+    fn down_bend(&mut self, id: u64, peak: bool, x: f32, y: f32, m: Mods) -> Vec<Act> {
+        let Some(md) = self.midi_mut() else {
+            return Vec::new();
+        };
+        let Some(n) = md.roll.get(id).copied() else {
+            return Vec::new();
+        };
+        let n = own_expression(md, n);
+        if m.alt {
+            md.expr.set_bend(&n, &[]);
+            self.bend_note = None;
+            return vec![Act::Commit("CP Editor: remove bend")];
+        }
+        let c = md.expr.curve(&n);
+        let Some((foot, top)) = palette::bend_handles(&c) else {
+            return Vec::new();
+        };
+        let rel = |(q, v): (f64, f32)| (q - n.qn0, v);
+        self.drag = Some(Drag::Bend {
+            id,
+            peak,
+            x0: x,
+            y0: y,
+            orig: palette::rel_curve(&n, &c),
+            foot: foot.map(rel),
+            top: rel(top),
+            moved: false,
+        });
+        self.bend_note = Some(id);
+        Vec::new()
+    }
+
+    /// Le geste sur une poignee : le sommet monte ou descend (cale au quart
+    /// de ton, Maj : libre) et avance ou recule ; le pied deplace tout le
+    /// bend dans la note.
+    #[allow(clippy::too_many_arguments)]
+    fn bend_drag(
+        &mut self,
+        id: u64,
+        peak: bool,
+        dx: f32,
+        dy: f32,
+        orig: &[(f64, f32)],
+        foot: Option<(f64, f32)>,
+        top: (f64, f32),
+        free: bool,
+    ) {
+        let (rh, ppq) = (self.lay.rh.max(1.0), self.lay.ppq.max(1e-3));
+        let Some(md) = self.midi_mut() else { return };
+        let Some(n) = md.roll.get(id).copied() else {
+            return;
+        };
+        let len = n.len.max(1.0 / 64.0);
+        let range = md.expr.range(n.chan);
+        let dq = (dx / ppq) as f64;
+        let edge = 1.0 / 128.0;
+        let pts: Vec<(f64, f32)> = if peak {
+            let (tp, vp) = top;
+            let tf = foot.map_or(tp, |f| f.0);
+            let mut nv = vp - dy / rh;
+            if !free {
+                nv = (nv * 2.0).round() / 2.0;
+            }
+            let nv = nv.clamp(-range, range);
+            let kf = if vp.abs() > 1e-3 { nv / vp } else { 1.0 };
+            let ntp = (tp + dq).clamp((tf + edge).min(len - edge), len - edge);
+            orig.iter()
+                .map(|&(t, v)| {
+                    let t2 = if t <= tf + 1e-9 {
+                        t
+                    } else if t <= tp + 1e-9 && tp > tf + 1e-9 {
+                        tf + (t - tf) * (ntp - tf) / (tp - tf)
+                    } else if t > tp {
+                        (t + (ntp - tp)).min(len - 1e-3)
+                    } else {
+                        t
+                    };
+                    (t2, v * kf)
+                })
+                .collect()
+        } else {
+            let moving = |t: f64| t > 1e-9;
+            let lo = orig
+                .iter()
+                .filter(|p| moving(p.0))
+                .map(|p| p.0)
+                .fold(f64::MAX, f64::min);
+            let hi = orig
+                .iter()
+                .filter(|p| moving(p.0))
+                .map(|p| p.0)
+                .fold(f64::MIN, f64::max);
+            if lo > hi {
+                return;
+            }
+            let dq = dq.clamp(-lo + 1e-3, len - 1e-3 - hi);
+            orig.iter()
+                .map(|&(t, v)| if moving(t) { (t + dq, v) } else { (t, v) })
+                .collect()
+        };
+        md.expr.set_bend(&n, &pts);
+        let shown = if peak {
+            pts.iter()
+                .map(|p| p.1)
+                .fold(0.0f32, |a, b| if b.abs() > a.abs() { b } else { a })
+        } else {
+            top.1
+        };
+        self.status = format!("Bend {}", bend_label(shown));
+        self.dirty = true;
     }
 
     /// La saisie pas a pas : chaque note jouee sur un clavier MIDI se pose
@@ -2874,6 +3166,10 @@ impl Ed {
 
     fn key(&mut self, k: u32, m: Mods) -> Vec<Act> {
         self.dirty = true;
+        if k == vk::ESCAPE && self.palette.is_some() {
+            self.close_palette();
+            return Vec::new();
+        }
         match k {
             vk::SPACE => return vec![Act::Play],
             0x5A if m.ctrl && m.shift => return vec![Act::Redo],
@@ -3370,7 +3666,13 @@ impl Ed {
                 (self.strength * 100.0).round(),
                 (self.swing * 100.0).round()
             ),
-            Hit::Transform => "Transform".into(),
+            Hit::Transform => "The palette (also: right-click the notes)".into(),
+            Hit::PalCat(k) => Cat::ALL.get(k as usize)?.label().into(),
+            Hit::PalOp(id) => self.palette_ops().into_iter().find(|o| o.id == id)?.label,
+            Hit::BendPeak(_) => {
+                "Drag: how far and how fast it bends (Shift: free) \u{00b7} Alt+click: remove".into()
+            }
+            Hit::BendFoot(_) => "Drag: when the bend starts \u{00b7} Alt+click: remove".into(),
             Hit::VelToggle => "Velocity lane".into(),
             Hit::Follow => "Follow playback (F)".into(),
             Hit::Help => HELP.into(),
@@ -3428,4 +3730,43 @@ impl Ed {
             _ => None,
         }
     }
+}
+
+/// Une note dont on change le bend : si d'autres portent la meme
+/// expression (une copie, un morceau coupe), elle prend la sienne (ce
+/// qu'elle porte aujourd'hui), pour ne pas changer les autres.
+pub(crate) fn own_expression(md: &mut Midi, n: Note) -> Note {
+    let shared = md.roll.notes.iter().any(|o| o.id != n.id && o.src == n.src);
+    if !shared {
+        return n;
+    }
+    let evs = md.expr.own(&n);
+    // Un numero neuf : son id peut etre celui que les copies portent.
+    let fresh = md.roll.mint();
+    let mut out = n;
+    if let Some(x) = md.roll.notes.iter_mut().find(|x| x.id == n.id) {
+        x.src = fresh;
+        x.anchor = x.qn0;
+        out = *x;
+    }
+    md.expr.adopt(out.src, out.anchor, evs);
+    out
+}
+
+/// Un bend comme la tablature l'ecrit, en tons : « ¼ », « ½ », « full »,
+/// « 1½ »... (en demi-tons au-dela des valeurs simples).
+pub fn bend_label(semis: f32) -> String {
+    let t = semis.abs() / 2.0;
+    let q = (t * 4.0).round() / 4.0;
+    let sign = if semis < -1e-3 { "-" } else { "" };
+    let txt = match ((q * 4.0) as i32, (t - q).abs() < 0.02) {
+        (1, true) => "\u{00bc}".to_string(),
+        (2, true) => "\u{00bd}".to_string(),
+        (3, true) => "\u{00be}".to_string(),
+        (4, true) => "full".to_string(),
+        (6, true) => "1\u{00bd}".to_string(),
+        (8, true) => "2".to_string(),
+        _ => format!("{:.2} st", semis.abs()),
+    };
+    format!("{sign}{txt}")
 }

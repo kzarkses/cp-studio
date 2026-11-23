@@ -194,7 +194,8 @@ impl Roll {
         r
     }
 
-    fn mint(&mut self) -> u64 {
+    /// Un numero neuf : une note, ou l'expression a part d'une note.
+    pub fn mint(&mut self) -> u64 {
         self.next += 1;
         self.next
     }
