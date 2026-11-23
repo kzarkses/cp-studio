@@ -26,10 +26,19 @@ pub struct Repeat {
     pub times: u32,
 }
 
-/// L'empreinte d'une mesure ; `None` pour une mesure de silence.
-fn bar_key(eng: &Engraved, notes: &[TNote], m: i64) -> Option<String> {
+/// L'empreinte d'une mesure ; `None` pour une mesure de silence. Un
+/// changement de tempo dans la mesure la rend unique (une reprise le
+/// perdrait).
+fn bar_key(eng: &Engraved, notes: &[TNote], tempos: &[(f64, f64)], m: i64) -> Option<String> {
     let b0 = eng.bar_start(m);
     let mut key = format!("{:?}|{}|", eng.sig_of(m), eng.bar_len(m));
+    let (q0, q1) = (eng.qn(b0), eng.qn(eng.bar_start(m + 1)));
+    for t in tempos
+        .iter()
+        .filter(|t| t.0 >= q0 - 1e-9 && t.0 < q1 - 1e-9)
+    {
+        key += &format!("T{m}:{}:{};", t.0, t.1);
+    }
     let mut any = false;
     for sg in eng.signs.iter().filter(|s| s.measure == m) {
         let ev = &eng.events[sg.ev];
@@ -70,10 +79,11 @@ fn bar_key(eng: &Engraved, notes: &[TNote], m: i64) -> Option<String> {
     any.then_some(key)
 }
 
-/// Les reprises d'une partition.
-pub fn find(eng: &Engraved, notes: &[TNote]) -> Vec<Repeat> {
+/// Les reprises d'une partition (`tempos` : ses changements de tempo, en
+/// noires du projet).
+pub fn find(eng: &Engraved, notes: &[TNote], tempos: &[(f64, f64)]) -> Vec<Repeat> {
     let n = eng.measures.max(0);
-    let keys: Vec<Option<String>> = (0..n).map(|m| bar_key(eng, notes, m)).collect();
+    let keys: Vec<Option<String>> = (0..n).map(|m| bar_key(eng, notes, tempos, m)).collect();
     // Une note qui arrive liee au debut de la mesure, ou qui en part liee a
     // sa fin.
     let ties_in = |m: i64| {
@@ -138,8 +148,9 @@ pub struct Compact {
     pub repeats: Vec<Repeat>,
 }
 
-/// Retire les copies des reprises : les notes d'apres reculent d'autant.
-pub fn compact(eng: &Engraved, notes: &[TNote], reps: &[Repeat]) -> Compact {
+/// Retire les copies des reprises : les notes d'apres reculent d'autant (et
+/// les changements de tempo avec elles).
+pub fn compact(eng: &Engraved, notes: &[TNote], tempos: &[(f64, f64)], reps: &[Repeat]) -> Compact {
     let n = eng.measures.max(0);
     let g = eng.grid.max(1) as f64;
     let skipped = |m: i64| {
@@ -161,6 +172,20 @@ pub fn compact(eng: &Engraved, notes: &[TNote], reps: &[Repeat]) -> Compact {
         changes.push((at, eng.sig_of(m)));
         at += eng.bar_len(m) as f64 / g;
         new_m += 1;
+    }
+    // Les tempos : celui d'avant la prise reste, ceux d'une mesure gardee
+    // reculent avec elle.
+    let mut tout: Vec<(f64, f64)> = tempos
+        .iter()
+        .copied()
+        .filter(|t| t.0 < eng.origin_qn + 1e-9)
+        .collect();
+    for &(q, bpm) in tempos.iter().filter(|t| t.0 >= eng.origin_qn + 1e-9) {
+        let c = ((q - eng.origin_qn) * g).round() as i64;
+        let m = eng.measure_of(c);
+        if let Some(s) = new_start.get(m as usize).copied().flatten() {
+            tout.push((q + s - eng.qn(eng.bar_start(m)), bpm));
+        }
     }
     let mut out: Vec<TNote> = Vec::new();
     for nt in notes {
@@ -188,7 +213,7 @@ pub fn compact(eng: &Engraved, notes: &[TNote], reps: &[Repeat]) -> Compact {
         .collect();
     Compact {
         notes: out,
-        meter: Meter::new(changes),
+        meter: Meter::new(changes).with_tempos(tout),
         repeats,
     }
 }
@@ -227,7 +252,7 @@ mod tests {
         }
         crate::doc::sort(&mut notes);
         let eng = engrave(&notes, 0.0, (4, 4), 4);
-        let reps = find(&eng, &notes);
+        let reps = find(&eng, &notes, &[]);
         assert_eq!(
             reps,
             vec![
@@ -243,7 +268,7 @@ mod tests {
                 },
             ]
         );
-        let c = compact(&eng, &notes, &reps);
+        let c = compact(&eng, &notes, &[], &reps);
         // Il reste A, B, C, D : quatre mesures, les reprises renumerotees.
         assert_eq!(c.notes.len(), 32);
         assert_eq!(
@@ -293,7 +318,7 @@ mod tests {
         let notes = vec![note(0.0, 16.0, 2, 0)];
         let eng = engrave(&notes, 0.0, (4, 4), 4);
         assert_eq!(eng.measures, 4);
-        assert!(find(&eng, &notes).is_empty());
+        assert!(find(&eng, &notes, &[]).is_empty());
         // Le silence ne se reprend pas.
         let eng = engrave(
             &[note(0.0, 1.0, 2, 0), note(16.0, 1.0, 2, 0)],
@@ -301,6 +326,6 @@ mod tests {
             (4, 4),
             4,
         );
-        assert!(find(&eng, &[note(0.0, 1.0, 2, 0), note(16.0, 1.0, 2, 0)]).is_empty());
+        assert!(find(&eng, &[note(0.0, 1.0, 2, 0), note(16.0, 1.0, 2, 0)], &[]).is_empty());
     }
 }

@@ -126,6 +126,13 @@ impl Reaper {
     /// chiffrage du debut compris. Les marqueurs de tempo seul (sans
     /// chiffrage) n'y sont pas.
     pub fn meter_changes(&self) -> Vec<(f64, (i32, i32))> {
+        self.time_map().0
+    }
+
+    /// Le temps du projet : ses changements de chiffrage, et ses changements
+    /// de tempo (noire, BPM ; le tempo du debut compris).
+    #[allow(clippy::type_complexity)]
+    pub fn time_map(&self) -> (Vec<(f64, (i32, i32))>, Vec<(f64, f64)>) {
         type Count = unsafe extern "C" fn(P) -> i32;
         type Get = unsafe extern "C" fn(
             P,
@@ -138,8 +145,9 @@ impl Reaper {
             *mut i32,
             *mut bool,
         ) -> bool;
-        let (_, sig0, _) = self.measure_at(0.0);
+        let (_, sig0, bpm0) = self.measure_at(0.0);
         let mut out = vec![(0.0, sig0)];
+        let mut tempos = vec![(0.0, bpm0)];
         // SAFETY: int CountTempoTimeSigMarkers(ReaProject*) ; bool
         // GetTempoTimeSigMarker(ReaProject*, int, double* timepos, int*
         // measurepos, double* beatpos, double* bpm, int* num, int* denom,
@@ -151,7 +159,7 @@ impl Reaper {
             )
         };
         let (Some(count), Some(get)) = fns else {
-            return out;
+            return (out, tempos);
         };
         // SAFETY: projet nul = courant.
         let n = unsafe { count(null_mut()) }.clamp(0, 100_000);
@@ -175,8 +183,11 @@ impl Reaper {
             if ok && num > 0 && den > 0 {
                 out.push((self.time_to_qn(t), (num, den)));
             }
+            if ok && bpm > 1.0 {
+                tempos.push((self.time_to_qn(t), bpm));
+            }
         }
-        out
+        (out, tempos)
     }
 
     /// La mesure qui contient l'instant `t` : (son debut en noires,

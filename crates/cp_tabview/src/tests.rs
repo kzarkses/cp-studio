@@ -2251,7 +2251,8 @@ fn le_chiffrage_qui_change_se_dessine_et_s_imprime() {
         (8.0, (3, 4)),
         (14.0, (6, 8)),
         (20.0, (4, 4)),
-    ]);
+    ])
+    .with_tempos(vec![(0.0, 112.0), (8.0, 96.0), (21.0, 140.0)]);
     let mut it = item("M", "Meter.wav", 0, 6, &raw);
     it.meter = Some(meter.clone());
     it.touch();

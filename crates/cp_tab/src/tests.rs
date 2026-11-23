@@ -1036,3 +1036,48 @@ fn le_chiffrage_change_en_route() {
         vec![4 * g, 4 * g, 3 * g, 4 * g]
     );
 }
+
+#[test]
+fn le_tempo_change_en_route() {
+    // 100 BPM, puis 132 a la noire 8 (debut de la mesure 3), puis 90 au
+    // milieu de la mesure 4 : ecrits la ou ils tombent.
+    let meter = crate::meter::Meter::new(vec![(0.0, (4, 4))]).with_tempos(vec![
+        (0.0, 100.0),
+        (8.0, 132.0),
+        (14.0, 90.0),
+        (15.0, 90.0),
+    ]);
+    assert_eq!(meter.tempos, vec![(0.0, 100.0), (8.0, 132.0), (14.0, 90.0)]);
+    let mut tab: Vec<TNote> = (0..16).map(|k| tri_note(k as f64, 1.0, k % 5)).collect();
+    doc::sort(&mut tab);
+    let spec = ScoreSpec {
+        meter: Some(meter.clone()),
+        repeats: Vec::new(),
+        title: "T".into(),
+        origin_qn: 0.0,
+        sig: (4, 4),
+        bpm: 100.0,
+        grid: 4,
+        tuning: Tuning::standard(),
+    };
+    let (xml, _) = crate::score::write_musicxml(&tab, &spec, 0);
+    let m3 = xml.split("<measure number=\"3\">").nth(1).unwrap();
+    let m3 = m3.split("</measure>").next().unwrap();
+    assert!(m3.contains("<per-minute>132</per-minute>") && !m3.contains("<offset>"));
+    let m4 = xml.split("<measure number=\"4\">").nth(1).unwrap();
+    let m4 = m4.split("</measure>").next().unwrap();
+    assert!(
+        m4.contains("<per-minute>90</per-minute><") || m4.contains("<per-minute>90</per-minute>")
+    );
+    assert!(
+        m4.contains("<offset>8</offset>"),
+        "deux noires apres la barre"
+    );
+    // Une mesure ou le tempo change ne se reprend pas avec sa voisine.
+    let mut two: Vec<TNote> = (0..8).map(|k| tri_note(k as f64 * 0.5, 0.5, 2)).collect();
+    two.extend((0..8).map(|k| tri_note(4.0 + k as f64 * 0.5, 0.5, 2)));
+    doc::sort(&mut two);
+    let e = engrave(&two, 0.0, (4, 4), 4);
+    assert_eq!(crate::repeats::find(&e, &two, &[]).len(), 1);
+    assert!(crate::repeats::find(&e, &two, &[(4.0, 140.0)]).is_empty());
+}

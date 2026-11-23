@@ -11,6 +11,9 @@
 #[derive(Clone, Debug, PartialEq)]
 pub struct Meter {
     pub changes: Vec<(f64, (i32, i32))>,
+    /// Les changements de tempo : (noire, BPM), tries. Ils ne changent pas
+    /// les mesures (tout est en noires) ; la partition les ecrit.
+    pub tempos: Vec<(f64, f64)>,
 }
 
 /// Une mesure : son rang depuis le debut, sa premiere noire, sa longueur
@@ -51,6 +54,7 @@ impl Meter {
     pub fn uniform(sig: (i32, i32)) -> Meter {
         Meter {
             changes: vec![(0.0, sig)],
+            tempos: Vec::new(),
         }
     }
 
@@ -59,6 +63,7 @@ impl Meter {
     pub fn single(origin: f64, sig: (i32, i32)) -> Meter {
         Meter {
             changes: vec![(origin, sig)],
+            tempos: Vec::new(),
         }
     }
 
@@ -79,7 +84,36 @@ impl Meter {
         if out.is_empty() {
             out.push((0.0, (4, 4)));
         }
-        Meter { changes: out }
+        Meter {
+            changes: out,
+            tempos: Vec::new(),
+        }
+    }
+
+    /// Les changements de tempo du projet (tries ; un tempo qui ne change
+    /// pas, au dixieme pres, n'en est pas un).
+    pub fn with_tempos(mut self, mut t: Vec<(f64, f64)>) -> Meter {
+        t.retain(|x| x.0.is_finite() && x.1 > 1.0);
+        t.sort_by(|a, b| a.0.total_cmp(&b.0));
+        let mut out: Vec<(f64, f64)> = Vec::new();
+        for x in t {
+            match out.last_mut() {
+                Some(l) if (l.0 - x.0).abs() < EPS => *l = x,
+                Some(l) if (l.1 - x.1).abs() < 0.05 => {}
+                _ => out.push(x),
+            }
+        }
+        self.tempos = out;
+        self
+    }
+
+    /// Les changements de tempo a ecrire dans `(q0, q1)` : (noire, BPM).
+    pub fn tempo_marks(&self, q0: f64, q1: f64) -> Vec<(f64, f64)> {
+        self.tempos
+            .iter()
+            .copied()
+            .filter(|t| t.0 > q0 + EPS && t.0 < q1 - EPS)
+            .collect()
     }
 
     /// Un seul chiffrage partout ?

@@ -125,11 +125,16 @@ pub(crate) fn need_ppq(eng: &Engraved) -> Vec<f32> {
 pub fn with_repeats(item: &Item) -> Item {
     let mut it = item.clone();
     let eng = it.engraved().clone();
-    let reps = cp_tab::repeats::find(&eng, &it.doc);
+    let tempos = it
+        .meter
+        .as_ref()
+        .map(|m| m.tempos.clone())
+        .unwrap_or_default();
+    let reps = cp_tab::repeats::find(&eng, &it.doc, &tempos);
     if reps.is_empty() {
         return it;
     }
-    let c = cp_tab::repeats::compact(&eng, &it.doc, &reps);
+    let c = cp_tab::repeats::compact(&eng, &it.doc, &tempos, &reps);
     it.meter = Some(c.meter);
     it.repeats = c.repeats;
     it.set_doc(c.notes);
@@ -693,6 +698,27 @@ fn draw_system(
             time_sig(cv, text, ink, bx, top, h * 0.5, n, d);
         }
     }
+    // Les marques au-dessus de la portee (tempo, « x3 ») passent au-dessus
+    // de la note la plus haute du systeme.
+    let mark_y = {
+        let top = staff.or(tabs).map_or(y, |v| v.0);
+        match staff {
+            Some((st, _)) => {
+                let maxpos = eng
+                    .signs
+                    .iter()
+                    .filter(|sg| sg.measure >= sy.m0 && sg.measure < sy.m1)
+                    .flat_map(|sg| eng.events[sg.ev].notes.iter())
+                    .filter_map(|&n| it.doc.get(n))
+                    .map(|n| cp_tab::key::spell(n.pitch + 12, eng.key.fifths).staff_pos())
+                    .max()
+                    .unwrap_or(8);
+                let note_top = st + 4.0 * gap - maxpos as f32 * gap * 0.5 - gap;
+                note_top.min(top) - s(15.0)
+            }
+            None => top - s(15.0),
+        }
+    };
     // Les barres de mesure ; la double barre a la fin du morceau ; la
     // reprise qui se ferme (« x3 » au-dessus quand elle se joue plus de deux
     // fois).
@@ -703,12 +729,11 @@ fn draw_system(
                 repeat_bar(cv, ink, x, a, b, false);
             }
             if rp.times > 2 {
-                let top = staff.or(tabs).map_or(y, |v| v.0);
                 text.draw_in(
                     cv,
                     Font::new(0, s(9.0) as u16, 700),
                     x - s(40.0),
-                    top - s(15.0),
+                    mark_y,
                     s(40.0),
                     s(12.0),
                     &format!("\u{00d7}{}", rp.times),
@@ -725,6 +750,49 @@ fn draw_system(
             } else {
                 cv.fill_rect(x - bar_w, a, bar_w, b - a, ink);
             }
+        }
+    }
+    // Les changements de tempo du systeme : une noire et sa valeur,
+    // au-dessus de la portee, a leur place.
+    if let Some(mt) = it.meter.clone() {
+        let (q0, q1) = (eng.qn(eng.bar_start(sy.m0)), eng.qn(eng.bar_start(sy.m1)));
+        for &(q, bpm) in mt
+            .tempos
+            .iter()
+            .filter(|t| t.0 >= q0 - 1e-9 && t.0 < q1 - 1e-9 && t.0 > eng.origin_qn + 1e-9)
+        {
+            let tx = geo.x(q) + geo.pad;
+            let fq = Font::new(3, s(12.0) as u16, 400);
+            let note = '\u{2669}'.to_string();
+            let nw = text.measure(fq, &note);
+            let ty = mark_y;
+            text.draw_in(
+                cv,
+                fq,
+                tx,
+                ty - s(2.0),
+                nw,
+                s(15.0),
+                &note,
+                ink,
+                Align::Left,
+            );
+            let b = if (bpm - bpm.round()).abs() < 0.05 {
+                format!("= {}", bpm.round() as i64)
+            } else {
+                format!("= {bpm:.1}")
+            };
+            text.draw_in(
+                cv,
+                Font::new(0, s(9.0) as u16, 700),
+                tx + nw + s(2.0),
+                ty,
+                s(60.0),
+                s(12.0),
+                &b,
+                ink,
+                Align::Left,
+            );
         }
     }
     // Le numero de la premiere mesure (des la deuxieme ligne).

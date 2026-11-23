@@ -225,6 +225,27 @@ pub fn write_musicxml(notes: &[TNote], spec: &ScoreSpec, dropped: usize) -> (Str
                 spec.bpm
             );
         }
+        // Les changements de tempo de la mesure (celui du debut est en tete).
+        if let Some(mt) = &spec.meter {
+            let (q0, q1) = (eng.qn(eng.bar_start(m)), eng.qn(eng.bar_start(m + 1)));
+            for &(q, bpm) in mt
+                .tempos
+                .iter()
+                .filter(|t| t.0 >= q0 - 1e-9 && t.0 < q1 - 1e-9 && t.0 > spec.origin_qn + 1e-9)
+            {
+                let off = ((q - q0) * g as f64).round() as i64;
+                let b = (bpm * 10.0).round() / 10.0;
+                let _ = writeln!(
+                    x,
+                    "      <direction placement=\"above\"><direction-type><metronome><beat-unit>quarter</beat-unit><per-minute>{b}</per-minute></metronome></direction-type>{}<sound tempo=\"{b}\"/></direction>",
+                    if off > 0 {
+                        format!("<offset>{off}</offset>")
+                    } else {
+                        String::new()
+                    }
+                );
+            }
+        }
         // Une reprise qui s'ouvre.
         if spec.repeats.iter().any(|r| r.m0 == m) {
             x += "      <barline location=\"left\"><bar-style>heavy-light</bar-style><repeat direction=\"forward\"/></barline>\n";

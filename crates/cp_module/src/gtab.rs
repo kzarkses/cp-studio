@@ -1139,7 +1139,8 @@ impl App {
         self.gt.arr.bpm = bpm;
         // Les changements de chiffrage du projet : les barres de la vue, et
         // les mesures de chaque partition.
-        self.gt.arr.meter = cp_tab::meter::Meter::new(r.meter_changes());
+        let (sigs, tempos) = r.time_map();
+        self.gt.arr.meter = cp_tab::meter::Meter::new(sigs).with_tempos(tempos);
         // Les items d'avant, par GUID : on les garde s'ils n'ont pas change.
         let mut old: HashMap<String, Item> = HashMap::new();
         let mut old_heads: HashMap<String, Head> = HashMap::new();
