@@ -191,6 +191,9 @@ impl Engine for Eng<'_> {
     fn voice_rate(&mut self, voice: u32, rate: f64) {
         self.host.audio_set(voice, 0, rate);
     }
+    fn release_clip(&mut self, clip: u32) {
+        self.host.audio_release(clip);
+    }
     fn voice_seek(&mut self, voice: u32, pos: f64) {
         // Param::Pos : un saut croise sur 5 ms dans le moteur.
         self.host.audio_set(voice, 7, pos.max(0.0));

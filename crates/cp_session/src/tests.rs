@@ -363,7 +363,7 @@ fn recliquer_annule_puis_arrete_a_la_frontiere() {
     s.put(0, 1, Clip::midi(b, 1.0, notes(&[(0.0, 1.0, 62)])));
     s.click(&mut e, 0, 0);
     let t0 = lat();
-    e.now = t0 + 100;
+    e.now = t0 + BAR / 2;
     s.tick(&mut e);
     s.click(&mut e, 0, 1);
     assert_eq!(s.state(0, 1), CellState::Queued);
@@ -1043,6 +1043,207 @@ fn une_case_audio_d_une_piste_a_instrument_joue_dans_sa_piste_de_son() {
         e.take()
             .iter()
             .any(|c| matches!(c, Call::VoicePlay { port: 3, .. }))
+    );
+}
+
+#[test]
+fn relecture_un_tempo_change_recale_les_fins_de_passe() {
+    // Motion datee apres un changement de tempo : a la fin REELLE de la
+    // passe (120 -> 240 BPM a mi-mesure : la mesure finit 1 s plus tot...
+    // en frames : 2 noires a 24000 puis 2 a 12000).
+    let (mut s, mut e) = setup();
+    for k in 0..2 {
+        let id = s.fresh_id();
+        s.put(
+            0,
+            k,
+            Clip::midi(id, 1.0, notes(&[(0.0, 1.0, 60 + k as u8)])),
+        );
+    }
+    s.cols[0].motion = Motion::MarchWrap;
+    s.click(&mut e, 0, 0);
+    let t0 = lat();
+    e.now = t0 + 2 * FPB as i64;
+    s.tick(&mut e);
+    let n = e.now;
+    s.sync_clock(&mut e, n, 0.0, 12000.0, 4.0, false);
+    e.take();
+    e.now = t0 + 2 * FPB as i64 + 12000 + 100;
+    s.tick(&mut e);
+    let end = t0 + 2 * FPB as i64 + 2 * 12000;
+    let c = e.take();
+    assert!(
+        c.iter()
+            .any(|c| matches!(c, Call::LanePlay { at, .. } if (*at - end).abs() <= 1)),
+        "{c:?}"
+    );
+}
+
+#[test]
+fn relecture_un_clip_qui_attend_prend_le_nouveau_tempo() {
+    let (mut s, mut e) = setup();
+    let a = s.fresh_id();
+    s.put(0, 0, Clip::midi(a, 1.0, notes(&[(0.0, 1.0, 60)])));
+    let b = s.fresh_id();
+    s.put(0, 1, Clip::midi(b, 1.0, notes(&[(0.0, 1.0, 62)])));
+    s.click(&mut e, 0, 0);
+    e.now = lat() + BAR / 2;
+    s.tick(&mut e);
+    s.click(&mut e, 0, 1);
+    let at = s.cols[0].run.next.as_ref().unwrap().start_f;
+    e.take();
+    // Un petit changement : la lane qui attend recoit le tempo a son frame.
+    let n = e.now;
+    s.sync_clock(&mut e, n, 0.0, 23990.0, 4.0, false);
+    assert!(e.take().contains(&Call::LaneRate {
+        port: 1,
+        fpb: 23990.0
+    }));
+    let _ = at;
+}
+
+#[test]
+fn relecture_un_overdub_ne_passe_pas_dans_le_clip_suivant() {
+    let (mut s, mut e) = setup();
+    let a = s.fresh_id();
+    s.put(0, 0, Clip::midi(a, 1.0, notes(&[(0.0, 0.5, 60)])));
+    let b = s.fresh_id();
+    s.put(0, 1, Clip::midi(b, 1.0, notes(&[(0.0, 0.5, 72)])));
+    s.click(&mut e, 0, 0);
+    let t0 = lat();
+    e.now = t0 + BAR + 100;
+    s.tick(&mut e);
+    e.take();
+    s.overdub(&mut e, 0);
+    let c = e.take();
+    let Call::MidiRecStart { id: rid, at: rs } = c[0] else {
+        panic!("{c:?}")
+    };
+    // La scene 1 est lancee a la mesure 3 : la prise (qui finissait la)
+    // est la derniere ; aucune autre ne s'enchaine.
+    let releve = t0 + 2 * BAR;
+    assert_eq!(
+        c[1],
+        Call::MidiRecStop {
+            id: rid,
+            at: releve
+        }
+    );
+    e.now = t0 + BAR + BAR / 2;
+    s.click(&mut e, 0, 1);
+    e.take();
+    let f = t0 + BAR + (1.5 * FPB) as i64 - rs;
+    e.takes
+        .insert(rid, vec![(f, [0x90, 67, 80]), (f + 6000, [0x80, 67, 0])]);
+    e.now = releve + 10;
+    s.tick(&mut e);
+    e.now = releve + 20;
+    s.tick(&mut e);
+    // La note rejoint le clip A ; B est intact ; l'overdub est fini.
+    assert_eq!(s.clip(0, 0).unwrap().notes().len(), 2);
+    assert_eq!(s.clip(0, 1).unwrap().notes().len(), 1);
+    assert!(s.cols[0].run.dub.is_none());
+}
+
+#[test]
+fn relecture_le_transport_s_arrete_pendant_une_prise() {
+    let (mut s, mut e) = setup();
+    s.clock = ClockMode::Follow;
+    s.sync_clock(&mut e, 0, 0.0, FPB, 4.0, true);
+    s.record(&mut e, 0, 0);
+    e.now = BAR / 2;
+    s.tick(&mut e);
+    let n = e.now;
+    s.sync_clock(&mut e, n, 2.0, FPB, 4.0, false);
+    e.now = 3 * BAR;
+    s.tick(&mut e);
+    // Rien n'est garde, rien ne joue.
+    assert!(s.clip(0, 0).is_none());
+    assert!(s.cols[0].run.rec.is_none() && s.cols[0].run.play.is_none());
+}
+
+#[test]
+fn relecture_deplacer_dans_sa_colonne_suit_ce_qui_joue() {
+    let (mut s, mut e) = setup();
+    let x = s.fresh_id();
+    s.put(0, 2, Clip::midi(x, 1.0, notes(&[(0.0, 1.0, 60)])));
+    let y = s.fresh_id();
+    s.put(0, 0, Clip::midi(y, 1.0, notes(&[(0.0, 1.0, 62)])));
+    s.click(&mut e, 0, 2);
+    e.now = lat() + 10;
+    s.tick(&mut e);
+    // Y glisse sur la case 2 (qui joue X) : X part en 0 et joue toujours.
+    s.move_cell(&mut e, (0, 0), (0, 2), false);
+    assert_eq!(s.clip(0, 0).unwrap().id, x);
+    assert_eq!(s.state(0, 0), CellState::Playing);
+    assert_eq!(s.state(0, 2), CellState::Stopped);
+}
+
+#[test]
+fn relecture_un_one_shot_continue_pendant_qu_une_case_attend() {
+    let (mut s, mut e) = setup();
+    e.srcs.insert(
+        "C:/x/hit.wav".into(),
+        AudioSrc {
+            clip: 7,
+            frames: 4800,
+            srate: 48000.0,
+            file_bpm: None,
+        },
+    );
+    let id = s.fresh_id();
+    let mut c = Clip::audio(id, "C:/x/hit.wav");
+    c.bars = 1.0;
+    if let Kind::Audio(a) = &mut c.kind {
+        a.looped = false;
+        a.tempo = TempoMode::None;
+    }
+    s.put(1, 0, c);
+    let mut c2 = Clip::audio(s.fresh_id(), "C:/x/hit.wav");
+    c2.bars = 1.0;
+    s.put(1, 1, c2);
+    s.q = Quant::Bar4;
+    s.click(&mut e, 1, 0);
+    let t0 = lat();
+    e.now = t0 + BAR / 2;
+    s.tick(&mut e);
+    s.click(&mut e, 1, 1);
+    e.take();
+    for k in 0..3 {
+        e.now = t0 + k * BAR + BAR - 1000;
+        s.tick(&mut e);
+    }
+    let all = e.take();
+    let plays = all
+        .iter()
+        .filter(|c| matches!(c, Call::VoicePlay { .. }))
+        .count();
+    // Trois passes de la case 0 avant sa releve (a 4 mesures).
+    assert_eq!(plays, 3);
+}
+
+#[test]
+fn relecture_editer_un_clip_qui_attend() {
+    let (mut s, mut e) = setup();
+    let a = s.fresh_id();
+    s.put(0, 0, Clip::midi(a, 1.0, notes(&[(0.0, 1.0, 60)])));
+    let b = s.fresh_id();
+    s.put(0, 1, Clip::midi(b, 1.0, notes(&[(0.0, 1.0, 62)])));
+    s.click(&mut e, 0, 0);
+    e.now = lat() + BAR / 2;
+    s.tick(&mut e);
+    s.click(&mut e, 0, 1);
+    let at = s.cols[0].run.next.as_ref().unwrap().start_f;
+    e.take();
+    if let Some(c) = s.clip_mut(0, 1) {
+        c.kind = Kind::Midi(notes(&[(0.0, 1.0, 62), (2.0, 1.0, 65)]));
+    }
+    s.clip_changed(&mut e, 0, 1);
+    let c = e.take();
+    assert!(c.contains(&Call::LaneCancel { port: 1 }));
+    assert!(
+        c.iter()
+            .any(|x| matches!(x, Call::LanePlay { at: f, .. } if *f == at))
     );
 }
 
