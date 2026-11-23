@@ -1433,7 +1433,12 @@ impl AudioHost {
     /// Un etireur libre du vivier (personne d'autre ne le tient), ou un
     /// neuf. Fil principal.
     fn free_shifter(&mut self) -> Option<cp_engine::shift::ShiftSlot> {
+        let sr = self.ctl.core().srate();
         if let Some(s) = self.shifters.iter().find(|s| Arc::strong_count(s) == 1) {
+            // Libre : personne d'autre ne le tient, le verrou est a nous.
+            if let Ok(mut st) = s.lock() {
+                st.ensure_srate(sr);
+            }
             return Some(s.clone());
         }
         if self.shifters.len() >= MAX_SHIFTERS {
@@ -1444,7 +1449,7 @@ impl AudioHost {
             (None, Some(r)) => Box::new(stretch::RtElastique(r.pitch_shift()?)),
             (None, None) => return None,
         };
-        let slot = cp_engine::shift::ShiftState::new(sh, self.ctl.core().srate());
+        let slot = cp_engine::shift::ShiftState::new(sh, sr);
         self.shifters.push(slot.clone());
         Some(slot)
     }

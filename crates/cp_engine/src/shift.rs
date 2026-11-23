@@ -51,6 +51,8 @@ pub struct ShiftState {
     /// Les reglages poses, pour ne les reposer qu'a un changement.
     tempo: f64,
     shift: f64,
+    /// Le taux pour lequel l'etireur est regle.
+    srate: f64,
 }
 
 impl std::fmt::Debug for ShiftState {
@@ -81,7 +83,18 @@ impl ShiftState {
             flushed: false,
             tempo: 1.0,
             shift: 1.0,
+            srate,
         }))
+    }
+
+    /// Fil principal, etireur libre : le regler pour le taux de la carte
+    /// s'il a change depuis (un autre peripherique).
+    pub fn ensure_srate(&mut self, srate: f64) {
+        if srate > 1.0 && (srate - self.srate).abs() > 1e-6 {
+            self.sh.setup(srate, 2);
+            self.srate = srate;
+            self.restart();
+        }
     }
 
     /// Un nouveau depart : tout ce qui etait en route est oublie.
