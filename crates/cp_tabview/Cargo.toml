@@ -8,6 +8,8 @@ publish.workspace = true
 
 [dependencies]
 cp_gfx = { path = "../cp_gfx" }
+cp_palette = { path = "../cp_palette" }
+cp_roll = { path = "../cp_roll" }
 cp_tab = { path = "../cp_tab" }
 cp_ui = { path = "../cp_ui" }
 

@@ -35,14 +35,19 @@ pub struct Key {
 }
 
 impl Key {
-    /// « E minor », « Bb major ».
-    pub fn name(&self) -> String {
+    /// La tonique (0 = Do) : celle de la majeure, ou de sa relative mineure.
+    pub fn tonic(&self) -> i32 {
         let major_pc = (FIFTHS.iter().position(|&f| f == self.fifths).unwrap_or(0)) as i32;
-        let pc = if self.minor {
+        if self.minor {
             (major_pc + 9).rem_euclid(12)
         } else {
             major_pc
-        };
+        }
+    }
+
+    /// « E minor », « Bb major ».
+    pub fn name(&self) -> String {
+        let pc = self.tonic();
         let s = spell(pc + 60, self.fifths);
         let acc = match s.alter {
             1 => "#",

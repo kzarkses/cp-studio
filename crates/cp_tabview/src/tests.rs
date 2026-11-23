@@ -1365,10 +1365,11 @@ fn le_survol_ne_laisse_pas_de_trainee() {
     );
 }
 
-/// Le clic droit glisse : le lasso de l'arrangement. Il choisit les items
-/// qu'il touche (la couche audio : l'item audio ; le MIDI, la partition, la
-/// tab : l'item MIDI), Maj en plus, Ctrl en inversant ; un clic droit sans
-/// bouger ne change rien.
+/// Le clic droit glisse : le lasso de l'arrangement. Dans les couches audio
+/// et MIDI il choisit les items qu'il touche (l'audio : l'item audio ; le
+/// MIDI : l'item MIDI), Maj en plus, Ctrl en inversant ; un clic droit sans
+/// bouger ne change rien. (Dans la partition et la tab, il choisit des notes :
+/// `le_lasso_des_notes_et_leur_glisser`.)
 #[test]
 fn le_lasso_choisit_les_prises() {
     use cp_ui::Pointer as P;
@@ -1376,6 +1377,7 @@ fn le_lasso_choisit_les_prises() {
     let mut v = arranger();
     v.rec.clear();
     v.tracks[0].items[0].midi = true;
+    v.tracks[0].head.lanes = Lanes([true, true, true, true]);
     b.draw(&mut v);
     let rect = |v: &Arr, lane| {
         v.rect_of(Hit::Item { t: 0, i: 0, lane })
@@ -1418,8 +1420,8 @@ fn le_lasso_choisit_les_prises() {
         })
     );
     assert_eq!(v.tracks[0].items[0].picked, (true, false));
-    // Maj : la tab en plus (l'item MIDI).
-    let tab = rect(&v, Lane::Tab);
+    // Maj : le MIDI en plus (l'item MIDI).
+    let tab = rect(&v, Lane::Midi);
     let shift = Mods {
         shift: true,
         ..Mods::default()
@@ -1623,7 +1625,18 @@ fn la_palette_d_une_note_et_ses_gestes() {
         click(v, p, Button::Right, Mods::default());
         assert!(v.palette.is_some(), "la palette ne s'ouvre pas");
         b.draw(v);
-        let r = v.rect_of(Hit::Mark(m)).expect("la marque");
+        // Le groupe de la marque, puis la marque.
+        let id = MARK_OPS.iter().find(|x| x.1 == m).expect("une marque").0;
+        let cat = if id >= 110 { 8u8 } else { 7u8 };
+        let c = v.rect_of(Hit::PalCat(cat)).expect("le groupe");
+        click(
+            v,
+            (c.0 + c.2 * 0.5, c.1 + c.3 * 0.5),
+            Button::Left,
+            Mods::default(),
+        );
+        b.draw(v);
+        let r = v.rect_of(Hit::PalOp(id)).expect("la marque");
         let a = click(
             v,
             (r.0 + r.2 * 0.5, r.1 + r.3 * 0.5),
@@ -1636,7 +1649,10 @@ fn la_palette_d_une_note_et_ses_gestes() {
     };
     assert_eq!(
         pick(&mut v, &mut b, 1, Mark::Full),
-        Some(Act::Edited { t: 0, i: 0 })
+        Some(Act::EditedItems {
+            items: vec![(0, 0)],
+            label: "CP Guitar Tab: playing technique"
+        })
     );
     let n1 = || 1usize;
     assert_eq!(
@@ -2585,4 +2601,232 @@ fn la_poignee_de_la_vue_ancree() {
         Some(Act::ViewMenu { .. })
     ));
     b.shot(&mut v, "19_poignee");
+}
+
+/// Le lasso dans la tablature choisit des notes (pas des prises) ; un
+/// glisser gauche les deplace ensemble ; Ctrl + clic en retire une ; Suppr
+/// efface les choisies ; la palette du clic droit (celle de l'editeur) pose
+/// un accord sur des cordes distinctes, et son apercu se dessine.
+#[test]
+fn le_lasso_des_notes_et_leur_glisser() {
+    use cp_tab::doc::TNote;
+    let mut b = Bench::new(1600, 900);
+    let mut v = arranger();
+    v.rec.clear();
+    let q0 = v.tracks[0].items[0].qn0;
+    let note = |q: f64, string: usize, fret: i32| {
+        let open = [40, 45, 50, 55, 59, 64][string];
+        TNote {
+            qn0: q0 + q,
+            qn1: q0 + q + 0.5,
+            pitch: open + fret,
+            string,
+            fret,
+            vel: 96,
+            ..Default::default()
+        }
+    };
+    let d = vec![
+        note(0.0, 3, 5),
+        note(1.0, 3, 7),
+        note(2.0, 4, 3),
+        note(6.0, 2, 2),
+    ];
+    v.tracks[0].items[0].set_doc(d);
+    v.tracks[0].items[0].ghosts.clear();
+    b.draw(&mut v);
+    let none = Mods::default();
+    let tab_box = |v: &Arr, n: usize| {
+        v.boxes
+            .iter()
+            .filter(|x| x.4 == Hit::Note { t: 0, i: 0, n })
+            .max_by(|a, b| a.1.partial_cmp(&b.1).unwrap())
+            .map(|x| (x.0 + x.2 * 0.5, x.1 + x.3 * 0.5))
+            .expect("la note dans la tab")
+    };
+    let tab = v
+        .rect_of(Hit::Item {
+            t: 0,
+            i: 0,
+            lane: Lane::Tab,
+        })
+        .expect("la tab");
+    let picked = v.tracks[0].items[0].picked;
+    // Le lasso sur les trois premieres notes.
+    let (xa, _) = tab_box(&v, 0);
+    let (xc, _) = tab_box(&v, 2);
+    v.event(&Ev::Down {
+        x: xa - 8.0,
+        y: tab.1 + 2.0,
+        b: Button::Right,
+        dbl: false,
+        mods: none,
+    });
+    v.event(&Ev::Move {
+        x: xc + 8.0,
+        y: tab.1 + tab.3 - 2.0,
+        mods: none,
+    });
+    b.shot(&mut v, "20_lasso_des_notes");
+    let a = v.event(&Ev::Up {
+        x: xc + 8.0,
+        y: tab.1 + tab.3 - 2.0,
+        b: Button::Right,
+        mods: none,
+    });
+    assert_eq!(a, None);
+    assert_eq!(
+        v.tracks[0].items[0].picked, picked,
+        "les prises ne changent pas"
+    );
+    assert_eq!(v.tracks[0].items[0].chosen(), vec![0, 1, 2]);
+    assert!(v.palette.is_none());
+    // Glissees ensemble d'une noire (la note saisie se cale).
+    b.draw(&mut v);
+    let (x, y) = tab_box(&v, 1);
+    let ppq = v.lay.ppq;
+    v.event(&Ev::Down {
+        x,
+        y,
+        b: Button::Left,
+        dbl: false,
+        mods: none,
+    });
+    v.event(&Ev::Move {
+        x: x + ppq,
+        y,
+        mods: none,
+    });
+    let a = v.event(&Ev::Up {
+        x: x + ppq,
+        y,
+        b: Button::Left,
+        mods: none,
+    });
+    assert_eq!(a, Some(Act::Edited { t: 0, i: 0 }));
+    let it = &v.tracks[0].items[0];
+    let starts: Vec<f64> = it.doc.iter().map(|n| n.qn0 - q0).collect();
+    assert_eq!(starts, vec![1.0, 2.0, 3.0, 6.0]);
+    assert_eq!(it.chosen(), vec![0, 1, 2]);
+    assert!(it.doc[0].locked && !it.doc[3].locked);
+    // Un simple clic sur une note choisie : elle seule reste choisie.
+    b.draw(&mut v);
+    let p = tab_box(&v, 2);
+    v.event(&Ev::Down {
+        x: p.0,
+        y: p.1,
+        b: Button::Left,
+        dbl: false,
+        mods: none,
+    });
+    v.event(&Ev::Up {
+        x: p.0,
+        y: p.1,
+        b: Button::Left,
+        mods: none,
+    });
+    assert_eq!(v.tracks[0].items[0].chosen(), vec![2]);
+    // Ctrl + clic : en plus, puis en moins.
+    let ctrl = Mods { ctrl: true, ..none };
+    let p0 = tab_box(&v, 0);
+    for _ in 0..2 {
+        v.event(&Ev::Down {
+            x: p0.0,
+            y: p0.1,
+            b: Button::Left,
+            dbl: false,
+            mods: ctrl,
+        });
+        v.event(&Ev::Up {
+            x: p0.0,
+            y: p0.1,
+            b: Button::Left,
+            mods: ctrl,
+        });
+    }
+    assert_eq!(v.tracks[0].items[0].chosen(), vec![2]);
+    v.event(&Ev::Down {
+        x: p0.0,
+        y: p0.1,
+        b: Button::Left,
+        dbl: false,
+        mods: ctrl,
+    });
+    assert_eq!(v.tracks[0].items[0].chosen(), vec![0, 2]);
+    // Suppr : les deux s'effacent, un pas d'annulation.
+    let a = v.event(&Ev::Key {
+        vk: vk::DELETE,
+        mods: none,
+        text: None,
+    });
+    assert_eq!(
+        a,
+        Some(Act::EditedItems {
+            items: vec![(0, 0)],
+            label: "CP Guitar Tab: delete notes"
+        })
+    );
+    assert_eq!(v.tracks[0].items[0].doc.len(), 2);
+    assert_eq!(v.tracks[0].items[0].suppressed.len(), 2);
+    // La palette sur une note : l'accord majeur, des cordes distinctes.
+    b.draw(&mut v);
+    let p = tab_box(&v, 0);
+    v.event(&Ev::Down {
+        x: p.0,
+        y: p.1,
+        b: Button::Right,
+        dbl: false,
+        mods: none,
+    });
+    v.event(&Ev::Up {
+        x: p.0,
+        y: p.1,
+        b: Button::Right,
+        mods: none,
+    });
+    assert!(v.palette.is_some());
+    assert_eq!(v.tracks[0].items[0].chosen(), vec![0]);
+    b.draw(&mut v);
+    let c = v.rect_of(Hit::PalCat(4)).expect("le groupe des accords");
+    v.event(&Ev::Down {
+        x: c.0 + 4.0,
+        y: c.1 + 4.0,
+        b: Button::Left,
+        dbl: false,
+        mods: none,
+    });
+    b.draw(&mut v);
+    let m = v.rect_of(Hit::PalOp(71)).expect("l'accord majeur");
+    v.event(&Ev::Move {
+        x: m.0 + 4.0,
+        y: m.1 + 4.0,
+        mods: none,
+    });
+    assert!(v.palette.as_ref().unwrap().preview.is_some(), "l'apercu");
+    b.shot(&mut v, "21_palette_de_la_tab");
+    let a = v.event(&Ev::Down {
+        x: m.0 + 4.0,
+        y: m.1 + 4.0,
+        b: Button::Left,
+        dbl: false,
+        mods: none,
+    });
+    assert!(matches!(a, Some(Act::EditedItems { .. })), "{a:?}");
+    assert!(v.palette.is_none());
+    let it = &v.tracks[0].items[0];
+    assert_eq!(it.doc.len(), 4);
+    let q = it.doc[0].qn0;
+    let mut strings: Vec<usize> = it
+        .doc
+        .iter()
+        .filter(|n| (n.qn0 - q).abs() < 1e-9)
+        .map(|n| n.string)
+        .collect();
+    strings.sort_unstable();
+    strings.dedup();
+    assert_eq!(strings.len(), 3);
+    for n in &it.doc {
+        assert_eq!(n.pitch, [40, 45, 50, 55, 59, 64][n.string] + n.fret);
+    }
+    assert_eq!(it.chosen().len(), 3);
 }

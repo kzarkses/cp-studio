@@ -1444,6 +1444,11 @@ impl App {
         let midi_hash = midi.and_then(|m| m.take()).and_then(|t| t.hash.clone());
         let midi_take_ok = midi.and_then(|m| m.ext[I_TAKE].as_deref()) == Some(tk.guid.as_str());
         let forced = self.gt.force.remove(&is.guid);
+        // Les notes choisies survivent a un item refait.
+        let chosen = old
+            .as_ref()
+            .map(|o| o.sel_notes.clone())
+            .unwrap_or_default();
         // Ses mesures : celle ou il commence, et celles du projet.
         let (o_qn, o_sig, _) = r.measure_at(is.pos);
         let meter = self.gt.arr.meter.clone();
@@ -1517,6 +1522,7 @@ impl App {
             })
             .collect();
         let mut it = Item::new(is.guid.clone(), tk.guid.clone(), akey.clone());
+        it.sel_notes = chosen;
         it.name = take_name(&tk.name);
         it.qn0 = qn0;
         it.qn1 = qn1;
@@ -2244,6 +2250,19 @@ impl App {
             GAct::Record => r.main_on_command(1013), // Transport : enregistrer
             GAct::Undo => r.main_on_command(40029),
             GAct::Edited { t, i } => self.gtab_write(t, i, "CP Guitar Tab: edit"),
+            GAct::EditedItems { items, label } => {
+                // Plusieurs items : un seul pas d'annulation.
+                let many = items.len() > 1;
+                if many {
+                    r.undo_begin();
+                }
+                for (t, i) in items {
+                    self.gtab_write(t, i, label);
+                }
+                if many {
+                    r.undo_end(label, -1);
+                }
+            }
             GAct::Detect { t, i, range } => {
                 let k = self
                     .gt

@@ -15,6 +15,7 @@
 
 pub mod draw;
 mod item;
+mod notes;
 pub mod print;
 #[cfg(test)]
 mod tests;
@@ -27,11 +28,13 @@ use cp_tab::engrave::Engraved;
 use cp_tab::fret::Tuning;
 use cp_ui::{Button, Ev, Mods, vk};
 
+pub use notes::{MARK_OPS, NoteKey, TabPalette, TabPreview};
+
 /// Les accordages proposes (de la corde grave a l'aigue).
 /// L'aide : les touches et les gestes (l'infobulle du « ? »).
 pub const HELP: &str = "Keys\n\
 R  arm   \u{00b7}   Ctrl+R  record   \u{00b7}   Space  play   \u{00b7}   Ctrl+Z  undo\n\
-Del  note or item   \u{00b7}   0\u{2013}9  fret   \u{00b7}   \u{2191}\u{2193}  string   \u{00b7}   \u{2190}\u{2192}  note\n\
+Del  selected notes, note or item   \u{00b7}   0\u{2013}9  fret   \u{00b7}   \u{2191}\u{2193}  string   \u{00b7}   \u{2190}\u{2192}  note\n\
 H  hammer-on   \u{00b7}   P  pull-off\n\
 \n\
 Mouse\n\
@@ -40,8 +43,10 @@ Shift+wheel  zoom   \u{00b7}   Ctrl+wheel  lane height\n\
 Middle drag  move the view (on the ruler, up/down zooms)\n\
 Drag a take  move it (Shift: no snap, Ctrl: copy)   \u{00b7}   drop audio files  new takes\n\
 Double-click the MIDI  editor   \u{00b7}   double-click a string  add a note\n\
-Right-click a note  slides, bends   \u{00b7}   Alt+click a note  delete it\n\
-Drag a note up/down in the tab  another string   \u{00b7}   right drag  select items";
+Right drag in the score or tab  select notes   \u{00b7}   elsewhere  select items\n\
+Ctrl+click a note  add or remove it   \u{00b7}   Shift+click  add it\n\
+Drag a note  move the selected notes (Shift: no snap; up/down in the tab: strings)\n\
+Right-click  the palette (chords, arpeggios, bends, techniques...)   \u{00b7}   Alt+click a note  delete it";
 
 pub const TUNINGS: [(&str, [i32; 6]); 5] = [
     ("Standard E", [40, 45, 50, 55, 59, 64]),
@@ -376,6 +381,9 @@ pub struct Item {
     /// Les attaques entendues dans l'audio (noires du projet, triees) : le
     /// magnetisme du jeu libre.
     pub attacks: Vec<f64>,
+    /// Les notes choisies (leurs cles) : le lasso, Ctrl/Maj + clic ; on les
+    /// glisse, on les efface, la palette les vise.
+    pub sel_notes: HashSet<(i64, i32)>,
 }
 
 impl Track {
@@ -482,8 +490,11 @@ pub struct Sel {
 pub enum Hit {
     None,
     Ruler,
-    /// Une marque de la palette d'une note.
-    Mark(Mark),
+    /// La palette du clic droit : un groupe (rang dans [`cp_palette::Cat::TAB`]),
+    /// une operation, son fond.
+    PalCat(u8),
+    PalOp(u32),
+    PalFrame,
     /// Une note de la tablature ou de la partition.
     Note {
         t: usize,
@@ -591,6 +602,12 @@ pub enum Act {
     Edited {
         t: usize,
         i: usize,
+    },
+    /// Plusieurs tablatures corrigees ensemble (des notes glissees, la
+    /// palette) : un seul pas d'annulation, `label`.
+    EditedItems {
+        items: Vec<(usize, usize)>,
+        label: &'static str,
     },
     /// Un reglage a change : redecoder l'item (seulement ce passage).
     Detect {
@@ -759,15 +776,19 @@ enum Drag {
         x0: f32,
         y0: f32,
     },
-    /// Une note deplacee : son debut d'origine et la position de la souris.
-    Note {
+    /// Des notes glissees : la note saisie (son debut et sa corde
+    /// d'origine), et les choisies avec elle ([`Arr::moving`]). `solo` : un
+    /// simple clic sur une note deja choisie la choisit seule.
+    Notes {
         t: usize,
         i: usize,
         n: usize,
         qn0: f64,
+        s0: usize,
         x0: f32,
         y0: f32,
         moved: bool,
+        solo: bool,
     },
     /// Un passage choisi sur la regle.
     Range {
@@ -816,6 +837,9 @@ enum Drag {
         moved: bool,
         /// Commence sur une note : un clic droit sans bouger ouvre sa palette.
         note: Option<(usize, usize, usize)>,
+        /// Commence dans une partition ou une tablature : il choisit des
+        /// notes (ailleurs : des prises).
+        notes: bool,
     },
     /// Une guitare qu'on glisse par son en-tete (comme les pistes de
     /// REAPER) : ou elle irait.
@@ -906,8 +930,21 @@ pub struct Arr {
     /// La hauteur des couches audio et MIDI (Ctrl + molette).
     pub vzoom: f32,
     pub follow: bool,
-    /// La palette d'une note (clic droit), ouverte.
-    pub palette: Option<Palette>,
+    /// La palette du clic droit, ouverte.
+    pub palette: Option<TabPalette>,
+    /// Les items qu'elle vise (le premier : celui du clic).
+    pub(crate) pal_items: Vec<(usize, usize)>,
+    /// La force et le swing de la quantification, les rythmes euclidiens, le
+    /// dernier groupe ouvert, la graine du hasard (humanize, arpege).
+    pub strength: f64,
+    pub swing: f64,
+    pub euclid: [(usize, usize); 6],
+    pub pal_last: cp_palette::Cat,
+    pub(crate) gen_seed: u64,
+    /// Les notes glissees : (piste, item, tablature d'avant, rangs choisis).
+    pub(crate) moving: Vec<(usize, usize, Vec<TNote>, Vec<usize>)>,
+    /// Le lasso des notes : la selection d'avant, item par item.
+    pub(crate) lasso_base: Vec<(usize, usize, HashSet<NoteKey>)>,
     /// La vue est celle de l'arrangement de REAPER (le module la tient) : elle
     /// ne tourne jamais la page d'elle-meme, REAPER le fait (son
     /// defilement pendant la lecture), et `follow` montre son reglage.
@@ -1098,16 +1135,6 @@ pub fn vibrato_curve(len: f64, bpm: f64) -> Vec<(f64, f32)> {
     v
 }
 
-/// La palette ouverte : la note, et ou elle s'ouvre.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct Palette {
-    pub t: usize,
-    pub i: usize,
-    pub n: usize,
-    pub x: f32,
-    pub y: f32,
-}
-
 /// Un clic sur Solo, comme dans REAPER : seul (en place), Alt (sans tenir
 /// compte du routage), Ctrl (toutes les pistes), Ctrl + Alt (exclusif).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1223,6 +1250,14 @@ impl Arr {
             follow: true,
             synced: false,
             palette: None,
+            pal_items: Vec::new(),
+            strength: 1.0,
+            swing: 0.0,
+            euclid: cp_palette::EUCLID,
+            pal_last: cp_palette::Cat::default(),
+            gen_seed: 1,
+            moving: Vec::new(),
+            lasso_base: Vec::new(),
             playhead: None,
             playing: false,
             rec: Vec::new(),
@@ -1504,6 +1539,11 @@ impl Arr {
             _ => None,
         };
         self.sel = Some(Sel { t, i, n });
+        for tr in &mut self.tracks {
+            for it in &mut tr.items {
+                it.prune_chosen();
+            }
+        }
         self.dirty = true;
     }
 
@@ -1908,6 +1948,9 @@ impl Arr {
 
     pub fn delete_note(&mut self) -> Option<Act> {
         let (t, i, next) = self.with_note(|it, n| it.delete_note(n))?;
+        if let Some(it) = self.item_mut(t, i) {
+            it.prune_chosen();
+        }
         let s = Some(Sel {
             t,
             i: Some(i),
@@ -1926,21 +1969,13 @@ impl Arr {
         fret: i32,
     ) -> Option<Act> {
         let n = self.item_mut(t, i)?.add_note(qn, string, fret)?;
-        self.select(Some(Sel {
-            t,
-            i: Some(i),
-            n: Some(n),
-        }));
+        self.focus_note(t, i, Some(n));
         self.edited(t, i)
     }
 
     pub fn keep_ghost(&mut self, t: usize, i: usize, g: usize) -> Option<Act> {
         let n = self.item_mut(t, i)?.keep_ghost(g)?;
-        self.select(Some(Sel {
-            t,
-            i: Some(i),
-            n: Some(n),
-        }));
+        self.focus_note(t, i, Some(n));
         self.edited(t, i)
     }
 
@@ -2047,24 +2082,51 @@ impl Arr {
 
     /// Un evenement de la fenetre ; rend ce que le module doit faire.
     pub fn event(&mut self, ev: &Ev) -> Option<Act> {
-        // La palette d'une note : un clic sur une marque l'applique, un clic
-        // ailleurs (ou Echap, ou la molette) la ferme.
-        if let Some(p) = self.palette {
+        // La palette : un clic sur une icone l'applique, un groupe survole
+        // s'ouvre, un clic ailleurs (ou Echap) la ferme ; la molette sur un
+        // rythme euclidien change ses coups, ailleurs elle la ferme.
+        if self.palette.is_some() {
             match *ev {
-                Ev::Down { x, y, b, .. } => {
-                    self.palette = None;
-                    self.dirty = true;
-                    return match (b, self.hit(x, y)) {
-                        (Button::Left, Hit::Mark(m)) => self.apply_mark(p.t, p.i, p.n, m),
-                        _ => None,
+                Ev::Down { x, y, b, mods, .. } => {
+                    let h = self.hit(x, y);
+                    return match h {
+                        Hit::PalCat(_) | Hit::PalOp(_) if b == Button::Left => {
+                            self.pal_click(h, mods.shift)
+                        }
+                        Hit::PalCat(_) | Hit::PalOp(_) | Hit::PalFrame => None,
+                        _ => {
+                            self.close_palette();
+                            None
+                        }
                     };
                 }
-                Ev::Key { vk: vk::ESCAPE, .. } | Ev::Wheel { .. } => {
-                    self.palette = None;
-                    self.dirty = true;
-                    if matches!(ev, Ev::Key { .. }) {
+                Ev::Up { .. } => {
+                    self.drag = None;
+                    return None;
+                }
+                Ev::Move { x, y, mods } => {
+                    let (px, py) = (self.mouse.0, self.mouse.1);
+                    self.mouse = (x, y, mods);
+                    let h = self.hit(x, y);
+                    self.set_hover(h);
+                    self.pal_move(h, x - px, y - py);
+                    return None;
+                }
+                Ev::Key { vk: vk::ESCAPE, .. } => {
+                    self.close_palette();
+                    return None;
+                }
+                Ev::Wheel { x, y, dy, mods, .. } => {
+                    if let Hit::PalOp(id) = self.hit(x, y) {
+                        if (90..=95).contains(&id) {
+                            self.pal_wheel(id, dy > 0.0, mods.shift);
+                        }
                         return None;
                     }
+                    if matches!(self.hit(x, y), Hit::PalCat(_) | Hit::PalFrame) {
+                        return None;
+                    }
+                    self.close_palette();
                 }
                 _ => {}
             }
@@ -2082,47 +2144,50 @@ impl Arr {
                 }
                 match self.drag {
                     Some(Drag::Handle { .. }) => {}
-                    Some(Drag::Note {
+                    Some(Drag::Notes {
                         t,
                         i,
                         n,
                         qn0,
+                        s0,
                         x0,
                         y0,
                         moved,
+                        solo,
                     }) => {
                         let far = (x - x0).abs().max((y - y0).abs()) >= 4.0 * self.scale;
                         if !moved && !far {
                             return None;
                         }
-                        self.drag = Some(Drag::Note {
+                        self.drag = Some(Drag::Notes {
                             t,
                             i,
                             n,
                             qn0,
+                            s0,
                             x0,
                             y0,
                             moved: true,
+                            solo,
                         });
                         let dq = ((x - x0) / self.lay.ppq.max(1e-3)) as f64;
-                        // La corde sous la souris (dans la tablature) : la note y
-                        // passe, a la meme hauteur, si elle s'y joue.
+                        // La corde sous la souris (dans la tablature) : les notes
+                        // y passent d'autant de cordes, a la meme hauteur, si
+                        // elles s'y jouent.
                         let string = self.boxes.iter().find_map(|b| match b.4 {
                             Hit::TabLine { t: bt, i: bi, s } if bt == t && bi == i => {
                                 (y >= b.1 && y < b.1 + b.3).then_some(s)
                             }
                             _ => None,
                         });
-                        if let Some(it) = self.item_mut(t, i) {
-                            let q = it.snap(qn0 + dq);
-                            let mut changed = it.move_note(n, q);
-                            if let Some(s) = string {
-                                changed |= it.set_string(n, s);
-                            }
-                            if changed {
-                                self.dirty = true;
-                            }
-                        }
+                        // La note saisie se cale (Maj : sans magnetisme), les
+                        // autres la suivent.
+                        let q = match self.item(t, i) {
+                            Some(it) if !mods.shift => it.snap(qn0 + dq),
+                            _ => qn0 + dq,
+                        };
+                        let ds = string.map_or(0, |s| s as i32 - s0 as i32);
+                        self.notes_drag_to(q - qn0, ds);
                         return None;
                     }
                     Some(Drag::Range { q0 }) => {
@@ -2136,6 +2201,7 @@ impl Arr {
                         y0,
                         moved,
                         note,
+                        notes,
                         ..
                     }) => {
                         let moved = moved || (x - x0).abs().max((y - y0).abs()) >= 3.0;
@@ -2146,7 +2212,11 @@ impl Arr {
                             y1: y,
                             moved,
                             note,
+                            notes,
                         });
+                        if notes && moved {
+                            self.lasso_update((x0, y0, x, y), Pick::of(mods));
+                        }
                         if moved {
                             self.dirty = true;
                         }
@@ -2346,13 +2416,48 @@ impl Arr {
                         y0,
                         ..
                     }) => {
-                        self.palette = Some(Palette {
-                            t,
-                            i,
-                            n,
-                            x: x0,
-                            y: y0,
+                        // La note sous le clic : choisie (seule, si elle ne
+                        // l'etait pas), puis la palette sur les notes choisies.
+                        if !self.item(t, i).is_some_and(|it| it.is_chosen(n)) {
+                            self.focus_note(t, i, Some(n));
+                        }
+                        self.open_palette(x0, y0, t, i);
+                        None
+                    }
+                    Some(Drag::Marquee {
+                        moved: false,
+                        notes: true,
+                        x0,
+                        y0,
+                        ..
+                    }) => {
+                        // Dans une partition ou une tablature, hors des notes :
+                        // la palette sur les notes choisies (sinon toutes
+                        // celles de l'item).
+                        let at = self.boxes.iter().rev().find_map(|b| match b.4 {
+                            Hit::Item { t, i, .. }
+                                if x0 >= b.0 && x0 < b.0 + b.2 && y0 >= b.1 && y0 < b.1 + b.3 =>
+                            {
+                                Some((t, i))
+                            }
+                            _ => None,
                         });
+                        if let Some((t, i)) = at {
+                            self.open_palette(x0, y0, t, i);
+                        }
+                        None
+                    }
+                    Some(Drag::Marquee {
+                        x0,
+                        y0,
+                        x1,
+                        y1,
+                        moved: true,
+                        notes: true,
+                        ..
+                    }) => {
+                        self.lasso_update((x0, y0, x1, y1), Pick::of(mods));
+                        self.lasso_base.clear();
                         None
                     }
                     Some(Drag::Marquee {
@@ -2368,21 +2473,36 @@ impl Arr {
                         self.apply_pick(&items, pick);
                         Some(Act::SelectItems { items, pick })
                     }
-                    Some(Drag::Note {
+                    Some(Drag::Notes {
                         moved: true,
                         t,
                         i,
                         n,
                         ..
                     }) => {
-                        let it = self.item_mut(t, i)?;
-                        let n2 = it.resort(n);
-                        self.select(Some(Sel {
-                            t,
-                            i: Some(i),
-                            n: n2,
-                        }));
-                        self.edited(t, i)
+                        let items = self.notes_drag_end((t, i, n));
+                        match items.as_slice() {
+                            [] => None,
+                            [(t, i)] => self.edited(*t, *i),
+                            _ => Some(Act::EditedItems {
+                                items,
+                                label: "CP Guitar Tab: move notes",
+                            }),
+                        }
+                    }
+                    Some(Drag::Notes {
+                        moved: false,
+                        t,
+                        i,
+                        n,
+                        solo,
+                        ..
+                    }) => {
+                        self.moving.clear();
+                        if solo {
+                            self.focus_note(t, i, Some(n));
+                        }
+                        None
                     }
                     Some(Drag::Range { .. }) => {
                         // Un simple clic sur la regle : pas de passage.
@@ -2561,8 +2681,10 @@ impl Arr {
                 | Hit::Tuning(t) => Some(Act::TrackMenu { t, x, y }),
                 _ if y < self.lay.bar_h => Some(Act::ViewMenu { x, y }),
                 _ => {
-                    // Dans les pistes : le lasso, comme dans l'arrangement ;
-                    // sur une note, sans bouger : sa palette.
+                    // Dans les pistes : le lasso, comme dans l'arrangement
+                    // (des notes dans une partition ou une tablature, des
+                    // prises ailleurs) ; sur une note, sans bouger : la palette.
+                    let notes = self.in_notes_lane(x, y);
                     let note = match h {
                         Hit::Note { t, i, n } => {
                             self.select(Some(Sel {
@@ -2587,7 +2709,11 @@ impl Arr {
                             y1: y,
                             moved: false,
                             note,
+                            notes,
                         });
+                        if notes {
+                            self.lasso_begin();
+                        }
                     }
                     None
                 }
@@ -2607,15 +2733,31 @@ impl Arr {
                 if mods.alt {
                     return self.delete_note();
                 }
-                let qn0 = self.item(t, i)?.doc.get(n)?.qn0;
-                self.drag = Some(Drag::Note {
+                // Ctrl + clic : choisie ou non, sans rien deplacer.
+                if mods.ctrl {
+                    self.choose(t, i, n, Pick::Toggle);
+                    return None;
+                }
+                let was = self.item(t, i)?.is_chosen(n);
+                let many = self.chosen_notes().len() > 1;
+                if mods.shift {
+                    self.choose(t, i, n, Pick::Add);
+                } else if !was {
+                    self.choose(t, i, n, Pick::Replace);
+                }
+                let note = self.item(t, i)?.doc.get(n)?;
+                let (qn0, s0) = (note.qn0, note.string);
+                self.notes_drag_begin();
+                self.drag = Some(Drag::Notes {
                     t,
                     i,
                     n,
                     qn0,
+                    s0,
                     x0: x,
                     y0: y,
                     moved: false,
+                    solo: was && many && !mods.shift,
                 });
                 None
             }
@@ -2630,6 +2772,9 @@ impl Arr {
                         i: Some(i),
                         n: None,
                     }));
+                    if !mods.shift && !mods.ctrl {
+                        self.clear_chosen();
+                    }
                     Some(Act::Seek(self.cursor_q(x, mods)))
                 }
             }
@@ -2690,6 +2835,9 @@ impl Arr {
                     });
                     return None;
                 }
+                if !mods.shift && !mods.ctrl {
+                    self.clear_chosen();
+                }
                 Some(Act::Seek(self.cursor_q(x, mods)))
             }
             Hit::Lane { t, .. } => {
@@ -2698,6 +2846,9 @@ impl Arr {
                     i: None,
                     n: None,
                 }));
+                if !mods.shift && !mods.ctrl {
+                    self.clear_chosen();
+                }
                 Some(Act::Seek(self.cursor_q(x, mods)))
             }
             Hit::Ruler => {
@@ -2874,7 +3025,7 @@ impl Arr {
                 None
             }
             // La palette les prend avant (voir `event`).
-            Hit::Help | Hit::Mark(_) => None,
+            Hit::Help | Hit::PalCat(_) | Hit::PalOp(_) | Hit::PalFrame => None,
             Hit::DockHandle => None,
             Hit::None => {
                 self.select(None);
@@ -3057,7 +3208,8 @@ impl Arr {
             }
         };
         Some(match h {
-            Hit::Mark(m) => m.label().into(),
+            Hit::PalCat(k) => cp_palette::Cat::TAB.get(k as usize)?.label().into(),
+            Hit::PalOp(id) => self.palette_ops().into_iter().find(|o| o.id == id)?.label,
             Hit::Note { t, i, n } => {
                 let it = self.item(t, i)?;
                 let nt = it.doc.get(n)?;
@@ -3187,6 +3339,7 @@ impl Arr {
             }
             vk::ESCAPE => {
                 self.select(None);
+                self.clear_chosen();
                 self.range = None;
                 None
             }
@@ -3206,16 +3359,16 @@ impl Arr {
                     (Some(j), true) => (j + 1).min(n - 1),
                     (Some(j), false) => j.saturating_sub(1),
                 };
-                self.select(Some(Sel {
-                    t: s.t,
-                    i: Some(i),
-                    n: Some(next),
-                }));
+                self.focus_note(s.t, i, Some(next));
                 None
             }
             vk::UP => self.change_string(1),
             vk::DOWN => self.change_string(-1),
             vk::DELETE | vk::BACK => {
+                // Les notes choisies d'abord ; sinon la note retenue, l'item.
+                if self.chosen_notes().len() > 1 {
+                    return self.delete_chosen();
+                }
                 let s = self.sel?;
                 match (s.i, s.n) {
                     (Some(_), Some(_)) => self.delete_note(),
@@ -3251,7 +3404,7 @@ impl Arr {
             0x52 => !m.ctrl && !m.alt,
             vk::LEFT | vk::RIGHT => item,
             vk::UP | vk::DOWN => note,
-            vk::DELETE | vk::BACK => item,
+            vk::DELETE | vk::BACK => item || !self.chosen_notes().is_empty(),
             0x48 | 0x50 => note && !m.ctrl,
             0x30..=0x39 | 0x60..=0x69 => note,
             _ => false,
