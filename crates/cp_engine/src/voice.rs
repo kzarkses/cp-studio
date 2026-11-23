@@ -382,6 +382,7 @@ impl Voice {
             if self.stop_at <= block_start {
                 self.state = state::IDLE;
                 self.clip = None;
+                self.shifter = None;
                 self.ended_at = self.stop_at;
             }
             return;
@@ -556,7 +557,10 @@ impl Voice {
         };
         // --- l'etirement : le bloc entier sort d'abord de l'etireur, nourri
         // de matiere lue a la tete (meme boucle, meme sens, memes bornes).
-        let stretching = self.shifter.is_some() && (self.tempo != 1.0 || self.pshift != 1.0);
+        // Une voix qui tient un etireur passe par lui jusqu'au bout, meme
+        // revenue a tempo 1 : quitter l'etireur en jouant sautait de sa
+        // latence et de sa reserve, et y revenir rejouait une reserve perimee.
+        let stretching = self.shifter.is_some();
         let mut sbuf = [0f32; MAX_SH * 2];
         let mut s_frames = 0usize;
         let mut s_ended = false;
@@ -885,6 +889,7 @@ impl Voice {
         {
             self.state = state::IDLE;
             self.clip = None;
+            self.shifter = None;
             self.ended_at = self.stop_at;
         }
     }
@@ -895,6 +900,7 @@ impl Voice {
     fn die(&mut self) {
         self.state = state::IDLE;
         self.clip = None;
+        self.shifter = None;
         self.tail_len = 0;
     }
 }

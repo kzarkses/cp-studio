@@ -140,6 +140,10 @@ pub fn run_with(
 /// Le retard de l'etireur ainsi regle, en frames de sortie : un clic place a
 /// `at` doit ressortir a `at / tempo` ; on cherche ou il ressort vraiment.
 pub fn latency(sh: &mut dyn Shifter, srate: f64, nch: usize, tempo: f64, shift: f64) -> usize {
+    // Un taux absurde (un fichier mal lu) : pas de sonde possible.
+    if srate.is_nan() || srate < 100.0 {
+        return 0;
+    }
     let at = (srate * 0.25) as usize;
     let n = (srate * 0.5) as usize;
     let mut probe = vec![0f32; n * nch];

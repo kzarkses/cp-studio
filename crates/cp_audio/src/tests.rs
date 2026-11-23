@@ -1251,3 +1251,35 @@ fn une_source_plus_courte_qu_annoncee() {
     assert!(h.voice(v2).is_some());
     assert!(got.iter().any(|&x| x != 0.0) || h.voice(v2).is_some_and(|x| x.1 != 2));
 }
+
+#[test]
+fn un_etireur_revient_toujours_au_vivier() {
+    // Vingt lancements dates, etires, annules avant leur depart : chacun
+    // rendait son etireur seulement en sonnant jusqu'au bout. Au-dela de
+    // 16, le tempo d'une voix neuve etait ignore sans un mot.
+    let mut h = AudioHost::new(None, 48000.0);
+    h.set_shift_factory(Box::new(|| Box::new(cp_engine::shift::LinearRt::new(1000))));
+    let c = h.load_samples(vec![0.5; 48000], 1, 48000.0).unwrap();
+    block(&mut h, 0, 512);
+    for _ in 0..20 {
+        let at = h.core().clock_now() + 48000;
+        let v = h.play_at(0, c, 0, 0, false, 1.0, Some(at)).unwrap();
+        assert!(h.set(v, Param::Tempo, 0.8));
+        block(&mut h, 0, 512);
+        h.stop(v, 0.0);
+        block(&mut h, 0, 512);
+        h.poll();
+    }
+    let v = h.play(0, c, 0, 0, false, 1.0).unwrap();
+    assert!(h.set(v, Param::Tempo, 0.8));
+    let (made, lent) = h.shifters_in_use();
+    assert!(
+        made <= 2,
+        "{made} etireurs crees : les anciens ne revenaient pas"
+    );
+    assert_eq!(lent, 1, "la voix neuve a le sien");
+    // Une vitesse infinie est refusee (elle menait a du NaN).
+    h.set(v, Param::Rate, f64::INFINITY);
+    let out = block(&mut h, 0, 512);
+    assert!(out.iter().all(|x| x.is_finite()));
+}

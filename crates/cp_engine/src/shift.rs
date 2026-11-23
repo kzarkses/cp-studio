@@ -117,8 +117,13 @@ impl ShiftState {
     ) -> usize {
         let nch = self.nch;
         let mut done = 0;
-        // Une borne : jamais une boucle infinie si l'etireur ne rend rien.
+        // Deux bornes : jamais une boucle infinie si l'etireur ne rend rien,
+        // et jamais plus de matiere qu'il n'en faut (le tempo, plus
+        // l'amorcage) : un etireur qui ne rend rien ne fait pas avaler des
+        // centaines de milliers de frames au fil audio.
         let mut guard = 0;
+        let budget = frames as f64 * self.tempo.max(1.0) * 2.0 + 32768.0;
+        let mut fed = 0usize;
         while done < frames && guard < 4096 {
             guard += 1;
             if self.out_n > 0 {
@@ -144,7 +149,11 @@ impl ShiftState {
             if self.flushed {
                 break;
             }
+            if fed as f64 > budget {
+                break;
+            }
             let n = src(&mut self.inbuf[..FEED * 2]);
+            fed += n;
             if n == 0 {
                 self.sh.flush();
                 self.flushed = true;

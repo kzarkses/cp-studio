@@ -531,6 +531,9 @@ impl Core {
             if v.free_pending && v.state == state::IDLE {
                 v.port = -1;
                 v.clip = None;
+                // L'etireur retourne au vivier quoi qu'il arrive (le fil
+                // principal le tient encore : jamais une liberation ici).
+                v.shifter = None;
                 v.free_pending = false;
                 v.publish(&ps.pubs[i]);
                 a.vlist[k] = a.vlist[a.vcount - 1];
@@ -564,6 +567,7 @@ fn stop_now(v: &mut Voice, fade_frames: i32) {
     if v.state == state::SCHEDULED {
         v.state = state::IDLE;
         v.clip = None;
+        v.shifter = None;
         v.tail_len = 0;
         return;
     }
@@ -736,7 +740,9 @@ fn apply(a: &mut PortAudio, ps: &PortSlot, c: Cmd, block_start: Frame, srate: f6
 fn set_param(v: &mut Voice, param: Param, x: f64, srate: f64, xf: i32) {
     match param {
         Param::Rate => {
-            if x > 0.0 {
+            // Une vitesse infinie menait a une position NaN, puis a du NaN
+            // dans la sortie de REAPER.
+            if x > 0.0 && x.is_finite() {
                 v.rate = x;
             }
         }
@@ -783,7 +789,16 @@ fn set_param(v: &mut Voice, param: Param, x: f64, srate: f64, xf: i32) {
         Param::LoopXfade => v.loop_xf = x.clamp(0.0, 10.0),
         Param::Shift => v.pshift = if x > 0.01 { x.min(20.0) } else { 1.0 },
         Param::Reverse => {
-            v.reverse = x != 0.0;
+            let rev = x != 0.0;
+            // Retourne en jouant, une voix etiree repart de zero dans
+            // l'etireur (sinon sa reserve joue encore dans l'ancien sens).
+            if rev != v.reverse
+                && v.shifter.is_some()
+                && (v.state == state::PLAYING || v.state == state::STOPPING)
+            {
+                v.sh_fresh = true;
+            }
+            v.reverse = rev;
             // Pose avant le depart : de la fin de la region.
             v.rev_arm = v.reverse && v.state == state::SCHEDULED;
         }
