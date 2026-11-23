@@ -372,6 +372,16 @@ C'est le travail du socle d'octobre, à refaire dans le nouveau moteur.
   publiées à chaque bloc. Vrai REAPER : crête de la piste = crête du port.
 - En plus : le **fondu enchaîné au point de boucle** (`Param::LoopXfade`) : une
   boucle qui ne se raccorde pas ne claque plus (saut de 0,836 → 0,066).
+- ✅ **Relu à part le 2026-11-23** : les aperçus de piste étaient lancés et
+  arrêtés dans « l'onglet devant » ; changer d'onglet pendant qu'une colonne
+  jouait dans une piste laissait le registre dans la liste du premier onglet
+  (lu après libération à la fermeture). Ils retiennent leur projet, et une
+  barrière attend la fin d'une lecture avant de libérer. Mesuré :
+  `StopTrackPreview2` rend 1 sur une piste vivante, 0 sur une piste effacée.
+- Reste (relecture) : une piste neuve à l'adresse exacte d'une piste effacée
+  passerait pour elle (comparer son GUID) ; le nombre d'entrées de la carte
+  n'est relu qu'au début d'une prise (un autre périphérique avec moins
+  d'entrées).
 
 ---
 
