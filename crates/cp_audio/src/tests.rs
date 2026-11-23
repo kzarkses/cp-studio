@@ -1098,3 +1098,156 @@ fn les_sources_sont_detruites_sur_le_fil_principal_a_la_fermeture() {
         );
     }
 }
+
+/// Un hote dont le clip de `secs` secondes est lu en flux (un seuil bas), et
+/// le clip, pret.
+fn streamed_host(secs: usize, real_frames: Option<usize>) -> (AudioHost, ClipH) {
+    struct Short(Fake, usize);
+    impl decode::Reader for Short {
+        fn channels(&mut self) -> i32 {
+            self.0.channels()
+        }
+        fn sample_rate(&mut self) -> f64 {
+            self.0.sample_rate()
+        }
+        fn length(&mut self) -> f64 {
+            self.0.length()
+        }
+        fn read(&mut self, t: f64, sr: f64, nch: usize, out: &mut [f64]) -> usize {
+            // Une source plus courte qu'annoncee : rien au-dela de `self.1`.
+            let start = (t * 48000.0).floor() as usize;
+            if start >= self.1 {
+                return 0;
+            }
+            let n = (out.len() / nch).min(self.1 - start);
+            self.0.read(t, sr, nch, &mut out[..n * nch])
+        }
+    }
+    let mut h = AudioHost::new(None, 48000.0);
+    h.set_stream_above(1 << 20);
+    let frames = 48000 * secs;
+    let f = Fake {
+        frames,
+        nch: 2,
+        srate: 48000.0,
+    };
+    let t = h.load_reader(Box::new(Short(f, real_frames.unwrap_or(frames))));
+    let c = loop {
+        h.poll();
+        match h.ticket(t) {
+            Load::Pending => std::thread::yield_now(),
+            Load::Ready(c) => break c,
+            Load::Failed(e) => panic!("{e}"),
+        }
+    };
+    block(&mut h, 0, 64);
+    (h, c)
+}
+
+/// Tire `blocks` blocs de 512 au rythme de REAPER.
+fn realtime(h: &mut AudioHost, blocks: usize) {
+    let period = std::time::Duration::from_secs_f64(512.0 / 48000.0);
+    let mut next = std::time::Instant::now();
+    for _ in 0..blocks {
+        block(h, 0, 512);
+        h.poll();
+        next += period;
+        if let Some(d) = next.checked_duration_since(std::time::Instant::now()) {
+            std::thread::sleep(d);
+        }
+    }
+}
+
+#[test]
+fn a_l_envers_le_flux_ne_tourne_pas_a_vide() {
+    // Une voix a l'envers depuis 300 s, a la vitesse 6 (elle quitte vite la
+    // place demandee au depart) : le flux pose les pages qu'il faut (six par
+    // seconde, plus son avance), pas des centaines (il chargeait et lachait
+    // la meme page sans fin).
+    let (mut h, c) = streamed_host(600, None);
+    let v = h.play(0, c, 0, 0, false, 1.0).unwrap();
+    realtime(&mut h, 4);
+    h.set(v, Param::Pos, (48000 * 300) as f64);
+    h.set(v, Param::Reverse, 1.0);
+    h.set(v, Param::Rate, 6.0);
+    let p = pages_of(&h, c);
+    let t0 = std::time::Instant::now();
+    while !p.has(p.page_of(48000 * 300)) {
+        h.poll();
+        assert!(t0.elapsed().as_secs() < 5);
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    realtime(&mut h, 280);
+    let f0 = p.fills();
+    realtime(&mut h, 190);
+    let fills = p.fills() - f0;
+    eprintln!(
+        "a l'envers x6 : {fills} pages posees en 2 s, {} manquees",
+        p.misses()
+    );
+    assert!(fills <= 24, "{fills} pages posees en 2 s");
+    assert_eq!(p.misses(), 0);
+    let pos = h.voice(v).map_or(0.0, |x| x.0);
+    assert!(pos < (48000 * 280) as f64, "la tete recule : {pos}");
+}
+
+#[test]
+fn deux_voix_loin_l_une_de_l_autre() {
+    // Deux voix du meme clip a 60 s d'ecart : chacune garde ses pages.
+    let (mut h, c) = streamed_host(600, None);
+    let p = pages_of(&h, c);
+    let a = 48000 * 100;
+    let b = 48000 * 160;
+    let _v1 = h.play(0, c, a, 0, false, 0.5).unwrap();
+    let _v2 = h.play(0, c, b, 0, false, 0.5).unwrap();
+    let t0 = std::time::Instant::now();
+    while !(p.has(p.page_of(a)) && p.has(p.page_of(b))) {
+        h.poll();
+        assert!(t0.elapsed().as_secs() < 5);
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    realtime(&mut h, 280);
+    assert_eq!(p.misses(), 0, "aucune page manquee pour l'une ou l'autre");
+}
+
+#[test]
+fn une_boucle_au_milieu_du_fichier() {
+    // Une boucle de 12 s a partir de 100 s, jouee a la vitesse 4 : plusieurs
+    // retours en 4 s, le debut de la boucle toujours pret.
+    let (mut h, c) = streamed_host(600, None);
+    let p = pages_of(&h, c);
+    let (a, z) = (48000 * 100, 48000 * 112);
+    let v = h.play(0, c, a, z, true, 1.0).unwrap();
+    h.set(v, Param::Rate, 4.0);
+    let t0 = std::time::Instant::now();
+    while !p.has(p.page_of(a)) {
+        h.poll();
+        assert!(t0.elapsed().as_secs() < 5);
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    realtime(&mut h, 375);
+    let pos = h.voice(v).map_or(0.0, |x| x.0);
+    assert!(pos >= a as f64 && pos < z as f64, "dans la boucle : {pos}");
+    assert_eq!(p.misses(), 0, "les retours trouvent leur page");
+}
+
+#[test]
+fn une_source_plus_courte_qu_annoncee() {
+    // Annoncee 60 s, elle s'arrete a 58,5 s : la fin est du silence, et le
+    // flux continue ailleurs (il s'arretait pour de bon).
+    let (mut h, c) = streamed_host(60, Some(48000 * 58 + 24000));
+    let p = pages_of(&h, c);
+    let v = h.play(0, c, 48000 * 57, 0, false, 1.0).unwrap();
+    realtime(&mut h, 300);
+    h.stop(v, 0.0);
+    let v2 = h.play(0, c, 48000 * 20, 0, false, 1.0).unwrap();
+    let t0 = std::time::Instant::now();
+    while !p.has(p.page_of(48000 * 21)) {
+        h.poll();
+        assert!(t0.elapsed().as_secs() < 5, "le flux s'est arrete");
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    let got = block(&mut h, 0, 512);
+    assert!(h.voice(v2).is_some());
+    assert!(got.iter().any(|&x| x != 0.0) || h.voice(v2).is_some_and(|x| x.1 != 2));
+}

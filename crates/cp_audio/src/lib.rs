@@ -287,7 +287,8 @@ pub struct AudioHost {
     /// Le fil de flux (au premier long fichier), et les voix qui jouent un
     /// clip en flux (un saut le previent).
     streamer: Option<stream::Streamer>,
-    streamed: Vec<(VoiceH, Arc<cp_sys::paged::Paged>)>,
+    /// (voix, pages, derniere frame de sa region).
+    streamed: Vec<(VoiceH, Arc<cp_sys::paged::Paged>, i64)>,
     stream_above: usize,
     tickets: Vec<(u32, Ticket)>,
     /// Les decodages en cours : ticket -> clip (pour y poser les pics).
@@ -1229,7 +1230,7 @@ impl AudioHost {
             self.ctl.voice_release(v);
         }
         let live = &self.voices;
-        self.streamed.retain(|(v, _)| live.contains(v));
+        self.streamed.retain(|(v, ..)| live.contains(v));
         // Les etireurs des voix rendues reviennent au vivier.
         self.reclaim_shifters();
         self.pool.collect();
@@ -1288,13 +1289,24 @@ impl AudioHost {
         if let Some(p) = clip.paged() {
             let s = start.max(0);
             p.hint(s);
-            if !p.has(p.page_of(s)) {
+            let mut need = vec![p.page_of(s)];
+            // Une boucle lit sa fin des le premier bloc (l'interpolation du
+            // retour) : sa derniere page aussi.
+            if looped {
+                let e = if end > 0 { end } else { p.frames() };
+                p.hint(e - 1);
+                need.push(p.page_of(e - 1));
+            }
+            if need.iter().any(|&k| !p.has(k)) {
                 if let Some(st) = &self.streamer {
                     st.wake();
                 }
-                let core = self.ctl.core();
-                let soon = core.clock_now() + (0.05 * core.srate().max(1.0)) as i64;
-                at = At::Frame(when.map_or(soon, |w| w.max(soon)));
+                // Un lancement date garde sa date (la mesure compte plus que
+                // ses premieres millisecondes) ; un « tout de suite » attend.
+                if when.is_none() {
+                    let core = self.ctl.core();
+                    at = At::Frame(core.clock_now() + (0.05 * core.srate().max(1.0)) as i64);
+                }
             }
         }
         let v = self.ctl.voice_alloc(port)?;
@@ -1325,7 +1337,8 @@ impl AudioHost {
         }
         self.voices.push(v);
         if let Some(p) = clip_pages {
-            self.streamed.push((v, p));
+            let last = if end > 0 { end - 1 } else { p.frames() - 1 };
+            self.streamed.push((v, p, last));
         }
         Some(v)
     }
@@ -1337,10 +1350,19 @@ impl AudioHost {
     }
 
     pub fn set(&mut self, v: VoiceH, param: Param, value: f64) -> bool {
-        // Un saut dans un clip en flux : sa page est demandee tout de suite.
-        if param == Param::Pos {
-            if let Some((_, p)) = self.streamed.iter().find(|(w, _)| *w == v) {
-                p.hint(value as i64);
+        // Un saut dans un clip en flux : sa page est demandee tout de suite ;
+        // a l'envers depuis le depart, c'est la fin de la region.
+        if let Some((_, p, last)) = self.streamed.iter().find(|(w, ..)| *w == v) {
+            // A l'envers avant le depart, la voix part de la fin de sa region ;
+            // une voix qui joue repart a l'envers d'ou elle est.
+            let started = self.ctl.core().voice_started_at(v) >= 0;
+            let hint = match param {
+                Param::Pos => Some(value as i64),
+                Param::Reverse if value > 0.0 && !started => Some(*last),
+                _ => None,
+            };
+            if let Some(h) = hint {
+                p.hint(h);
                 if let Some(st) = &self.streamer {
                     st.wake();
                 }

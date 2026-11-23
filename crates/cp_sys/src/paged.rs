@@ -22,9 +22,14 @@ use std::sync::atomic::{AtomicBool, AtomicI64, AtomicPtr, AtomicU64, AtomicUsize
 /// Une position en frames (comme `cp_engine::Frame`).
 pub type Frame = i64;
 
-/// Les tetes suivies : une par voix (huit voix d'un meme clip au plus avant
-/// qu'elles se partagent une place), plus la demande d'un depart.
-pub const HEADS: usize = 8;
+/// Les tetes suivies : une par voix (une colonne en a 64 : deux voix d'une
+/// meme colonne n'ont jamais la meme place), plus `HINTS` demandes de
+/// depart, prises tour a tour (deux departs coup sur coup ne s'effacent
+/// pas).
+pub const HEADS: usize = 64;
+pub const HINTS: usize = 4;
+/// Toutes les places : les voix, puis les demandes.
+pub const SLOTS: usize = HEADS + HINTS;
 
 pub struct Paged {
     /// Frames par page.
@@ -40,8 +45,16 @@ pub struct Paged {
     /// Les tetes : la derniere frame lue par chaque voix (-1 : aucune), et
     /// combien de fois elle a ete posee (le flux voit ainsi qu'elle vit). La
     /// derniere place est la demande d'un depart ou d'un saut.
-    heads: [AtomicI64; HEADS + 1],
-    stamps: [AtomicU64; HEADS + 1],
+    heads: [AtomicI64; SLOTS],
+    stamps: [AtomicU64; SLOTS],
+    /// La boucle de chaque voix qui boucle, debut et fin (-1 : aucune) : le
+    /// flux garde pretes les deux pages du retour.
+    loops: [AtomicI64; SLOTS],
+    loop_ends: [AtomicI64; SLOTS],
+    /// La prochaine place de demande.
+    next_hint: AtomicUsize,
+    /// Les pages posees depuis le depart (un flux qui tourne a vide se voit).
+    fills: AtomicU64,
     /// Les blocs qui ont lu une page absente (du silence a la place).
     misses: AtomicU64,
     resident: AtomicUsize,
@@ -76,6 +89,10 @@ impl Paged {
             grave: Mutex::new(Vec::new()),
             heads: std::array::from_fn(|_| AtomicI64::new(-1)),
             stamps: std::array::from_fn(|_| AtomicU64::new(0)),
+            loops: std::array::from_fn(|_| AtomicI64::new(-1)),
+            loop_ends: std::array::from_fn(|_| AtomicI64::new(-1)),
+            next_hint: AtomicUsize::new(0),
+            fills: AtomicU64::new(0),
             misses: AtomicU64::new(0),
             resident: AtomicUsize::new(0),
             abandoned: AtomicBool::new(false),
@@ -115,19 +132,28 @@ impl Paged {
     pub fn bytes(&self) -> usize {
         self.resident() * self.page * self.nch * size_of::<f32>()
     }
-    /// Chaque tete : (frame, nombre de poses). Une tete jamais posee vaut -1.
-    pub fn heads(&self) -> [(Frame, u64); HEADS + 1] {
+    /// Chaque tete : (frame, nombre de poses, debut et fin de sa boucle ou
+    /// -1). Une tete jamais posee vaut -1.
+    pub fn heads(&self) -> [(Frame, u64, Frame, Frame); SLOTS] {
         std::array::from_fn(|i| {
             (
                 self.heads[i].load(Ordering::Relaxed),
                 self.stamps[i].load(Ordering::Relaxed),
+                self.loops[i].load(Ordering::Relaxed),
+                self.loop_ends[i].load(Ordering::Relaxed),
             )
         })
     }
+    /// Les pages posees depuis le depart.
+    pub fn fills(&self) -> u64 {
+        self.fills.load(Ordering::Relaxed)
+    }
     /// Demander une place avant d'y jouer (un depart, un saut).
     pub fn hint(&self, f: Frame) {
-        self.heads[HEADS].store(f.clamp(0, self.frames), Ordering::Relaxed);
-        self.stamps[HEADS].fetch_add(1, Ordering::Relaxed);
+        let i = HEADS + self.next_hint.fetch_add(1, Ordering::Relaxed) % HINTS;
+        self.heads[i].store(f.clamp(0, self.frames), Ordering::Relaxed);
+        self.loops[i].store(-1, Ordering::Relaxed);
+        self.stamps[i].fetch_add(1, Ordering::Relaxed);
     }
     pub fn misses(&self) -> u64 {
         self.misses.load(Ordering::Relaxed)
@@ -162,6 +188,7 @@ impl Paged {
         let ptr = Box::into_raw(b) as *mut f32;
         self.slots[k].store(ptr, Ordering::SeqCst);
         self.resident.fetch_add(1, Ordering::Relaxed);
+        self.fills.fetch_add(1, Ordering::Relaxed);
         true
     }
 
@@ -275,11 +302,16 @@ impl PagedRead<'_> {
         self.p.has(self.p.page_of(f))
     }
 
-    /// Fin d'un bloc de voix : la tete lue, pour le flux. `voice` distingue
-    /// les voix (deux voix d'un meme clip, un fondu pendant un saut).
-    pub fn played(&self, voice: usize, head: Frame) {
+    /// Fin d'un bloc de voix : la tete lue, pour le flux, et le debut de sa
+    /// boucle si elle boucle. `voice` distingue les voix (deux voix d'un meme
+    /// clip, un fondu pendant un saut).
+    pub fn played(&self, voice: usize, head: Frame, looping: Option<(Frame, Frame)>) {
         let i = voice % HEADS;
-        self.p.heads[i].store(head.clamp(0, self.p.frames), Ordering::Relaxed);
+        let f = self.p.frames;
+        self.p.heads[i].store(head.clamp(0, f), Ordering::Relaxed);
+        let (a, b) = looping.map_or((-1, -1), |(a, b)| (a.clamp(0, f), b.clamp(0, f)));
+        self.p.loops[i].store(a, Ordering::Relaxed);
+        self.p.loop_ends[i].store(b, Ordering::Relaxed);
         self.p.stamps[i].fetch_add(1, Ordering::Relaxed);
     }
 }
@@ -317,12 +349,15 @@ mod tests {
             assert_eq!(r.sample(2000), 0.0, "page 1 absente");
             assert_eq!(r.sample(4000 + 7), 2007.0);
             assert_eq!(r.sample(4999), 2999.0);
-            r.played(3, 1234);
+            r.played(3, 1234, Some((500, 2000)));
         }
         assert_eq!(p.misses(), 1);
-        assert_eq!(p.heads()[3], (1234, 1));
+        assert_eq!(p.heads()[3], (1234, 1, 500, 2000));
         p.hint(99);
-        assert_eq!(p.heads()[HEADS], (99, 1));
+        p.hint(77);
+        assert_eq!(p.heads()[HEADS].0, 99);
+        assert_eq!(p.heads()[HEADS + 1].0, 77, "deux demandes, deux places");
+        assert_eq!(p.fills(), 2);
         assert_eq!(p.resident(), 2);
     }
 

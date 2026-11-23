@@ -849,7 +849,7 @@ impl Voice {
             // Les voix sont rangees dans un tableau : leur adresse dit leur
             // rang.
             let slot = self as *const Voice as usize / size_of::<Voice>().max(1);
-            r.played(slot, p as Frame);
+            r.played(slot, p as Frame, looping.then_some((src_start, src_end)));
         }
         self.fade_in_pos = fip;
         self.fade_out_pos = fop;

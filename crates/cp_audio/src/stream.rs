@@ -15,7 +15,7 @@ use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender, channel};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-use cp_sys::paged::{HEADS, Paged};
+use cp_sys::paged::{Paged, SLOTS};
 
 use crate::decode::{Reader, Shape};
 use crate::peaks::{PeakBuilder, Peaks};
@@ -32,6 +32,11 @@ pub const PIN_S: f64 = 3.0;
 /// est partie) ; ses pages restent 30 s (on rejoue souvent au meme endroit).
 const LIVE_S: f64 = 1.0;
 const RECENT_S: f64 = 30.0;
+/// La place qu'une tete quitte par un saut reste gardee un moment (son
+/// fondu de sortie y lit encore) : en secondes, et en pages de part et
+/// d'autre.
+const LEFT_S: f64 = 2.0;
+const LEFT_PAGES: i64 = 2;
 
 /// Un clip a suivre.
 pub struct StreamJob {
@@ -72,11 +77,27 @@ struct Seen {
     when: Instant,
     /// Elle recule (lecture a l'envers).
     back: bool,
+    /// Sa boucle, debut et fin (-1 : elle ne boucle pas).
+    loop_start: i64,
+    loop_end: i64,
+}
+
+/// Un point a garder pret : une tete (dans son sens), le debut d'une boucle
+/// (lu en avancant), la fin d'une boucle (sa derniere page : le retour y
+/// lit encore). `reach` : les pages a charger devant lui (`None` : l'avance
+/// normale).
+#[derive(Clone, Copy)]
+struct Anchor {
+    pos: i64,
+    back: bool,
+    reach: Option<usize>,
 }
 
 struct Live {
     job: StreamJob,
-    heads: [Seen; HEADS + 1],
+    heads: [Seen; SLOTS],
+    /// Les places quittees par un saut, et quand.
+    left: Vec<(i64, Instant)>,
     ready_sent: bool,
     pass: Option<PeakBuilder>,
     last_snap: Instant,
@@ -89,29 +110,72 @@ impl Live {
         ((s * self.job.shape.srate) / self.job.pages.page_frames() as f64).ceil() as usize
     }
 
-    /// Les nouvelles des tetes : qui vit, dans quel sens.
+    /// Les nouvelles des tetes : qui vit, dans quel sens ; un saut laisse
+    /// sa place gardee un moment.
     fn look(&mut self) {
         let now = Instant::now();
-        for (seen, (pos, stamp)) in self.heads.iter_mut().zip(self.job.pages.heads()) {
+        let pf = self.job.pages.page_frames() as i64;
+        for (seen, (pos, stamp, ls, le)) in self.heads.iter_mut().zip(self.job.pages.heads()) {
             if stamp != seen.stamp {
+                let mut back = seen.back;
                 if seen.pos >= 0 && pos != seen.pos {
-                    seen.back = pos < seen.pos;
+                    if (pos - seen.pos).abs() > 2 * pf {
+                        // Un saut (ou une voix neuve a cette place) : le sens
+                        // repart vers l'avant, l'ancienne place reste gardee.
+                        self.left.push((seen.pos, now));
+                        back = false;
+                    } else {
+                        back = pos < seen.pos;
+                    }
                 }
                 *seen = Seen {
                     pos,
                     stamp,
                     when: now,
-                    back: seen.back,
+                    back,
+                    loop_start: ls,
+                    loop_end: le,
                 };
             }
         }
+        self.left
+            .retain(|l| now.duration_since(l.1).as_secs_f64() < LEFT_S);
+        if self.left.len() > 16 {
+            let n = self.left.len() - 16;
+            self.left.drain(..n);
+        }
     }
 
-    /// Les tetes vues depuis moins de `s` secondes.
-    fn heads_within(&self, s: f64) -> impl Iterator<Item = &Seen> {
-        self.heads
+    /// Les tetes vues depuis moins de `s` secondes, et les debuts de leurs
+    /// boucles.
+    fn anchors(&self, s: f64) -> Vec<Anchor> {
+        let mut out = Vec::new();
+        for h in self
+            .heads
             .iter()
-            .filter(move |h| h.pos >= 0 && h.when.elapsed().as_secs_f64() < s)
+            .filter(|h| h.pos >= 0 && h.when.elapsed().as_secs_f64() < s)
+        {
+            out.push(Anchor {
+                pos: h.pos,
+                back: h.back,
+                reach: None,
+            });
+            if h.loop_start >= 0 {
+                out.push(Anchor {
+                    pos: h.loop_start,
+                    back: false,
+                    reach: None,
+                });
+            }
+            if h.loop_end > 0 {
+                out.push(Anchor {
+                    pos: h.loop_end - 1,
+                    back: true,
+                    reach: Some(1),
+                });
+            }
+        }
+        out
     }
 
     /// La page manquante la plus urgente et sa distance (en pages) a la tete
@@ -127,11 +191,14 @@ impl Live {
         if let Some(k) = (0..pin).find(|&k| !p.has(k)) {
             return Some((k, 0));
         }
-        let (fwd0, bwd0) = (self.pages_of(AHEAD_S), self.pages_of(BEHIND_S));
+        // Devant (dans le sens de lecture) et derriere : `ahead` et `behind`
+        // suivent deja le sens.
+        let (fwd, bwd) = (self.pages_of(AHEAD_S), self.pages_of(BEHIND_S));
         let mut best: Option<(usize, usize)> = None;
-        for h in self.heads_within(LIVE_S) {
+        for h in self.anchors(LIVE_S) {
             let hk = p.page_of(h.pos);
-            let (fwd, bwd) = if h.back { (bwd0, fwd0) } else { (fwd0, bwd0) };
+            let fwd = h.reach.unwrap_or(fwd);
+            let bwd = if h.reach.is_some() { 0 } else { bwd };
             // Devant (dans le sens de lecture), puis derriere, du plus pres
             // au plus loin.
             for d in 0..=fwd.max(bwd) {
@@ -170,7 +237,8 @@ impl Live {
     /// La page `k` est-elle pres d'une tete vivante ?
     fn near_live(&self, k: usize) -> bool {
         let a = self.pages_of(AHEAD_S);
-        self.heads_within(LIVE_S)
+        self.anchors(LIVE_S)
+            .iter()
             .any(|h| k.abs_diff(self.job.pages.page_of(h.pos)) <= a)
     }
 
@@ -186,7 +254,10 @@ impl Live {
             .job
             .src
             .read(f0 as f64 / sh.srate, sh.srate, sh.nch, &mut self.buf[..len]);
-        if got == 0 && want > 0 {
+        // Rien du tout : un fichier illisible s'il s'agit du debut ; plus
+        // loin, une source plus courte qu'annoncee (un format compresse) :
+        // la page est du silence, et le reste du fichier s'ecoute.
+        if got == 0 && want > 0 && k == 0 {
             return None;
         }
         let mut v: Vec<f32> = self.buf[..len].iter().map(|&x| x as f32).collect();
@@ -205,8 +276,9 @@ impl Live {
             self.pages_of(KEEP_AHEAD_S) as i64,
             self.pages_of(KEEP_BEHIND_S) as i64,
         );
-        let spans: Vec<(i64, i64)> = self
-            .heads_within(RECENT_S)
+        let mut spans: Vec<(i64, i64)> = self
+            .anchors(RECENT_S)
+            .iter()
             .map(|h| {
                 let hk = p.page_of(h.pos) as i64;
                 if h.back {
@@ -216,6 +288,10 @@ impl Live {
                 }
             })
             .collect();
+        for &(pos, _) in &self.left {
+            let k = p.page_of(pos) as i64;
+            spans.push((k - LEFT_PAGES, k + LEFT_PAGES));
+        }
         let far: Vec<usize> = p
             .resident_pages()
             .filter(|&k| {
@@ -253,7 +329,10 @@ fn worker(cmds: Receiver<Cmd>, out: Sender<SMsg>) {
                         stamp: 0,
                         when: Instant::now(),
                         back: false,
-                    }; HEADS + 1],
+                        loop_start: -1,
+                        loop_end: -1,
+                    }; SLOTS],
+                    left: Vec::new(),
                     ready_sent: false,
                     last_snap: Instant::now(),
                     buf: Vec::new(),
