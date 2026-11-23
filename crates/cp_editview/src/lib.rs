@@ -2757,25 +2757,33 @@ impl Ed {
             let Some(md) = self.midi_mut() else {
                 return Vec::new();
             };
-            if md
+            // La meme note deja la : on la garde (pas de doublon), mais le
+            // pas compte : le curseur avance quand meme.
+            let dup = md
                 .roll
                 .notes
                 .iter()
-                .any(|x| x.pitch == p && (x.qn0 - q).abs() < EPS)
-            {
-                continue;
-            }
-            let id = md.roll.insert(q, len, p, chan, v);
+                .find(|x| x.pitch == p && (x.qn0 - q).abs() < EPS)
+                .map(|x| x.id);
+            let id = match dup {
+                Some(id) => id,
+                None => {
+                    n += 1;
+                    md.roll.insert(q, len, p, chan, v)
+                }
+            };
             if chord.is_none() {
                 md.roll.select_only(id);
                 out.push(Act::Seek(q + len));
                 self.edit_cursor = Some(q + len);
+                // La fenetre d'un accord part de sa premiere note (elle ne
+                // s'allonge pas a chaque note : un trait rapide n'est pas un
+                // accord).
+                self.step = Some((q, len, now));
             } else {
                 md.roll.add_sel(id);
             }
-            self.step = Some((q, len, now));
             self.last_vel = v;
-            n += 1;
         }
         if n > 0 {
             self.dirty = true;

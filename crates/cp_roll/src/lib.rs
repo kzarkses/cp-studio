@@ -1172,9 +1172,22 @@ impl Roll {
                 bucket -= steps;
                 let si = (i + rotation) % steps;
                 let q = a + si as f64 * cell;
-                let id = self.insert(q, cell * 0.9, pitch, chan, vel);
+                // Une note deja la, a la meme hauteur et au meme instant (la
+                // note choisie qui a donne la hauteur) : la garder, pas la
+                // doubler.
+                let same = self
+                    .notes
+                    .iter()
+                    .find(|n| n.pitch == pitch && n.chan == chan && (n.qn0 - q).abs() < 1e-9)
+                    .map(|n| n.id);
+                let id = match same {
+                    Some(id) => id,
+                    None => {
+                        made += 1;
+                        self.insert(q, cell * 0.9, pitch, chan, vel)
+                    }
+                };
                 self.add_sel(id);
-                made += 1;
             }
         }
         made

@@ -76,6 +76,8 @@ pub struct Engraved {
     /// grille est assez fine pour les deux (la grille droite fois 3, ou
     /// moins).
     pub grid: i64,
+    /// La grille droite (sans les triolets).
+    pub grid0: i64,
     pub mlen: i64,
     pub measures: i64,
     /// La premiere barre de mesure, en noires du projet.
@@ -108,6 +110,17 @@ impl Engraved {
     /// La position en noires du projet d'une case.
     pub fn qn(&self, cell: i64) -> f64 {
         self.origin_qn + cell as f64 / self.grid.max(1) as f64
+    }
+
+    /// La case d'un instant du projet, exactement comme la partition l'a
+    /// placee (la grille de son temps : droite ou en triolets).
+    pub fn cell_of(&self, qn: f64) -> i64 {
+        let (g0, g) = (self.grid0.max(1), self.grid.max(1));
+        let t = qn - self.origin_qn;
+        let b = beat_of(t, g0);
+        let k = if self.triplets.contains(&b) { 3 } else { g0 };
+        let c = ((t - b as f64) * k as f64).round() as i64;
+        b * g + c * (g / k)
     }
 
     /// La premiere case de la mesure `m` (`m = measures` : la fin).
@@ -279,7 +292,19 @@ pub fn engrave_meter(
 ) -> Engraved {
     let sig = meter.bar_at(origin_qn).sig;
     let g0 = grid.max(1) as i64;
-    let trip = triplet_beats(notes, origin_qn, g0);
+    let mut trip = triplet_beats(notes, origin_qn, g0);
+    // Un temps coupe par une barre (une mesure de 7/8, une mesure
+    // partielle) ne s'ecrit pas en triolets : ses morceaux seraient trop
+    // courts pour une figure. Il revient a la grille droite.
+    if !trip.is_empty() {
+        let end = notes.iter().map(|n| n.qn1).fold(origin_qn + 1.0, f64::max);
+        for b in meter.bars(origin_qn + 1e-9, end) {
+            let t = b.end() - origin_qn;
+            if (t - t.round()).abs() > 1e-6 {
+                trip.remove(&(t.floor() as i64));
+            }
+        }
+    }
     // La grille fine : la droite, et les triolets s'il y en a.
     let g = if trip.is_empty() {
         g0
@@ -306,6 +331,7 @@ pub fn engrave_meter(
     }
     let mut eng = Engraved {
         grid: g,
+        grid0: g0,
         mlen: (sig.0.max(1) as i64 * g * 4 / sig.1.max(1) as i64).max(1),
         origin_qn,
         sig,
@@ -321,7 +347,9 @@ pub fn engrave_meter(
     // 3. Les mesures du projet, jusqu'a couvrir la prise (chaque voix
     // completee d'un silence).
     let t = t1.max(t2);
-    let cells = |q: f64| ((q - origin_qn) * g as f64).round() as i64;
+    // Les barres sur la grille droite (une barre posee n'importe ou, une
+    // mesure partielle : sinon des morceaux trop courts pour une figure).
+    let cells = |q: f64| ((q - origin_qn) * g0 as f64).round() as i64 * (g / g0);
     let mut b = meter.bar_at(origin_qn + 1e-9);
     eng.bars = vec![0];
     loop {

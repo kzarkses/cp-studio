@@ -653,18 +653,35 @@ pub(crate) struct Geo {
 
 /// Un axe par morceaux : `n` points (noires croissantes, x croissants),
 /// droit entre deux points et prolonge aux bouts.
-#[derive(Clone, Copy, Debug, Default)]
+///
+/// Une barre de mesure peut porter trois points (une reprise qui se ferme,
+/// la barre, un chiffrage ou une reprise qui s'ouvre) : 8 ne suffisaient
+/// pas, et les notes d'au-dela tombaient hors de la page.
+pub(crate) const WARP_N: usize = 64;
+
+#[derive(Clone, Copy, Debug)]
 pub(crate) struct Warp {
     pub(crate) n: usize,
-    pub(crate) q: [f64; 8],
-    pub(crate) x: [f32; 8],
+    pub(crate) q: [f64; WARP_N],
+    pub(crate) x: [f32; WARP_N],
+}
+
+impl Default for Warp {
+    fn default() -> Warp {
+        Warp {
+            n: 0,
+            q: [0.0; WARP_N],
+            x: [0.0; WARP_N],
+        }
+    }
 }
 
 impl Warp {
-    /// Les points (8 au plus ; les suivants sont ignores).
+    /// Les points (`WARP_N` au plus ; les suivants sont ignores).
     pub(crate) fn new(pts: &[(f64, f32)]) -> Warp {
+        debug_assert!(pts.len() <= WARP_N, "{} points", pts.len());
         let mut w = Warp::default();
-        for &(q, x) in pts.iter().take(8) {
+        for &(q, x) in pts.iter().take(WARP_N) {
             w.q[w.n] = q;
             w.x[w.n] = x;
             w.n += 1;
@@ -675,6 +692,23 @@ impl Warp {
     fn x(&self, q: f64) -> Option<f32> {
         if self.n < 2 {
             return None;
+        }
+        // Sur le dernier point ou au-dela : depuis lui, a la pente du
+        // dernier segment non nul. (Le dernier segment peut etre nul : la
+        // place des points d'une reprise qui se ferme ; une note de la
+        // mesure suivante, pile sur la barre, y tombait dans le systeme.)
+        let last = self.n - 1;
+        if q >= self.q[last] {
+            let mut k = last;
+            while k > 0 && self.q[k] - self.q[k - 1] <= 1e-12 {
+                k -= 1;
+            }
+            let slope = if k > 0 {
+                (self.x[k] - self.x[k - 1]) / (self.q[k] - self.q[k - 1]) as f32
+            } else {
+                0.0
+            };
+            return Some(self.x[last] + (q - self.q[last]) as f32 * slope);
         }
         // Le segment qui contient q (le premier ou le dernier au-dela).
         let k = (1..self.n - 1)

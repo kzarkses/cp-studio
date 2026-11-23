@@ -36,7 +36,9 @@ impl Bar {
     }
 }
 
-const EPS: f64 = 1e-9;
+/// La tolerance sur les positions : un chiffrage pose un millionieme de
+/// noire apres une barre est SUR la barre (pas une mesure-copeau).
+const EPS: f64 = 1e-6;
 
 /// La longueur d'une mesure de ce chiffrage, en noires.
 pub fn bar_len(sig: (i32, i32)) -> f64 {
@@ -172,15 +174,10 @@ impl Meter {
         out
     }
 
-    /// La mesure qui suit `b`.
+    /// La mesure qui suit `b` : celle qui commence a sa fin (un changement
+    /// tout pres de la fin est sur la fin).
     pub fn next(&self, b: &Bar) -> Bar {
-        let mut n = self.bar_at(b.end());
-        // Une mesure partielle finit pile sur le changement : la suivante
-        // est celle du changement (bar_at le trouve deja) ; une mesure qui
-        // finirait avant elle-meme ne peut pas exister.
-        if n.qn < b.end() - EPS {
-            n.qn = b.end();
-        }
+        let mut n = self.bar_at(b.end() + EPS);
         n.index = b.index + 1;
         n
     }

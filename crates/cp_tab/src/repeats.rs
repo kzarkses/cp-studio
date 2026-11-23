@@ -33,9 +33,10 @@ fn bar_key(eng: &Engraved, notes: &[TNote], tempos: &[(f64, f64)], m: i64) -> Op
     let b0 = eng.bar_start(m);
     let mut key = format!("{:?}|{}|", eng.sig_of(m), eng.bar_len(m));
     let (q0, q1) = (eng.qn(b0), eng.qn(eng.bar_start(m + 1)));
+    // Le tempo du debut (celui de la tete de la partition) ne compte pas.
     for t in tempos
         .iter()
-        .filter(|t| t.0 >= q0 - 1e-9 && t.0 < q1 - 1e-9)
+        .filter(|t| t.0 >= q0 - 1e-9 && t.0 < q1 - 1e-9 && t.0 > eng.origin_qn + 1e-9)
     {
         key += &format!("T{m}:{}:{};", t.0, t.1);
     }
@@ -181,7 +182,7 @@ pub fn compact(eng: &Engraved, notes: &[TNote], tempos: &[(f64, f64)], reps: &[R
         .filter(|t| t.0 < eng.origin_qn + 1e-9)
         .collect();
     for &(q, bpm) in tempos.iter().filter(|t| t.0 >= eng.origin_qn + 1e-9) {
-        let c = ((q - eng.origin_qn) * g).round() as i64;
+        let c = eng.cell_of(q);
         let m = eng.measure_of(c);
         if let Some(s) = new_start.get(m as usize).copied().flatten() {
             tout.push((q + s - eng.qn(eng.bar_start(m)), bpm));
@@ -189,7 +190,9 @@ pub fn compact(eng: &Engraved, notes: &[TNote], tempos: &[(f64, f64)], reps: &[R
     }
     let mut out: Vec<TNote> = Vec::new();
     for nt in notes {
-        let c = ((nt.qn0 - eng.origin_qn) * g).round() as i64;
+        // La case ou la partition a pose la note (triolets compris) : sinon
+        // une note un peu en avance changeait de mesure, et se perdait.
+        let c = eng.cell_of(nt.qn0);
         if c < 0 {
             continue;
         }

@@ -2332,3 +2332,55 @@ fn les_reprises_s_impriment() {
     });
     assert_eq!(measures, 4, "A, B, C, D");
 }
+
+#[test]
+fn quatre_reprises_dans_un_systeme() {
+    // A x2 | B x2 | C x2 | D x2 : chaque barre porte ses points de reprise ;
+    // l'axe en avait 8 au plus, et les notes des dernieres mesures tombaient
+    // hors de la page.
+    const P: [[&[(usize, i32)]; 4]; 4] = [
+        [&[(3, 0)], &[(3, 2)], &[(3, 4)], &[(2, 5)]],
+        [&[(2, 7)], &[(2, 5)], &[(3, 4)], &[(3, 2)]],
+        [&[(4, 0)], &[(4, 2)], &[(4, 4)], &[(4, 5)]],
+        [&[(1, 3)], &[(1, 5)], &[(1, 7)], &[(1, 8)]],
+    ];
+    let mut raw: Vec<Raw> = Vec::new();
+    for (m, k) in [0, 0, 1, 1, 2, 2, 3, 3].into_iter().enumerate() {
+        for j in 0..8 {
+            raw.push((m, j as f64 * 2.0, 2.0, P[k][j % 4], ""));
+        }
+    }
+    let it = item("Q", "Quatre.wav", 0, 8, &raw);
+    let rep = print::with_repeats(&it);
+    assert!(rep.repeats.len() >= 3, "{:?}", rep.repeats);
+    let mut b = Bench::new(10, 10);
+    let lanes = Lanes([true, false, true, true]);
+    let mut n = 0;
+    let mut ink_cols: Vec<usize> = Vec::new();
+    print::render(&rep, lanes, &mut b.t, &mut |s| {
+        n += 1;
+        if n == 1 {
+            let mut top = Surface::new(s.w, 900);
+            top.px.copy_from_slice(&s.px[..(s.w * 900) as usize]);
+            std::fs::write(
+                std::env::temp_dir().join("cp_tabview_16_quatre_reprises.png"),
+                png::encode(&top),
+            )
+            .unwrap();
+            // L'encre des notes de la tab, par quart de largeur de page.
+            let w = s.w as usize;
+            ink_cols = (0..4)
+                .map(|q| {
+                    (500..900)
+                        .flat_map(|y| (w * q / 4 + 40..w * (q + 1) / 4 - 40).map(move |x| (x, y)))
+                        .filter(|&(x, y)| (s.px[y * w + x] & 0xFF) < 100)
+                        .count()
+                })
+                .collect();
+        }
+    });
+    assert!(
+        ink_cols.iter().all(|&c| c > 200),
+        "chaque quart de la ligne a ses notes : {ink_cols:?}"
+    );
+}

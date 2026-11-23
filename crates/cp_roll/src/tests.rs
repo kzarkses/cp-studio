@@ -307,3 +307,13 @@ fn accords_arpeges_euclides_gardent_le_canal() {
     assert_eq!(at, vec![0.0, 0.75, 1.5]);
     assert!(r.notes.iter().all(|n| n.chan == 9 && n.sel));
 }
+
+#[test]
+fn l_euclide_ne_double_pas_la_note_choisie() {
+    // La note choisie donne la hauteur et tombe sur le premier coup : elle
+    // reste seule a sa place.
+    let mut r = Roll::from_notes([(0.0, 0.5, 36, 9, 110, true, false)]);
+    assert_eq!(r.euclid(0.0, 2.0, 36, 9, 110, 8, 3, 0), 2);
+    let at: Vec<f64> = r.notes.iter().map(|n| n.qn0).collect();
+    assert_eq!(at, vec![0.0, 0.75, 1.5]);
+}

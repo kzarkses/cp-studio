@@ -1000,3 +1000,38 @@ fn la_saisie_pas_a_pas() {
     v.playing = false;
     assert_eq!(v.transform(61), vec![Act::StepListen(false)]);
 }
+
+#[test]
+fn la_saisie_pas_a_pas_avance_sur_une_note_deja_la() {
+    // La note jouee existe deja au curseur : pas de doublon, mais le curseur
+    // avance. Et un trait rapide n'est pas un accord : la fenetre part de
+    // la premiere note.
+    let mut v = riff();
+    v.set_grid(0.5);
+    v.edit_cursor = Some(40.0);
+    v.transform(61);
+    let t0 = std::time::Instant::now();
+    v.step_notes_at(&[0x90 | 60 << 8 | 90 << 16], t0);
+    v.edit_cursor = Some(40.0);
+    let a = v.step_notes_at(
+        &[0x90 | 60 << 8 | 90 << 16],
+        t0 + std::time::Duration::from_millis(300),
+    );
+    assert_eq!(
+        a,
+        vec![Act::Seek(40.5)],
+        "pas de doublon, le curseur avance"
+    );
+    let t1 = t0 + std::time::Duration::from_millis(600);
+    v.step_notes_at(&[0x90 | 62 << 8 | 90 << 16], t1);
+    v.step_notes_at(
+        &[0x90 | 64 << 8 | 90 << 16],
+        t1 + std::time::Duration::from_millis(40),
+    );
+    // La troisieme note, a 80 ms de la premiere : un nouveau pas.
+    let a = v.step_notes_at(
+        &[0x90 | 65 << 8 | 90 << 16],
+        t1 + std::time::Duration::from_millis(80),
+    );
+    assert!(a.iter().any(|x| matches!(x, Act::Seek(_))), "{a:?}");
+}

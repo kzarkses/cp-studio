@@ -172,6 +172,10 @@ pub fn write_musicxml(notes: &[TNote], spec: &ScoreSpec, dropped: usize) -> (Str
     let (mut pm_on, mut lr_on) = (false, false);
     for m in 0..eng.measures {
         let _ = writeln!(x, "    <measure number=\"{}\">", m + 1);
+        // Une reprise qui s'ouvre : le premier element de la mesure.
+        if spec.repeats.iter().any(|r| r.m0 == m) {
+            x += "      <barline location=\"left\"><bar-style>heavy-light</bar-style><repeat direction=\"forward\"/></barline>\n";
+        }
         if m > 0 && eng.sig_of(m) != eng.sig_of(m - 1) {
             let sg = eng.sig_of(m);
             let _ = writeln!(
@@ -239,16 +243,12 @@ pub fn write_musicxml(notes: &[TNote], spec: &ScoreSpec, dropped: usize) -> (Str
                     x,
                     "      <direction placement=\"above\"><direction-type><metronome><beat-unit>quarter</beat-unit><per-minute>{b}</per-minute></metronome></direction-type>{}<sound tempo=\"{b}\"/></direction>",
                     if off > 0 {
-                        format!("<offset>{off}</offset>")
+                        format!("<offset sound=\"yes\">{off}</offset>")
                     } else {
                         String::new()
                     }
                 );
             }
-        }
-        // Une reprise qui s'ouvre.
-        if spec.repeats.iter().any(|r| r.m0 == m) {
-            x += "      <barline location=\"left\"><bar-style>heavy-light</bar-style><repeat direction=\"forward\"/></barline>\n";
         }
         // Portee 1 puis tablature ; dans chacune la voix 1, puis la 2 si
         // la mesure en a une (on revient au debut de la mesure entre deux).

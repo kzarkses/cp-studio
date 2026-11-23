@@ -1070,7 +1070,7 @@ fn le_tempo_change_en_route() {
         m4.contains("<per-minute>90</per-minute><") || m4.contains("<per-minute>90</per-minute>")
     );
     assert!(
-        m4.contains("<offset>8</offset>"),
+        m4.contains("<offset sound=\"yes\">8</offset>"),
         "deux noires apres la barre"
     );
     // Une mesure ou le tempo change ne se reprend pas avec sa voisine.
@@ -1080,4 +1080,77 @@ fn le_tempo_change_en_route() {
     let e = engrave(&two, 0.0, (4, 4), 4);
     assert_eq!(crate::repeats::find(&e, &two, &[]).len(), 1);
     assert!(crate::repeats::find(&e, &two, &[(4.0, 140.0)]).is_empty());
+}
+
+#[test]
+fn ce_que_la_relecture_a_trouve_dans_la_partition() {
+    use crate::meter::Meter;
+    // 1. Une prise qui commence au debut du projet (son tempo y est pose) :
+    // A A A A se reprend des la mesure 0.
+    let bar_a = |m: usize| -> Vec<TNote> {
+        (0..8)
+            .map(|k| tri_note(m as f64 * 4.0 + k as f64 * 0.5, 0.5, [0, 2, 4, 5][k % 4]))
+            .collect()
+    };
+    let mut a4: Vec<TNote> = (0..4).flat_map(bar_a).collect();
+    doc::sort(&mut a4);
+    let e = engrave(&a4, 0.0, (4, 4), 4);
+    let reps = crate::repeats::find(&e, &a4, &[(0.0, 120.0)]);
+    assert_eq!(
+        reps,
+        vec![crate::repeats::Repeat {
+            m0: 0,
+            len: 1,
+            times: 4
+        }]
+    );
+    // 2. Un temps en triolets dans A, et le premier temps de B joue un peu
+    // en avance (7,9) : la compaction le garde (elle le perdait).
+    let mut tab: Vec<TNote> = Vec::new();
+    for m in 0..2 {
+        let o = m as f64 * 4.0;
+        let third = 1.0 / 3.0;
+        tab.push(tri_note(o, third, 0));
+        tab.push(tri_note(o + third, third, 2));
+        tab.push(tri_note(o + 2.0 * third, third, 4));
+        tab.push(tri_note(o + 1.0, 1.0, 5));
+        tab.push(tri_note(o + 2.0, 2.0, 7));
+    }
+    tab.push(tri_note(7.9, 1.0, 9));
+    tab.push(tri_note(9.0, 1.0, 10));
+    doc::sort(&mut tab);
+    let e = engrave(&tab, 0.0, (4, 4), 4);
+    let reps = crate::repeats::find(&e, &tab, &[]);
+    let c = crate::repeats::compact(&e, &tab, &[], &reps);
+    let kept_b = c.notes.iter().filter(|n| n.fret >= 9).count();
+    assert_eq!(kept_b, 2, "les notes de B restent : {reps:?}");
+    // 3. Un triolet coupe par la barre d'une mesure de 7/8 : la grille
+    // droite, et chaque mesure fait sa longueur.
+    let m78 = Meter::new(vec![(0.0, (7, 8))]);
+    let mut t78 = vec![
+        tri_note(3.0, 1.0 / 3.0, 0),
+        tri_note(3.0 + 1.0 / 3.0, 0.5, 2),
+    ];
+    doc::sort(&mut t78);
+    let e = crate::engrave::engrave_meter(&t78, 0.0, &m78, 4, crate::key::detect(&t78));
+    for m in 0..e.measures {
+        let sum: i64 = e
+            .signs
+            .iter()
+            .filter(|s| s.measure == m && s.voice == 1)
+            .map(|s| s.dur)
+            .sum();
+        assert_eq!(sum, e.bar_len(m), "mesure {m} de 7/8");
+    }
+    // 4. Un chiffrage pose un cheveu apres une barre : pas de mesure-copeau.
+    let m = Meter::new(vec![(0.0, (4, 4)), (8.000_000_01, (3, 4))]);
+    let bars = m.bars(0.0, 14.0);
+    assert!(bars.iter().all(|b| b.len > 0.5), "{bars:?}");
+    assert_eq!(
+        m.bar_at(9.0).index,
+        bars.iter()
+            .find(|b| b.qn <= 9.0 && b.end() > 9.0)
+            .unwrap()
+            .index
+    );
 }
