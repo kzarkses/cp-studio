@@ -250,9 +250,10 @@ et 85 à 139 ms d'amorçage. D'où deux chemins.
   étireur gardé par une voix annulée ou coupée net (au-delà de 16, le tempo
   d'une voix neuve était ignoré), le passage par tempo 1 en jouant (un saut
   et une réserve périmée), le retournement en jouant, une vitesse infinie.
-- Reste : l'entendre (Cedric) ; un saut ou un relancement d'une voix étirée
-  claque (le fondu de saut ne passe pas par l'étireur, et le redémarrage
-  jette sa réserve) ; les enveloppes d'une voix étirée avancent par blocs
+- ✅ Un saut ou un relancement d'une voix étirée croise désormais 5 ms de
+  l'ancienne sortie de l'étireur vers la nouvelle (essai : un pas de 0,463
+  sans, 0,0053 avec, la pente naturelle du sinus).
+- Reste : l'entendre (Cedric) ; les enveloppes d'une voix étirée avancent par blocs
   de 512 et la fin d'ADSR se cale sur la matière lue, pas entendue ; un
   retournement en jouant repart de la position lue (en avance de la latence
   de l'étireur) ; seize voix étirées lancées sur le même temps s'amorcent

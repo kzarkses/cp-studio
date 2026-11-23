@@ -23,6 +23,8 @@ use crate::sinc;
 /// Le plus grand morceau qu'une voix etiree rend d'un coup (les ports
 /// rendent par 512).
 const MAX_SH: usize = 2048;
+/// Le plus long fondu d'un nouveau depart etire (5 ms a 96 kHz).
+const XF_MAX: usize = 512;
 use crate::types::{Frame, MAX_ENV_PTS, PlayMode, state};
 
 /// Sous ce gain, on force zero. Les denormaux coutent 100 a 400 cycles sur un
@@ -137,6 +139,9 @@ pub(crate) struct Voice {
     pub pshift: f64,
     /// Un nouveau depart (lancement, saut) : l'etireur repart a zero.
     pub sh_fresh: bool,
+    /// L'etireur a fait entendre quelque chose au bloc d'avant : un nouveau
+    /// depart croise depuis sa reserve (sinon il claque).
+    pub sh_live: bool,
 }
 
 impl Voice {
@@ -195,6 +200,7 @@ impl Voice {
             tempo: 1.0,
             pshift: 1.0,
             sh_fresh: true,
+            sh_live: false,
             loop_xf: 0.0,
         };
         v.reset();
@@ -211,6 +217,7 @@ impl Voice {
         self.tempo = 1.0;
         self.pshift = 1.0;
         self.sh_fresh = true;
+        self.sh_live = false;
         self.loop_xf = 0.0;
         self.state = state::IDLE;
         self.port = -1;
@@ -383,6 +390,7 @@ impl Voice {
                 self.state = state::IDLE;
                 self.clip = None;
                 self.shifter = None;
+                self.sh_live = false;
                 self.ended_at = self.stop_at;
             }
             return;
@@ -564,11 +572,19 @@ impl Voice {
         let mut sbuf = [0f32; MAX_SH * 2];
         let mut s_frames = 0usize;
         let mut s_ended = false;
+        // Le fondu d'un nouveau depart d'une voix qui sonnait : 5 ms de
+        // l'ancienne sortie (la reserve de l'etireur) vers la nouvelle.
+        let mut xbuf = [0f32; XF_MAX * 2];
+        let mut xk = 0usize;
         if stretching && n > off {
             let want = ((n - off) as usize).min(MAX_SH);
             if let Some(slot) = self.shifter.clone() {
                 if let Ok(mut sh) = slot.try_lock() {
                     if self.sh_fresh {
+                        if self.sh_live {
+                            let xf = ((0.005 * engine_srate) as usize).clamp(1, XF_MAX);
+                            xk = sh.take_reserve(&mut xbuf, xf);
+                        }
                         sh.restart();
                         self.sh_fresh = false;
                     }
@@ -612,6 +628,16 @@ impl Voice {
                         k
                     });
                     s_frames = got;
+                    let k = xk.min(got);
+                    for i in 0..k {
+                        let t = (i as f32 + 0.5) / k as f32;
+                        for c in 0..2 {
+                            sbuf[i * 2 + c] = sbuf[i * 2 + c] * t + xbuf[i * 2 + c] * (1.0 - t);
+                        }
+                    }
+                    if got > 0 {
+                        self.sh_live = true;
+                    }
                     s_ended = got < want && sh.flushed;
                 }
             }
@@ -880,6 +906,7 @@ impl Voice {
         // encore : ce n'est jamais une liberation).
         if self.state == state::IDLE {
             self.shifter = None;
+            self.sh_live = false;
         }
 
         // Coupure nette datee : la voix s'eteint exactement au frame demande.
@@ -890,6 +917,7 @@ impl Voice {
             self.state = state::IDLE;
             self.clip = None;
             self.shifter = None;
+            self.sh_live = false;
             self.ended_at = self.stop_at;
         }
     }
@@ -901,6 +929,7 @@ impl Voice {
         self.state = state::IDLE;
         self.clip = None;
         self.shifter = None;
+        self.sh_live = false;
         self.tail_len = 0;
     }
 }

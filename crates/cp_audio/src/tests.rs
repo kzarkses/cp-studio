@@ -1300,3 +1300,37 @@ fn un_saut_vers_une_page_absente_ne_tombe_pas_dans_le_silence() {
     assert!(pos > far as f64, "la voix a saute : {pos}");
     assert_eq!(p.misses(), 0, "aucun bloc dans le silence");
 }
+
+#[test]
+fn un_saut_d_une_voix_etiree_ne_claque_pas() {
+    // Un La grave etire (tempo 0,8), puis des sauts a des phases diverses :
+    // l'ancienne sortie de l'etireur croise la nouvelle en 5 ms ; d'un
+    // echantillon au suivant, jamais plus que la pente d'un sinus et ce
+    // fondu (une coupure seche faisait jusqu'a 1).
+    let mut h = AudioHost::new(None, 48000.0);
+    h.set_shift_factory(Box::new(|| Box::new(cp_engine::shift::LinearRt::new(1000))));
+    let n = 48000 * 4;
+    let s: Vec<f32> = (0..n)
+        .map(|i| (std::f64::consts::TAU * 100.0 * i as f64 / 48000.0).sin() as f32 * 0.5)
+        .collect();
+    let c = h.load_samples(s, 1, 48000.0).unwrap();
+    block(&mut h, 0, 512);
+    let v = h.play(0, c, 0, 0, true, 1.0).unwrap();
+    assert!(h.set(v, Param::Tempo, 0.8));
+    let mut worst = 0.0f64;
+    let mut prev: Option<f64> = None;
+    for jump in 0..6 {
+        for _ in 0..12 {
+            for f in block(&mut h, 0, 512).chunks(2) {
+                if let Some(p) = prev {
+                    worst = worst.max((f[0] - p).abs());
+                }
+                prev = Some(f[0]);
+            }
+        }
+        // Un saut a une phase differente a chaque fois (en frames source).
+        h.set(v, Param::Pos, (48000 + jump * 4801 + 117) as f64);
+    }
+    eprintln!("voix etiree, sauts : pas le plus grand {worst:.4}");
+    assert!(worst < 0.03, "un saut claque : {worst:.3}");
+}

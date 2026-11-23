@@ -92,6 +92,26 @@ impl ShiftState {
         self.flushed = false;
     }
 
+    /// Ce qui reste a entendre de l'ancien depart (au plus `frames`, stereo
+    /// entrelace), pour un fondu vers le nouveau : la reserve, sinon ce que
+    /// l'etireur a de pret. Rend le nombre de frames.
+    pub fn take_reserve(&mut self, dst: &mut [f32], frames: usize) -> usize {
+        let nch = self.nch;
+        if self.out_n == 0 && !self.flushed {
+            self.head = 0;
+            self.out_n = self.sh.take(&mut self.out[..OUT * nch], nch);
+        }
+        let k = self.out_n.min(frames).min(dst.len() / 2);
+        for f in 0..k {
+            for c in 0..2 {
+                dst[f * 2 + c] = self.out[(self.head + f) * nch + c.min(nch - 1)] as f32;
+            }
+        }
+        self.head += k;
+        self.out_n -= k;
+        k
+    }
+
     /// Pose les reglages s'ils ont change.
     pub fn tune(&mut self, tempo: f64, shift: f64) {
         if tempo != self.tempo {

@@ -568,6 +568,7 @@ fn stop_now(v: &mut Voice, fade_frames: i32) {
         v.state = state::IDLE;
         v.clip = None;
         v.shifter = None;
+        v.sh_live = false;
         v.tail_len = 0;
         return;
     }
@@ -669,6 +670,10 @@ fn apply(a: &mut PortAudio, ps: &PortSlot, c: Cmd, block_start: Frame, srate: f6
                     // nouvelle ; autre clip, un fondu d'entree minimal.
                     let live = v.state == state::PLAYING || v.state == state::STOPPING;
                     let same = v.clip.as_ref().is_some_and(|c| Arc::ptr_eq(c, &clip));
+                    // Une voix qui ne sonnait pas n'a rien a croiser.
+                    if !live {
+                        v.sh_live = false;
+                    }
                     if live && same {
                         v.tail_pos = v.pos;
                         v.tail_len = xf;
