@@ -1,0 +1,12 @@
+[package]
+name = "cp_session"
+description = "La Session : colonnes, cases, scenes, lancement quantifie, prises. Pur, sans REAPER"
+edition.workspace = true
+version.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+
+[lints]
+workspace = true

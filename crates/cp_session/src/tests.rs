@@ -1,0 +1,908 @@
+//! La Session sur un faux moteur : chaque commande est notee avec son frame.
+
+use std::collections::HashMap;
+
+use super::*;
+use crate::clip::{TempoMode, bars_for, tempo_from_length, tempo_from_name};
+
+#[derive(Clone, Debug, PartialEq)]
+enum Call {
+    LanePlay {
+        port: u32,
+        id: u64,
+        from: f64,
+        at: i64,
+    },
+    LaneUpdate {
+        port: u32,
+        notes: usize,
+    },
+    LaneStop {
+        port: u32,
+        at: i64,
+    },
+    LaneCancel {
+        port: u32,
+    },
+    LaneRate {
+        port: u32,
+        fpb: f64,
+    },
+    VoicePlay {
+        port: u32,
+        v: u32,
+        start: i64,
+        looped: bool,
+        rate: f64,
+        at: i64,
+    },
+    VoiceStop {
+        v: u32,
+        at: Option<i64>,
+    },
+    VoiceKeep {
+        v: u32,
+    },
+    MidiRecStart {
+        id: u32,
+        at: i64,
+    },
+    MidiRecStop {
+        id: u32,
+        at: i64,
+    },
+    AudioRecStart {
+        id: u32,
+        at: i64,
+    },
+    AudioRecStop {
+        id: u32,
+        at: i64,
+    },
+}
+
+struct Fake {
+    now: i64,
+    calls: Vec<Call>,
+    lanes: bool,
+    next_v: u32,
+    next_rec: u32,
+    srcs: HashMap<String, AudioSrc>,
+    loading: Vec<String>,
+    takes: HashMap<u32, Vec<(i64, [u8; 3])>>,
+    rec_stop: HashMap<u32, i64>,
+}
+
+impl Fake {
+    fn new() -> Fake {
+        Fake {
+            now: 0,
+            calls: Vec::new(),
+            lanes: true,
+            next_v: 1,
+            next_rec: 1,
+            srcs: HashMap::new(),
+            loading: Vec::new(),
+            takes: HashMap::new(),
+            rec_stop: HashMap::new(),
+        }
+    }
+    fn take(&mut self) -> Vec<Call> {
+        std::mem::take(&mut self.calls)
+    }
+}
+
+impl Engine for Fake {
+    fn now(&self) -> i64 {
+        self.now
+    }
+    fn srate(&self) -> f64 {
+        48000.0
+    }
+    fn has_lanes(&self) -> bool {
+        self.lanes
+    }
+    fn ports(&self) -> u32 {
+        128
+    }
+    fn route(&mut self, _port: u32, _track: &str) -> bool {
+        true
+    }
+    fn lane_play(&mut self, port: u32, clip: &LaneClip, from: f64, _fpb: f64, at: i64) -> bool {
+        self.calls.push(Call::LanePlay {
+            port,
+            id: clip.id,
+            from,
+            at,
+        });
+        true
+    }
+    fn lane_update(&mut self, port: u32, clip: &LaneClip) -> bool {
+        self.calls.push(Call::LaneUpdate {
+            port,
+            notes: clip.notes.len(),
+        });
+        true
+    }
+    fn lane_stop(&mut self, port: u32, at: i64) -> bool {
+        self.calls.push(Call::LaneStop { port, at });
+        true
+    }
+    fn lane_cancel(&mut self, port: u32) {
+        self.calls.push(Call::LaneCancel { port });
+    }
+    fn lane_rate(&mut self, port: u32, fpb: f64, _at: i64) {
+        self.calls.push(Call::LaneRate { port, fpb });
+    }
+    fn audio_src(&mut self, path: &str) -> Option<Result<AudioSrc, String>> {
+        if self.loading.iter().any(|p| p == path) {
+            return None;
+        }
+        Some(
+            self.srcs
+                .get(path)
+                .cloned()
+                .ok_or_else(|| "missing".to_string()),
+        )
+    }
+    fn voice_play(
+        &mut self,
+        port: u32,
+        _src: &AudioSrc,
+        start: i64,
+        _end: i64,
+        looped: bool,
+        _gain: f64,
+        rate: f64,
+        at: i64,
+    ) -> Option<u32> {
+        let v = self.next_v;
+        self.next_v += 1;
+        self.calls.push(Call::VoicePlay {
+            port,
+            v,
+            start,
+            looped,
+            rate,
+            at,
+        });
+        Some(v)
+    }
+    fn voice_stop(&mut self, voice: u32, at: Option<i64>, _fade_s: f64) {
+        self.calls.push(Call::VoiceStop { v: voice, at });
+    }
+    fn voice_keep(&mut self, voice: u32) {
+        self.calls.push(Call::VoiceKeep { v: voice });
+    }
+    fn voice_rate(&mut self, _voice: u32, _rate: f64) {}
+    fn midi_rec_start(&mut self, _dev: i32, at: i64) -> u32 {
+        let id = self.next_rec;
+        self.next_rec += 1;
+        self.calls.push(Call::MidiRecStart { id, at });
+        id
+    }
+    fn midi_rec_stop(&mut self, id: u32, at: i64) {
+        self.rec_stop.insert(id, at);
+        self.calls.push(Call::MidiRecStop { id, at });
+    }
+    fn midi_rec_take(&mut self, id: u32) -> Option<Vec<(i64, [u8; 3])>> {
+        let end = *self.rec_stop.get(&id)?;
+        if self.now < end {
+            return None;
+        }
+        Some(self.takes.remove(&id).unwrap_or_default())
+    }
+    fn audio_rec_start(&mut self, _ch0: i32, _ch1: i32, at: i64) -> u32 {
+        let id = self.next_rec;
+        self.next_rec += 1;
+        self.calls.push(Call::AudioRecStart { id, at });
+        id
+    }
+    fn audio_rec_stop(&mut self, id: u32, at: i64) {
+        self.rec_stop.insert(id, at);
+        self.calls.push(Call::AudioRecStop { id, at });
+    }
+    fn audio_rec_poll(&mut self, id: u32) -> RecPoll {
+        match self.rec_stop.get(&id) {
+            Some(&end) if self.now >= end => RecPoll::Ready(AudioSrc {
+                clip: 900 + id,
+                frames: 96000,
+                srate: 48000.0,
+                file_bpm: None,
+            }),
+            _ => RecPoll::Recording,
+        }
+    }
+    fn save_take(&mut self, clip: u32, name: &str) -> Option<String> {
+        let p = format!("C:/rec/{name}.wav");
+        self.srcs.insert(
+            p.clone(),
+            AudioSrc {
+                clip,
+                frames: 96000,
+                srate: 48000.0,
+                file_bpm: None,
+            },
+        );
+        Some(p)
+    }
+}
+
+/// 120 BPM a 48 kHz : 24 000 frames par noire, 4 noires par mesure.
+const FPB: f64 = 24000.0;
+const BAR: i64 = 96000;
+
+fn track(g: &str, input: Input) -> TrackInfo {
+    TrackInfo {
+        guid: g.into(),
+        name: g.into(),
+        color: None,
+        armed: false,
+        input,
+        instrument: false,
+    }
+}
+
+fn notes(v: &[(f64, f64, u8)]) -> Vec<Note> {
+    v.iter()
+        .map(|&(s, l, p)| Note {
+            start: s,
+            len: l,
+            pitch: p,
+            vel: 100,
+            chan: 0,
+            prob: 100,
+        })
+        .collect()
+}
+
+fn setup() -> (Session, Fake) {
+    let mut s = Session::new();
+    let mut e = Fake::new();
+    s.set_tracks(
+        &mut e,
+        vec![track("A", Input::Midi(-1)), track("B", Input::Audio(0, 1))],
+    );
+    s.sync_clock(&mut e, 0, 0.0, FPB, 4.0, false);
+    (s, e)
+}
+
+fn lat() -> i64 {
+    (time::LATENCY_S * 48000.0) as i64
+}
+
+#[test]
+fn chaque_colonne_a_son_port_a_partir_de_1() {
+    let (s, _) = setup();
+    assert_eq!(s.cols[0].port, 1);
+    assert_eq!(s.cols[1].port, 2);
+}
+
+#[test]
+fn le_premier_lancement_part_tout_de_suite_puis_les_autres_a_la_mesure() {
+    let (mut s, mut e) = setup();
+    let id = s.fresh_id();
+    s.put(0, 0, Clip::midi(id, 1.0, notes(&[(0.0, 1.0, 60)])));
+    let id2 = s.fresh_id();
+    s.put(0, 1, Clip::midi(id2, 1.0, notes(&[(0.0, 1.0, 62)])));
+    // Rien ne joue : l'horloge libre part maintenant (+ la latence).
+    e.now = 1000;
+    s.click(&mut e, 0, 0);
+    assert_eq!(
+        e.take(),
+        vec![Call::LanePlay {
+            port: 1,
+            id,
+            from: 0.0,
+            at: 1000 + lat()
+        }]
+    );
+    let t0 = 1000 + lat();
+    e.now = t0 + 10;
+    s.tick(&mut e);
+    assert_eq!(s.state(0, 0), CellState::Playing);
+    // A mi-mesure, une autre case : la mesure suivante.
+    e.now = t0 + BAR / 2;
+    s.click(&mut e, 0, 1);
+    let calls = e.take();
+    assert!(calls.contains(&Call::LanePlay {
+        port: 1,
+        id: id2,
+        from: 0.0,
+        at: t0 + BAR
+    }));
+    assert_eq!(s.state(0, 1), CellState::Queued);
+    assert_eq!(s.state(0, 0), CellState::Playing);
+    e.now = t0 + BAR + 1;
+    s.tick(&mut e);
+    assert_eq!(s.state(0, 1), CellState::Playing);
+    assert_eq!(s.state(0, 0), CellState::Stopped);
+}
+
+#[test]
+fn un_lancement_tardif_compte_pour_la_frontiere_passee() {
+    let (mut s, mut e) = setup();
+    let a = s.fresh_id();
+    s.put(0, 0, Clip::midi(a, 1.0, notes(&[(0.0, 1.0, 60)])));
+    let b = s.fresh_id();
+    s.put(0, 1, Clip::midi(b, 1.0, notes(&[(0.0, 1.0, 62)])));
+    s.click(&mut e, 0, 0);
+    let t0 = lat();
+    e.now = t0 + 1;
+    s.tick(&mut e);
+    // 0,1 noire apres la mesure (sous la tolerance de 0,25) : la mesure qui
+    // vient de passer.
+    e.now = t0 + BAR + (0.1 * FPB) as i64 - lat();
+    e.take();
+    s.click(&mut e, 0, 1);
+    assert!(e.take().contains(&Call::LanePlay {
+        port: 1,
+        id: b,
+        from: 0.0,
+        at: t0 + BAR
+    }));
+}
+
+#[test]
+fn recliquer_annule_puis_arrete_a_la_frontiere() {
+    let (mut s, mut e) = setup();
+    let a = s.fresh_id();
+    s.put(0, 0, Clip::midi(a, 1.0, notes(&[(0.0, 1.0, 60)])));
+    let b = s.fresh_id();
+    s.put(0, 1, Clip::midi(b, 1.0, notes(&[(0.0, 1.0, 62)])));
+    s.click(&mut e, 0, 0);
+    let t0 = lat();
+    e.now = t0 + 100;
+    s.tick(&mut e);
+    s.click(&mut e, 0, 1);
+    assert_eq!(s.state(0, 1), CellState::Queued);
+    e.take();
+    s.click(&mut e, 0, 1);
+    assert_eq!(e.take(), vec![Call::LaneCancel { port: 1 }]);
+    assert_eq!(s.state(0, 1), CellState::Stopped);
+    // Recliquer la case qui joue : elle s'arrete a la mesure.
+    s.click(&mut e, 0, 0);
+    assert_eq!(
+        e.take(),
+        vec![Call::LaneStop {
+            port: 1,
+            at: t0 + BAR
+        }]
+    );
+    assert_eq!(s.state(0, 0), CellState::Stopping);
+    e.now = t0 + BAR;
+    s.tick(&mut e);
+    assert_eq!(s.state(0, 0), CellState::Stopped);
+    // Plus rien ne joue : l'horloge libre s'arrete.
+    assert!(!s.tl.running);
+}
+
+#[test]
+fn une_scene_lance_ses_cases_et_arrete_les_autres_sans_toggle() {
+    let (mut s, mut e) = setup();
+    let a = s.fresh_id();
+    s.put(0, 0, Clip::midi(a, 1.0, notes(&[(0.0, 1.0, 60)])));
+    let b = s.fresh_id();
+    s.put(1, 1, Clip::midi(b, 1.0, notes(&[(0.0, 1.0, 60)])));
+    s.cols[1].track.input = Input::Midi(-1);
+    s.launch_scene(&mut e, 0, false);
+    let t0 = lat();
+    e.now = t0 + 1;
+    s.tick(&mut e);
+    assert_eq!(s.state(0, 0), CellState::Playing);
+    e.take();
+    // Relancer la meme scene : la case qui joue n'est PAS arretee.
+    s.launch_scene(&mut e, 0, false);
+    assert!(
+        !e.take()
+            .iter()
+            .any(|c| matches!(c, Call::LaneStop { port: 1, .. }))
+    );
+    assert_eq!(s.state(0, 0), CellState::Playing);
+    // La scene 1 : la colonne A (sans clip la) s'arrete, B part.
+    s.launch_scene(&mut e, 1, false);
+    let c = e.take();
+    assert!(c.contains(&Call::LaneStop {
+        port: 1,
+        at: t0 + BAR
+    }));
+    assert!(
+        c.iter()
+            .any(|c| matches!(c, Call::LanePlay { port: 2, .. }))
+    );
+}
+
+#[test]
+fn verrou_de_phase() {
+    let (mut s, mut e) = setup();
+    let a = s.fresh_id();
+    s.put(0, 0, Clip::midi(a, 1.0, notes(&[(0.0, 1.0, 60)])));
+    let mut c = Clip::midi(s.fresh_id(), 2.0, notes(&[(0.0, 1.0, 62)]));
+    c.phase_lock = true;
+    let b = c.id;
+    s.put(1, 0, c);
+    s.cols[1].track.input = Input::Midi(-1);
+    s.click(&mut e, 0, 0);
+    let t0 = lat();
+    e.now = t0 + BAR + BAR / 2;
+    s.tick(&mut e);
+    e.take();
+    s.q = Quant::Bar;
+    s.click(&mut e, 1, 0);
+    // Lancee a la mesure 3 (noire 8) : une boucle de 2 mesures lancee au
+    // temps 0 y serait a 0.
+    assert!(e.take().contains(&Call::LanePlay {
+        port: 2,
+        id: b,
+        from: 0.0,
+        at: t0 + 2 * BAR
+    }));
+    // Une mesure plus tard, elle serait a la noire 4.
+    let mut c = Clip::midi(s.fresh_id(), 2.0, notes(&[(0.0, 1.0, 64)]));
+    c.phase_lock = true;
+    let d = c.id;
+    s.put(1, 1, c);
+    e.now = t0 + 2 * BAR + BAR / 2;
+    s.tick(&mut e);
+    e.take();
+    s.click(&mut e, 1, 1);
+    assert!(e.take().contains(&Call::LanePlay {
+        port: 2,
+        id: d,
+        from: 4.0,
+        at: t0 + 3 * BAR
+    }));
+}
+
+#[test]
+fn une_prise_midi_part_a_la_frontiere_dure_rec_mesures_et_tourne() {
+    let (mut s, mut e) = setup();
+    s.rec_bars = 2;
+    // Une colonne qui joue deja : la prise attend la frontiere de 2 mesures.
+    let a = s.fresh_id();
+    s.put(1, 0, Clip::midi(a, 1.0, notes(&[(0.0, 1.0, 60)])));
+    s.cols[1].track.input = Input::Midi(-1);
+    s.click(&mut e, 1, 0);
+    let t0 = lat();
+    e.now = t0 + BAR / 2;
+    s.tick(&mut e);
+    e.take();
+    assert!(s.record(&mut e, 0, 3));
+    let start = t0 + 2 * BAR;
+    let end = start + 2 * BAR;
+    assert_eq!(
+        e.take(),
+        vec![
+            Call::MidiRecStart { id: 1, at: start },
+            Call::MidiRecStop { id: 1, at: end }
+        ]
+    );
+    e.now = start + 1;
+    s.tick(&mut e);
+    assert_eq!(s.state(0, 3), CellState::Recording);
+    // Deux notes jouees.
+    e.takes.insert(
+        1,
+        vec![
+            (0, [0x90, 60, 100]),
+            ((FPB / 2.0) as i64, [0x80, 60, 0]),
+            ((5.0 * FPB) as i64, [0x90, 64, 90]),
+            // Le canal 16 : un apercu, jamais pris.
+            ((5.0 * FPB) as i64, [0x9F, 70, 90]),
+        ],
+    );
+    e.now = end + 10;
+    s.tick(&mut e);
+    let c = s.clip(0, 3).unwrap();
+    assert_eq!(c.bars, 2.0);
+    let n = c.notes();
+    assert_eq!(n.len(), 2);
+    assert_eq!((n[0].start, n[0].len, n[0].pitch), (0.0, 0.5, 60));
+    // Encore tenue a la fin : elle finit avec la prise.
+    assert_eq!((n[1].start, n[1].len), (5.0, 3.0));
+    // Le clip tourne, en phase avec la fin de la prise.
+    assert!(
+        e.take()
+            .iter()
+            .any(|c| matches!(c, Call::LanePlay { port: 1, at, .. } if *at == end))
+    );
+}
+
+#[test]
+fn une_prise_dans_une_session_silencieuse_part_tout_de_suite() {
+    let (mut s, mut e) = setup();
+    s.rec_bars = 4;
+    e.now = 500;
+    assert!(s.record(&mut e, 0, 0));
+    assert_eq!(
+        e.take()[0],
+        Call::MidiRecStart {
+            id: 1,
+            at: 500 + lat()
+        }
+    );
+    // Recliquee avant la fin : elle finit maintenant, arrondie a la mesure.
+    e.now = 500 + lat() + BAR + BAR / 3;
+    s.stop_rec(&mut e, 0);
+    assert_eq!(s.cols[0].run.rec.as_ref().unwrap().beats, 8.0);
+}
+
+#[test]
+fn une_prise_audio_devient_une_case_qui_boucle() {
+    let (mut s, mut e) = setup();
+    s.rec_bars = 1;
+    e.now = 0;
+    assert!(s.record(&mut e, 1, 0));
+    let c = e.take();
+    assert_eq!(c[0], Call::AudioRecStart { id: 1, at: lat() });
+    e.now = lat() + BAR + 5;
+    s.tick(&mut e);
+    let clip = s.clip(1, 0).unwrap();
+    assert_eq!(clip.bars, 1.0);
+    let Kind::Audio(a) = &clip.kind else { panic!() };
+    assert!(a.looped);
+    assert_eq!(a.src_bpm, Some(120.0));
+    assert!(e.take().iter().any(|c| matches!(
+        c,
+        Call::VoicePlay {
+            port: 2,
+            looped: true,
+            ..
+        }
+    )));
+}
+
+#[test]
+fn une_case_audio_prend_sa_passe_et_son_taux() {
+    let (mut s, mut e) = setup();
+    // 2,05 s a 120 BPM = une mesure de 2 s a 2,5 % pres : pas ajustee ;
+    // 2,03 s nommee 120bpm : ajustee a la mesure exacte.
+    e.srcs.insert(
+        "C:/x/loop 120bpm.wav".into(),
+        AudioSrc {
+            clip: 7,
+            frames: (2.03 * 48000.0) as i64,
+            srate: 48000.0,
+            file_bpm: None,
+        },
+    );
+    let id = s.fresh_id();
+    s.put(1, 0, Clip::audio(id, "C:/x/loop 120bpm.wav"));
+    s.click(&mut e, 1, 0);
+    let c = e.take();
+    let Call::VoicePlay { rate, looped, .. } = c[0] else {
+        panic!("{c:?}")
+    };
+    assert!(looped);
+    assert!((rate - 2.03 / 2.0).abs() < 1e-4, "{rate}");
+    assert_eq!(s.clip(1, 0).unwrap().bars, 1.0);
+}
+
+#[test]
+fn un_one_shot_rejoue_a_chaque_passe() {
+    let (mut s, mut e) = setup();
+    e.srcs.insert(
+        "C:/x/hit.wav".into(),
+        AudioSrc {
+            clip: 7,
+            frames: 4800,
+            srate: 48000.0,
+            file_bpm: None,
+        },
+    );
+    let id = s.fresh_id();
+    let mut c = Clip::audio(id, "C:/x/hit.wav");
+    c.bars = 1.0;
+    if let Kind::Audio(a) = &mut c.kind {
+        a.looped = false;
+        a.tempo = TempoMode::None;
+    }
+    s.put(1, 0, c);
+    s.click(&mut e, 1, 0);
+    let t0 = lat();
+    e.take();
+    for k in 0..3 {
+        e.now = t0 + k * BAR + BAR - 1000;
+        s.tick(&mut e);
+    }
+    let plays: Vec<i64> = e
+        .take()
+        .iter()
+        .filter_map(|c| match c {
+            Call::VoicePlay { at, .. } => Some(*at),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(plays, vec![t0 + BAR, t0 + 2 * BAR, t0 + 3 * BAR]);
+}
+
+#[test]
+fn une_case_audio_qui_se_charge_attend_puis_part() {
+    let (mut s, mut e) = setup();
+    e.loading.push("C:/x/a.wav".into());
+    e.srcs.insert(
+        "C:/x/a.wav".into(),
+        AudioSrc {
+            clip: 3,
+            frames: 96000,
+            srate: 48000.0,
+            file_bpm: Some(120.0),
+        },
+    );
+    let id = s.fresh_id();
+    s.put(1, 0, Clip::audio(id, "C:/x/a.wav"));
+    s.click(&mut e, 1, 0);
+    assert_eq!(s.state(1, 0), CellState::Waiting);
+    e.loading.clear();
+    e.now = 3000;
+    s.tick(&mut e);
+    assert!(e.take().iter().any(|c| matches!(c, Call::VoicePlay { .. })));
+}
+
+#[test]
+fn motion_marche_et_revient() {
+    let (mut s, mut e) = setup();
+    for k in 0..2 {
+        let id = s.fresh_id();
+        s.put(
+            0,
+            k,
+            Clip::midi(id, 1.0, notes(&[(0.0, 1.0, 60 + k as u8)])),
+        );
+    }
+    s.cols[0].motion = Motion::MarchWrap;
+    s.click(&mut e, 0, 0);
+    let t0 = lat();
+    e.now = t0 + 1;
+    s.tick(&mut e);
+    e.take();
+    // A une noire de la fin de la passe : la case suivante, datee a la fin.
+    e.now = t0 + BAR - (FPB as i64) + 10;
+    s.tick(&mut e);
+    let c = e.take();
+    assert!(
+        c.iter()
+            .any(|c| matches!(c, Call::LanePlay { at, .. } if *at == t0 + BAR))
+    );
+    e.now = t0 + BAR + 1;
+    s.tick(&mut e);
+    assert_eq!(s.state(0, 1), CellState::Playing);
+    // Et revient en haut.
+    e.now = t0 + 2 * BAR - (FPB as i64) + 10;
+    s.tick(&mut e);
+    e.now = t0 + 2 * BAR + 1;
+    s.tick(&mut e);
+    assert_eq!(s.state(0, 0), CellState::Playing);
+}
+
+#[test]
+fn l_overdub_fond_les_notes_dans_la_boucle() {
+    let (mut s, mut e) = setup();
+    let id = s.fresh_id();
+    s.put(0, 0, Clip::midi(id, 1.0, notes(&[(0.0, 0.5, 60)])));
+    s.click(&mut e, 0, 0);
+    let t0 = lat();
+    e.now = t0 + BAR + 100;
+    s.tick(&mut e);
+    e.take();
+    assert!(s.overdub(&mut e, 0));
+    let c = e.take();
+    let Call::MidiRecStart { id: rid, at: rs } = c[0] else {
+        panic!("{c:?}")
+    };
+    // La premiere prise finit a la fin de la passe.
+    assert_eq!(
+        c[1],
+        Call::MidiRecStop {
+            id: rid,
+            at: t0 + 2 * BAR
+        }
+    );
+    // Une note jouee une noire et demie apres le debut de la prise.
+    let f = (t0 + BAR + (1.5 * FPB) as i64) - rs;
+    e.takes
+        .insert(rid, vec![(f, [0x90, 67, 80]), (f + 12000, [0x80, 67, 0])]);
+    e.now = t0 + 2 * BAR - 1000;
+    s.tick(&mut e);
+    e.now = t0 + 2 * BAR + 10;
+    s.tick(&mut e);
+    let n = s.clip(0, 0).unwrap().notes().to_vec();
+    assert_eq!(n.len(), 2);
+    assert!((n[1].start - 1.5).abs() < 1e-3, "{n:?}");
+    assert!(
+        e.take()
+            .iter()
+            .any(|c| matches!(c, Call::LaneUpdate { notes: 2, .. }))
+    );
+}
+
+#[test]
+fn deplacer_echanger_copier_effacer_et_rendre() {
+    let (mut s, mut e) = setup();
+    let a = s.fresh_id();
+    s.put(0, 0, Clip::midi(a, 1.0, notes(&[(0.0, 1.0, 60)])));
+    let b = s.fresh_id();
+    s.put(0, 1, Clip::midi(b, 1.0, notes(&[(0.0, 1.0, 62)])));
+    s.move_cell(&mut e, (0, 0), (0, 1), false);
+    assert_eq!(s.clip(0, 1).unwrap().id, a);
+    assert_eq!(s.clip(0, 0).unwrap().id, b);
+    s.move_cell(&mut e, (0, 1), (1, 4), true);
+    let c = s.clip(1, 4).unwrap();
+    assert_ne!(c.id, a);
+    assert_eq!(c.notes().len(), 1);
+    s.erase(&mut e, 1, 4);
+    assert!(s.clip(1, 4).is_none());
+    assert!(s.undo_erase());
+    assert!(s.clip(1, 4).is_some());
+}
+
+#[test]
+fn capturer_une_scene_ne_relance_rien_et_n_ecrase_rien() {
+    let (mut s, mut e) = setup();
+    let a = s.fresh_id();
+    s.put(0, 0, Clip::midi(a, 1.0, notes(&[(0.0, 1.0, 60)])));
+    let b = s.fresh_id();
+    s.put(1, 1, Clip::midi(b, 1.0, notes(&[(0.0, 1.0, 62)])));
+    s.cols[1].track.input = Input::Midi(-1);
+    s.click(&mut e, 0, 0);
+    s.click(&mut e, 1, 1);
+    e.now = lat() + 5;
+    s.tick(&mut e);
+    e.take();
+    s.sel = (0, 0);
+    let row = s.capture_scene().unwrap();
+    assert_eq!(row, 2);
+    assert!(s.clip(0, 2).is_some() && s.clip(1, 2).is_some());
+    assert!(e.take().is_empty());
+}
+
+#[test]
+fn le_mode_follow_attend_le_transport() {
+    let (mut s, mut e) = setup();
+    s.clock = ClockMode::Follow;
+    let a = s.fresh_id();
+    s.put(0, 0, Clip::midi(a, 1.0, notes(&[(0.0, 1.0, 60)])));
+    s.click(&mut e, 0, 0);
+    assert_eq!(s.state(0, 0), CellState::Waiting);
+    assert!(e.take().is_empty());
+    // Le transport part a la noire 2.5 du projet : la mesure suivante (4).
+    e.now = 10_000;
+    s.sync_clock(&mut e, 10_000, 2.5, FPB, 4.0, true);
+    assert!(e.take().contains(&Call::LanePlay {
+        port: 1,
+        id: a,
+        from: 0.0,
+        at: 10_000 + (1.5 * FPB) as i64
+    }));
+}
+
+#[test]
+fn sans_lanes_le_midi_le_dit() {
+    let (mut s, mut e) = setup();
+    e.lanes = false;
+    let a = s.fresh_id();
+    s.put(0, 0, Clip::midi(a, 1.0, notes(&[(0.0, 1.0, 60)])));
+    s.click(&mut e, 0, 0);
+    assert!(e.take().is_empty());
+    assert!(s.flash.as_ref().unwrap().0.contains("restart"));
+}
+
+#[test]
+fn enregistrer_et_relire() {
+    let (mut s, mut e) = setup();
+    let mut c = Clip::midi(s.fresh_id(), 2.0, notes(&[(0.0, 0.5, 60), (1.5, 0.25, 64)]));
+    c.name = "Riff | 1".into();
+    c.color = Some(3);
+    c.loop_a = 2.0;
+    c.loop_b = 6.0;
+    c.phase_lock = true;
+    c.sig = Some((6, 8));
+    let mut n = c.notes().to_vec();
+    n[1].chan = 3;
+    n[1].prob = 50;
+    c.kind = Kind::Midi(n);
+    s.put(0, 2, c.clone());
+    let mut au = Clip::audio(s.fresh_id(), "C:/a|b.wav");
+    if let Kind::Audio(a) = &mut au.kind {
+        a.offs = 0.5;
+        a.len = 1.25;
+        a.src_bpm = Some(98.5);
+        a.tempo = TempoMode::Stretch;
+        a.gain = 0.5;
+        a.looped = false;
+    }
+    au.bars = 0.25;
+    s.put(1, 9, au.clone());
+    s.cols[0].motion = Motion::Random;
+    s.q = Quant::Beat;
+    s.rec_bars = 4;
+    s.clock = ClockMode::Follow;
+    let saved: HashMap<&str, String> = s.save().into_iter().collect();
+    let mut t = Session::new();
+    t.load(&|k| saved.get(k).cloned());
+    t.set_tracks(
+        &mut e,
+        vec![track("A", Input::Midi(-1)), track("B", Input::Audio(0, 1))],
+    );
+    t.apply_pending_motion();
+    assert_eq!(t.clip(0, 2), Some(&c));
+    assert_eq!(t.clip(1, 9), Some(&au));
+    assert_eq!(t.cols[0].motion, Motion::Random);
+    assert_eq!(
+        (t.q, t.rec_bars, t.clock),
+        (Quant::Beat, 4, ClockMode::Follow)
+    );
+    assert!(t.scenes >= 11);
+    assert!(t.next_id > au.id);
+}
+
+#[test]
+fn reprendre_l_ancienne_session() {
+    let mut s = Session::new();
+    let old = "0:0:CPC1|kind=midi|name=Bass|bars=2|notes=0,1,36,100;2,1,38,90|probs=100;50\n\
+               1:3:CPC1|kind=audio|path=C%3A/x/loop.wav|lmode=loop|src_bpm=120\n\
+               5:0:CPC1|kind=midi|notes=0,1,60,100\n";
+    let n = s.import_old(old, &|t| match t {
+        0 => Some("GA".into()),
+        1 => Some("GB".into()),
+        _ => None,
+    });
+    assert_eq!(n, 2);
+    let c = &s.cells[&("GA".to_string(), 0)];
+    assert_eq!(c.name, "Bass");
+    assert_eq!(c.notes()[1].prob, 50);
+    let Kind::Audio(a) = &s.cells[&("GB".to_string(), 3)].kind else {
+        panic!()
+    };
+    assert_eq!(a.path, "C:/x/loop.wav");
+    assert!(a.looped);
+}
+
+#[test]
+fn une_piste_disparue_garde_ses_clips() {
+    let (mut s, mut e) = setup();
+    let a = s.fresh_id();
+    s.put(1, 0, Clip::midi(a, 1.0, notes(&[(0.0, 1.0, 60)])));
+    s.set_tracks(&mut e, vec![track("A", Input::None)]);
+    assert_eq!(s.cols.len(), 2);
+    assert!(s.cols[1].held);
+    assert_eq!(s.cols[1].track.guid, "B");
+    // Revenue : la colonne reprend sa place, et ses clips.
+    s.set_tracks(
+        &mut e,
+        vec![track("B", Input::None), track("A", Input::None)],
+    );
+    assert!(!s.cols[0].held);
+    assert!(s.clip(0, 0).is_some());
+}
+
+#[test]
+fn les_tempos_d_un_nom_et_d_une_duree() {
+    assert_eq!(tempo_from_name("Drums 128bpm.wav"), Some(128.0));
+    assert_eq!(tempo_from_name("loop_95_BPM_Am.wav"), Some(95.0));
+    assert_eq!(tempo_from_name("kit_124_hat.wav"), Some(124.0));
+    assert_eq!(tempo_from_name("kick 01.wav"), None);
+    // 4 s a 120 BPM = 2 mesures, seul candidat pres de 118.
+    assert_eq!(tempo_from_length(4.0, 4.0, 118.0), Some(120.0));
+    assert_eq!(bars_for(3.9, 4.0), 1.0);
+    assert_eq!(bars_for(4.2, 4.0), 2.0);
+    assert_eq!(bars_for(1.0, 4.0), 0.25);
+}
+
+#[test]
+fn le_tempo_change_et_les_lanes_suivent() {
+    let (mut s, mut e) = setup();
+    let a = s.fresh_id();
+    s.put(0, 0, Clip::midi(a, 1.0, notes(&[(0.0, 1.0, 60)])));
+    s.click(&mut e, 0, 0);
+    e.now = lat() + 10;
+    s.tick(&mut e);
+    e.take();
+    let n = e.now;
+    s.sync_clock(&mut e, n, 0.0, 20000.0, 4.0, false);
+    assert!(e.take().contains(&Call::LaneRate {
+        port: 1,
+        fpb: 20000.0
+    }));
+    assert!((s.bpm - 144.0).abs() < 1e-9);
+}
