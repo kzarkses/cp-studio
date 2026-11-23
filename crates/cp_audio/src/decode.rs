@@ -250,6 +250,30 @@ fn finish(a: Active, out: &Sender<Msg>) {
     });
 }
 
+/// Le fil s'arrete (le `Decoder` est lache) : les sources en cours
+/// reviennent au fil principal, qui les detruit (jamais ici).
+fn give_back(
+    active: Vec<Active>,
+    thumbs: std::collections::VecDeque<ThumbActive>,
+    out: &Sender<Msg>,
+) {
+    for a in active {
+        let _ = out.send(Msg::Done {
+            ticket: a.job.ticket,
+            src: a.job.src,
+            peaks: None,
+            error: Some("closed".into()),
+        });
+    }
+    for t in thumbs {
+        let _ = out.send(Msg::Thumb {
+            path: t.job.path,
+            src: t.job.src,
+            data: Vec::new(),
+        });
+    }
+}
+
 fn worker(jobs: Receiver<Work>, out: Sender<Msg>) {
     let mut active: Vec<Active> = Vec::new();
     let mut thumbs: std::collections::VecDeque<ThumbActive> = std::collections::VecDeque::new();
@@ -264,7 +288,10 @@ fn worker(jobs: Receiver<Work>, out: Sender<Msg>) {
             match jobs.recv_timeout(Duration::ZERO) {
                 Ok(j) => Some(j),
                 Err(RecvTimeoutError::Timeout) => None,
-                Err(RecvTimeoutError::Disconnected) => return,
+                Err(RecvTimeoutError::Disconnected) => {
+                    give_back(active, thumbs, &out);
+                    return;
+                }
             }
         };
         match next {
@@ -363,6 +390,11 @@ impl Drop for Decoder {
         self.tx = None;
         if let Some(t) = self.thread.take() {
             let _ = t.join();
+        }
+        // Les sources rendues par le fil sont detruites ici, sur le fil qui
+        // lache le decodeur (le principal).
+        while let Ok(m) = self.rx.try_recv() {
+            drop(m);
         }
     }
 }

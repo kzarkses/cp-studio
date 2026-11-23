@@ -1032,3 +1032,69 @@ fn une_prise_midi_par_l_hote() {
     assert_eq!(ring.inputs(), 0, "plus de prise : le crochet n'ecoute plus");
     assert!(h.midi_rec_take(id).is_none(), "donnee une fois");
 }
+
+/// Une source qui note le fil ou elle est detruite.
+struct Tracked {
+    inner: Fake,
+    dropped_on: std::sync::Arc<std::sync::Mutex<Option<std::thread::ThreadId>>>,
+}
+
+impl decode::Reader for Tracked {
+    fn channels(&mut self) -> i32 {
+        self.inner.channels()
+    }
+    fn sample_rate(&mut self) -> f64 {
+        self.inner.sample_rate()
+    }
+    fn length(&mut self) -> f64 {
+        self.inner.length()
+    }
+    fn read(&mut self, time_s: f64, srate: f64, nch: usize, out: &mut [f64]) -> usize {
+        self.inner.read(time_s, srate, nch, out)
+    }
+}
+
+impl Drop for Tracked {
+    fn drop(&mut self) {
+        if let Ok(mut d) = self.dropped_on.lock() {
+            *d = Some(std::thread::current().id());
+        }
+    }
+}
+
+#[test]
+fn les_sources_sont_detruites_sur_le_fil_principal_a_la_fermeture() {
+    // Un flux en cours et un decodage en cours quand l'hote est lache (REAPER
+    // se ferme) : les deux sources reviennent et sont detruites ici, jamais
+    // sur les fils de travail.
+    for streamed in [true, false] {
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(None));
+        {
+            let mut h = AudioHost::new(None, 48000.0);
+            if streamed {
+                h.set_stream_above(1 << 20);
+            }
+            let t = h.load_reader(Box::new(Tracked {
+                inner: Fake {
+                    frames: 48000 * 600,
+                    nch: 2,
+                    srate: 48000.0,
+                },
+                dropped_on: seen.clone(),
+            }));
+            if streamed {
+                let t0 = std::time::Instant::now();
+                while matches!(h.ticket(t), Load::Pending) {
+                    h.poll();
+                    assert!(t0.elapsed().as_secs() < 10);
+                    std::thread::yield_now();
+                }
+            }
+        }
+        assert_eq!(
+            *seen.lock().unwrap(),
+            Some(std::thread::current().id()),
+            "en flux : {streamed}"
+        );
+    }
+}

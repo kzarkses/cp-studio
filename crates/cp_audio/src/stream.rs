@@ -262,7 +262,17 @@ fn worker(cmds: Receiver<Cmd>, out: Sender<SMsg>) {
                 continue;
             }
             Ok(Cmd::Wake) | Err(RecvTimeoutError::Timeout) => {}
-            Err(RecvTimeoutError::Disconnected) => return,
+            Err(RecvTimeoutError::Disconnected) => {
+                // Le `Streamer` est lache : les sources reviennent au fil
+                // principal, qui les detruit.
+                for l in live {
+                    let _ = out.send(SMsg::Gone {
+                        key: l.job.key,
+                        src: l.job.src,
+                    });
+                }
+                return;
+            }
         }
         // Les clips partis : la source revient au fil principal.
         let mut i = 0;
@@ -410,5 +420,75 @@ impl Drop for Streamer {
         if let Some(t) = self.thread.take() {
             let _ = t.join();
         }
+        // Les sources rendues sont detruites ici, sur le fil principal.
+        while let Ok(m) = self.rx.try_recv() {
+            drop(m);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::decode::tests::Fake;
+    use std::sync::Mutex;
+    use std::thread::ThreadId;
+
+    struct Tracked(Fake, Arc<Mutex<Option<ThreadId>>>);
+
+    impl Reader for Tracked {
+        fn channels(&mut self) -> i32 {
+            self.0.channels()
+        }
+        fn sample_rate(&mut self) -> f64 {
+            self.0.sample_rate()
+        }
+        fn length(&mut self) -> f64 {
+            self.0.length()
+        }
+        fn read(&mut self, t: f64, sr: f64, nch: usize, out: &mut [f64]) -> usize {
+            self.0.read(t, sr, nch, out)
+        }
+    }
+
+    impl Drop for Tracked {
+        fn drop(&mut self) {
+            *self.1.lock().unwrap() = Some(std::thread::current().id());
+        }
+    }
+
+    #[test]
+    fn a_l_arret_les_sources_reviennent() {
+        // Un clip encore tenu (ses pages vivent) quand le fil s'arrete : sa
+        // source revient et meurt sur le fil qui lache le `Streamer`.
+        let seen = Arc::new(Mutex::new(None));
+        let pages = Arc::new(Paged::new(48000 * 60, 2, 48000));
+        {
+            let st = Streamer::new();
+            let mut src = Tracked(
+                Fake {
+                    frames: 48000 * 60,
+                    nch: 2,
+                    srate: 48000.0,
+                },
+                seen.clone(),
+            );
+            let shape = crate::decode::shape(&mut src).unwrap();
+            assert!(
+                st.add(StreamJob {
+                    key: 1,
+                    src: Box::new(src),
+                    shape,
+                    pages: pages.clone(),
+                })
+                .is_ok()
+            );
+            let t0 = std::time::Instant::now();
+            while !pages.has(0) {
+                assert!(t0.elapsed().as_secs() < 5);
+                std::thread::yield_now();
+            }
+        }
+        assert_eq!(*seen.lock().unwrap(), Some(std::thread::current().id()));
     }
 }
