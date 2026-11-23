@@ -41,6 +41,9 @@ pub struct ScoreSpec {
     pub origin_qn: f64,
     /// (temps par mesure, valeur du temps).
     pub sig: (i32, i32),
+    /// Les mesures du projet, quand le chiffrage change en route (`None` :
+    /// `sig` partout, depuis `origin_qn`).
+    pub meter: Option<crate::meter::Meter>,
     pub bpm: f64,
     /// Cases de la grille par noire.
     pub grid: u32,
@@ -130,7 +133,16 @@ pub fn musicxml(notes: &[TabNote], spec: &ScoreSpec) -> (String, Stats) {
 
 /// Ecrit une tablature (deja doigtee) en MusicXML.
 pub fn write_musicxml(notes: &[TNote], spec: &ScoreSpec, dropped: usize) -> (String, Stats) {
-    let eng = engrave(notes, spec.origin_qn, spec.sig, spec.grid);
+    let eng = match &spec.meter {
+        Some(m) => crate::engrave::engrave_meter(
+            notes,
+            spec.origin_qn,
+            m,
+            spec.grid,
+            crate::key::detect(notes),
+        ),
+        None => engrave(notes, spec.origin_qn, spec.sig, spec.grid),
+    };
     let tuning = &spec.tuning;
     let stats = Stats {
         notes: eng.notes,
@@ -140,7 +152,6 @@ pub fn write_musicxml(notes: &[TNote], spec: &ScoreSpec, dropped: usize) -> (Str
         legato: eng.legato,
     };
     let g = eng.grid;
-    let mlen = eng.mlen;
     let mut x = String::new();
     x += "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"no\"?>\n";
     x += "<!DOCTYPE score-partwise PUBLIC \"-//Recordare//DTD MusicXML 4.0 Partwise//EN\" \"http://www.musicxml.org/dtds/partwise.dtd\">\n";
@@ -159,6 +170,14 @@ pub fn write_musicxml(notes: &[TNote], spec: &ScoreSpec, dropped: usize) -> (Str
     let (mut pm_on, mut lr_on) = (false, false);
     for m in 0..eng.measures {
         let _ = writeln!(x, "    <measure number=\"{}\">", m + 1);
+        if m > 0 && eng.sig_of(m) != eng.sig_of(m - 1) {
+            let sg = eng.sig_of(m);
+            let _ = writeln!(
+                x,
+                "      <attributes><time><beats>{}</beats><beat-type>{}</beat-type></time></attributes>",
+                sg.0, sg.1
+            );
+        }
         if m == 0 {
             x += "      <attributes>\n";
             let _ = writeln!(x, "        <divisions>{g}</divisions>");
@@ -168,10 +187,11 @@ pub fn write_musicxml(notes: &[TNote], spec: &ScoreSpec, dropped: usize) -> (Str
                 eng.key.fifths,
                 if eng.key.minor { "minor" } else { "major" }
             );
+            let sg0 = eng.sig_of(0);
             let _ = writeln!(
                 x,
                 "        <time><beats>{}</beats><beat-type>{}</beat-type></time>",
-                spec.sig.0, spec.sig.1
+                sg0.0, sg0.1
             );
             x += "        <staves>2</staves>\n";
             x += "        <clef number=\"1\"><sign>G</sign><line>2</line><clef-octave-change>-1</clef-octave-change></clef>\n";
@@ -212,7 +232,11 @@ pub fn write_musicxml(notes: &[TNote], spec: &ScoreSpec, dropped: usize) -> (Str
                 continue;
             }
             if !first_pass {
-                let _ = writeln!(x, "      <backup><duration>{mlen}</duration></backup>");
+                let _ = writeln!(
+                    x,
+                    "      <backup><duration>{}</duration></backup>",
+                    eng.bar_len(m)
+                );
             }
             first_pass = false;
             let voice = if staff == 1 { v as i32 } else { 4 + v as i32 };

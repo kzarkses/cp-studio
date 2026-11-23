@@ -24,6 +24,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::doc::{TNote, Tech};
 use crate::key::{self, Key};
+use crate::meter::Meter;
 
 /// Un evenement de la voix : un accord, ou un silence (`notes` vide).
 #[derive(Clone, Debug, PartialEq)]
@@ -71,14 +72,21 @@ pub struct Sign {
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Engraved {
-    /// Cases par noire, et par mesure. Avec des triolets, la grille est
-    /// assez fine pour les deux (la grille droite fois 3, ou moins).
+    /// Cases par noire, et par mesure (la premiere). Avec des triolets, la
+    /// grille est assez fine pour les deux (la grille droite fois 3, ou
+    /// moins).
     pub grid: i64,
     pub mlen: i64,
     pub measures: i64,
     /// La premiere barre de mesure, en noires du projet.
     pub origin_qn: f64,
+    /// Le chiffrage de la premiere mesure.
     pub sig: (i32, i32),
+    /// Le debut de chaque mesure en cases (`measures + 1` bornes : la
+    /// derniere est la fin), et son chiffrage : les mesures n'ont pas toutes
+    /// la meme longueur (un changement de chiffrage, une mesure partielle).
+    pub bars: Vec<i64>,
+    pub sigs: Vec<(i32, i32)>,
     pub events: Vec<Event>,
     /// Dans l'ordre : mesure par mesure, evenement par evenement.
     pub signs: Vec<Sign>,
@@ -100,6 +108,52 @@ impl Engraved {
     /// La position en noires du projet d'une case.
     pub fn qn(&self, cell: i64) -> f64 {
         self.origin_qn + cell as f64 / self.grid.max(1) as f64
+    }
+
+    /// La premiere case de la mesure `m` (`m = measures` : la fin).
+    pub fn bar_start(&self, m: i64) -> i64 {
+        match self.bars.get(m.max(0) as usize) {
+            Some(&c) => c,
+            None => m * self.mlen.max(1),
+        }
+    }
+
+    /// La longueur de la mesure `m`, en cases.
+    pub fn bar_len(&self, m: i64) -> i64 {
+        (self.bar_start(m + 1) - self.bar_start(m)).max(1)
+    }
+
+    /// Le chiffrage de la mesure `m`.
+    pub fn sig_of(&self, m: i64) -> (i32, i32) {
+        self.sigs
+            .get(m.max(0) as usize)
+            .copied()
+            .unwrap_or(self.sig)
+    }
+
+    /// Le groupe de ligature d'une case : (mesure, rang du groupe dans la
+    /// mesure). Le temps ; la noire pointee des mesures composees (6/8,
+    /// 9/8, 12/8, 3/8) ; la noire en 5/8 ou 7/8 ; la blanche en 2/2.
+    pub fn beam_group(&self, c: i64) -> (i64, i64) {
+        let m = self.measure_of(c);
+        let (n, d) = self.sig_of(m);
+        let g = self.grid.max(1);
+        let unit = if d == 8 && n % 3 == 0 {
+            g * 3 / 2
+        } else if d >= 8 {
+            g
+        } else {
+            g * 4 / d.max(1) as i64
+        };
+        (m, (c - self.bar_start(m)).div_euclid(unit.max(1)))
+    }
+
+    /// La mesure qui contient la case `c`.
+    pub fn measure_of(&self, c: i64) -> i64 {
+        if self.bars.len() < 2 {
+            return c.div_euclid(self.mlen.max(1));
+        }
+        (self.bars.partition_point(|&b| b <= c) as i64 - 1).clamp(0, self.measures.max(1) - 1)
     }
 }
 
@@ -208,8 +262,22 @@ pub fn engrave(notes: &[TNote], origin_qn: f64, sig: (i32, i32), grid: u32) -> E
 }
 
 /// Met la tablature en partition dans la tonalite `k` (celle de toute la
-/// guitare : ses prises bout a bout ont la meme armure).
+/// guitare : ses prises bout a bout ont la meme armure), un seul chiffrage.
 pub fn engrave_in(notes: &[TNote], origin_qn: f64, sig: (i32, i32), grid: u32, k: Key) -> Engraved {
+    engrave_meter(notes, origin_qn, &Meter::single(origin_qn, sig), grid, k)
+}
+
+/// Met la tablature en partition sur les mesures du projet (`meter` : ses
+/// changements de chiffrage ; `origin_qn` : le debut de la mesure ou la
+/// prise commence).
+pub fn engrave_meter(
+    notes: &[TNote],
+    origin_qn: f64,
+    meter: &Meter,
+    grid: u32,
+    k: Key,
+) -> Engraved {
+    let sig = meter.bar_at(origin_qn).sig;
     let g0 = grid.max(1) as i64;
     let trip = triplet_beats(notes, origin_qn, g0);
     // La grille fine : la droite, et les triolets s'il y en a.
@@ -250,24 +318,39 @@ pub fn engrave_in(notes: &[TNote], origin_qn: f64, sig: (i32, i32), grid: u32, k
     let (mut ev1, t1) = voice_events(notes, &v1, 1, &mut eng);
     let (mut ev2, t2) = voice_events(notes, &v2, 2, &mut eng);
     eng.legato += ligatures(notes, &mut ev1) + ligatures(notes, &mut ev2);
-    // 3. Les mesures (chaque voix completee d'un silence).
-    let mlen = eng.mlen;
+    // 3. Les mesures du projet, jusqu'a couvrir la prise (chaque voix
+    // completee d'un silence).
     let t = t1.max(t2);
-    let nmeas = ((t.max(1) + mlen - 1) / mlen).max(1);
+    let cells = |q: f64| ((q - origin_qn) * g as f64).round() as i64;
+    let mut b = meter.bar_at(origin_qn + 1e-9);
+    eng.bars = vec![0];
+    loop {
+        let end = cells(b.end()).max(eng.bars.last().copied().unwrap_or(0) + 1);
+        eng.sigs.push(b.sig);
+        eng.bars.push(end);
+        if end >= t.max(1) || eng.sigs.len() > 100_000 {
+            break;
+        }
+        b = meter.next(&b);
+    }
+    eng.mlen = eng.bars[1] - eng.bars[0];
+    let nmeas = eng.sigs.len() as i64;
+    let total = eng.bars[nmeas as usize];
     for (evs, tv, voice) in [(&mut ev1, t1, 1u8), (&mut ev2, t2, 2u8)] {
-        if tv < nmeas * mlen {
+        if tv < total {
             evs.push(Event {
                 voice,
                 start: tv,
-                dur: nmeas * mlen - tv,
+                dur: total - tv,
                 notes: Vec::new(),
                 lig_in: Tech::Plain,
                 lig_out: Tech::Plain,
             });
         }
     }
+    eng.measures = nmeas;
     for e in ev2.iter().filter(|e| !e.notes.is_empty()) {
-        let (a, b) = (e.start / mlen, (e.start + e.dur - 1) / mlen);
+        let (a, b) = (eng.measure_of(e.start), eng.measure_of(e.start + e.dur - 1));
         eng.two_voices.extend(a..=b);
     }
     eng.harmony = harmony(notes, &ev1, &ev2);
@@ -280,7 +363,7 @@ pub fn engrave_in(notes: &[TNote], origin_qn: f64, sig: (i32, i32), grid: u32, k
     let ttable: Vec<(i64, &'static str, u8)> =
         vec![(2 * g / 3, "quarter", 0), (g / 3, "eighth", 0)];
     for m in 0..nmeas {
-        let (m0, m1) = (m * mlen, (m + 1) * mlen);
+        let (m0, m1) = (eng.bar_start(m), eng.bar_start(m + 1));
         for (ei, ev) in eng.events.iter().enumerate() {
             let (a, b) = (ev.start.max(m0), (ev.start + ev.dur).min(m1));
             if b <= a || (ev.voice == 2 && !eng.two_voices.contains(&m)) {

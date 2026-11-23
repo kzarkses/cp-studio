@@ -142,10 +142,10 @@ fn draw_rhythm(
             last = None;
             continue;
         }
-        let beat = sg.start / eng.grid.max(1);
+        let beat = eng.beam_group(sg.start);
         let joins = last.is_some_and(|l| {
             let p = &eng.signs[l];
-            p.measure == sg.measure && p.start / eng.grid.max(1) == beat
+            p.measure == sg.measure && eng.beam_group(p.start) == beat
         });
         if joins {
             if let Some(g) = groups.last_mut() {
@@ -1065,11 +1065,8 @@ impl Arr {
             th.scale,
             (l.sx, ry, l.sw, tb - ry),
         );
-        let bq = self.bar_qn();
-        let q0 = self.scroll;
-        let q1 = self.scroll + self.view_qn();
-        let first = (q0 / bq).floor().max(0.0) as i64;
-        let last = (q1 / bq).ceil() as i64;
+        let bq = self.meter.bar_at(self.scroll.max(0.0)).len;
+        let vbars = self.view_bars();
         let fb = Font::new(0, s(11.0) as u16, 700);
         let ft = Font::new(1, s(9.5) as u16, 400);
         // Les mesures numerotees : une sur deux, quatre... quand elles serrent.
@@ -1084,8 +1081,8 @@ impl Arr {
                 cv.fill_rect(xa, ry, xb - xa, l.ruler_h, th.accent.with_alpha(40));
                 cv.fill_rect(xa, ry + l.ruler_h - s(3.0), xb - xa, s(3.0), th.accent);
             }
-            for m in first..=last {
-                let q = m as f64 * bq;
+            for bar in &vbars {
+                let (m, q) = (bar.index, bar.qn);
                 let x = geo.x(q).round();
                 let major = m % step == 0;
                 cv.fill_rect(
@@ -1119,8 +1116,12 @@ impl Arr {
                     );
                 }
                 if step == 1 {
-                    for b in 1..self.sig.0.max(1) {
-                        let bxx = geo.x(q + b as f64 * 4.0 / self.sig.1.max(1) as f64).round();
+                    for b in 1..bar.sig.0.max(1) {
+                        let qq = q + b as f64 * bar.beat();
+                        if qq >= bar.end() - 1e-9 {
+                            break;
+                        }
+                        let bxx = geo.x(qq).round();
                         cv.fill_rect(
                             bxx,
                             ry + l.ruler_h - s(7.0),
@@ -1610,9 +1611,7 @@ impl Arr {
         let vz = self.vzoom;
         let sel = self.sel;
         let hover = self.hover;
-        let bq = self.bar_qn();
-        let first = (self.scroll / bq).floor().max(0.0) as i64;
-        let last = ((self.scroll + self.view_qn()) / bq).ceil() as i64;
+        let vbars = self.view_bars();
         let content_clip = (l.sx, vis.1, l.sw, vis.3);
         // Le fond sous les couches (si l'en-tete est plus haut qu'elles).
         cv.fill_rect(l.label_x, y0, right - l.label_x + s(10.0), h, th.bg);
@@ -1646,19 +1645,20 @@ impl Arr {
             // voilee une fois de plus a chaque survol, 2026-11-22).
             if matches!(lane, Lane::Audio | Lane::Midi) {
                 if cv.push_clip(l.sx, ly, l.sw, lh) {
-                    let beat = 4.0 / self.sig.1.max(1) as f64;
-                    let beat_px = beat as f32 * l.ppq;
                     // La grille de REAPER (sa division, elargie sous 8 px comme
                     // lui) : mesures, temps, et ses lignes entre les temps.
                     let step = self.grid.map(|g| g.step(l.ppq.max(1e-3)));
-                    for m in first..=last {
-                        let q = m as f64 * bq;
+                    for bar in &vbars {
+                        let (q, bq) = (bar.qn, bar.len);
+                        let beat = bar.beat();
+                        let beat_px = beat as f32 * l.ppq;
                         cv.fill_rect(geo.x(q).round(), ly, 1.0, lh, th.rp.grid_bar);
                         if let Some(st) = step.filter(|&st| st < bq) {
-                            let n = (bq / st).round() as i64;
+                            let n = (bq / st - 1e-6).ceil() as i64;
                             for k in 1..n {
                                 let qq = q + k as f64 * st;
-                                let on_beat = ((qq / beat).round() * beat - qq).abs() < 1e-6;
+                                let rel = qq - q;
+                                let on_beat = ((rel / beat).round() * beat - rel).abs() < 1e-6;
                                 let c = if on_beat {
                                     th.rp.grid_beat
                                 } else {
@@ -1667,8 +1667,12 @@ impl Arr {
                                 cv.fill_rect(geo.x(qq).round(), ly, 1.0, lh, c);
                             }
                         } else if step.is_none() && beat_px >= s(12.0) {
-                            for b in 1..self.sig.0.max(1) {
-                                let xb = geo.x(q + b as f64 * beat).round();
+                            for b in 1..bar.sig.0.max(1) {
+                                let qq = q + b as f64 * beat;
+                                if qq >= bar.end() - 1e-9 {
+                                    break;
+                                }
+                                let xb = geo.x(qq).round();
                                 cv.fill_rect(xb, ly, 1.0, lh, th.rp.grid_beat);
                             }
                         }
@@ -1748,8 +1752,8 @@ impl Arr {
                         th.text,
                     );
                     if cv.push_clip(l.sx, ly, l.sw, lh) {
-                        for m in first..=last {
-                            let x = geo.x(m as f64 * bq).round();
+                        for bar in &vbars {
+                            let x = geo.x(bar.qn).round();
                             cv.fill_rect(x, sy, 1.2, 4.0 * gap, staff_c);
                         }
                     }
@@ -1785,8 +1789,8 @@ impl Arr {
                         );
                     }
                     if cv.push_clip(l.sx, ly, l.sw, lh) {
-                        for m in first..=last {
-                            let x = geo.x(m as f64 * bq).round();
+                        for bar in &vbars {
+                            let x = geo.x(bar.qn).round();
                             cv.fill_rect(x, ty, 1.2, (nstr - 1) as f32 * tg, staff_c);
                         }
                     }
@@ -2934,12 +2938,12 @@ pub(crate) fn draw_score(
         if ev.notes.is_empty() || beams_of(sg.ty) == 0 {
             continue;
         }
-        let beat = sg.start / eng.grid.max(1);
+        let beat = eng.beam_group(sg.start);
         let joins = si > 0
             && beam_group[si - 1].is_some()
             && eng.signs[si - 1].measure == sg.measure
             && eng.signs[si - 1].voice == sg.voice
-            && eng.signs[si - 1].start / eng.grid.max(1) == beat;
+            && eng.beam_group(eng.signs[si - 1].start) == beat;
         if joins {
             let g = beam_group[si - 1].unwrap_or(0);
             groups[g].push(si);

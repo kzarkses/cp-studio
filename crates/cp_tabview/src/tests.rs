@@ -1827,7 +1827,9 @@ fn la_tablature_s_imprime() {
     let need = print::need_ppq(&eng);
     assert!(need[2] > need[0] * 2.0, "{need:?}");
     let (first_w, w) = print::avail(0.0);
-    let sys = print::systems(&need, 4.0, first_w, w);
+    let bq = vec![4.0; need.len()];
+    let room = vec![0.0; need.len()];
+    let sys = print::systems(&need, &bq, &room, first_w, w);
     assert_eq!(sys.len(), systems);
     assert_eq!(sys.last().map(|s| s.m1), Some(bars as i64));
     assert!(sys.windows(2).all(|w| w[0].m1 == w[1].m0));
@@ -2231,4 +2233,70 @@ fn la_tab_seule_porte_son_rythme() {
     let it = v.tracks[0].items[0].clone();
     let p = print::pdf(&it, v.tracks[0].head.lanes, &mut b.t);
     assert!(p.pages >= 1);
+}
+
+#[test]
+fn le_chiffrage_qui_change_se_dessine_et_s_imprime() {
+    // 4/4 deux mesures, 3/4 deux, 6/8 deux, puis 4/4 : des croches d'un
+    // bout a l'autre.
+    const MEL: [&[(usize, i32)]; 4] = [&[(3, 7)], &[(2, 8)], &[(2, 10)], &[(1, 12)]];
+    let mut raw: Vec<Raw> = Vec::new();
+    for m in 0..6 {
+        for k in 0..8 {
+            raw.push((m, k as f64 * 2.0, 2.0, MEL[k % 4], ""));
+        }
+    }
+    let meter = cp_tab::meter::Meter::new(vec![
+        (0.0, (4, 4)),
+        (8.0, (3, 4)),
+        (14.0, (6, 8)),
+        (20.0, (4, 4)),
+    ]);
+    let mut it = item("M", "Meter.wav", 0, 6, &raw);
+    it.meter = Some(meter.clone());
+    it.touch();
+    let e = it.engraved().clone();
+    assert_eq!(e.bars, vec![0, 16, 32, 44, 56, 68, 80, 96]);
+    for m in 0..e.measures {
+        let sum: i64 = e
+            .signs
+            .iter()
+            .filter(|s| s.measure == m && s.voice == 1)
+            .map(|s| s.dur)
+            .sum();
+        assert_eq!(sum, e.bar_len(m), "mesure {m}");
+    }
+    // L'ecran : les barres du projet, numerotees dans l'ordre.
+    let mut v = arranger();
+    v.meter = meter;
+    v.tracks[0].items = vec![it.clone()];
+    v.scroll = 0.0;
+    let mut b = Bench::new(1600, 760);
+    b.shot(&mut v, "14_chiffrages");
+    let bars: Vec<(i64, f64)> = v.view_bars().iter().map(|b| (b.index, b.qn)).collect();
+    assert!(bars.len() >= 6, "{bars:?}");
+    assert_eq!(
+        &bars[..6],
+        &[
+            (0, 0.0),
+            (1, 4.0),
+            (2, 8.0),
+            (3, 11.0),
+            (4, 14.0),
+            (5, 17.0)
+        ]
+    );
+    // Le papier : le nouveau chiffrage au debut de sa mesure.
+    let lanes = Lanes([true, false, true, true]);
+    let mut n = 0;
+    let (measures, _) = print::render(&it, lanes, &mut b.t, &mut |s| {
+        n += 1;
+        if n == 1 {
+            let mut top = Surface::new(s.w, 1300);
+            top.px.copy_from_slice(&s.px[..(s.w * 1300) as usize]);
+            let p = std::env::temp_dir().join("cp_tabview_14_print_chiffrages.png");
+            std::fs::write(&p, png::encode(&top)).unwrap();
+        }
+    });
+    assert_eq!(measures, 7);
 }

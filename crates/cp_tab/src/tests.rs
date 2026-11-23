@@ -226,6 +226,7 @@ fn measure_sums(xml: &str) -> Vec<(i64, i64)> {
 #[test]
 fn la_partition_tient_dans_ses_mesures() {
     let spec = ScoreSpec {
+        meter: None,
         title: "Riff & test".into(),
         origin_qn: 8.0,
         sig: (4, 4),
@@ -302,6 +303,7 @@ fn la_partition_tient_dans_ses_mesures() {
 #[test]
 fn un_marteau_et_un_tire_s_ecrivent_sur_la_meme_corde() {
     let spec = ScoreSpec {
+        meter: None,
         title: "legato".into(),
         origin_qn: 0.0,
         sig: (4, 4),
@@ -665,6 +667,7 @@ fn bends_et_glisses_font_l_aller_retour() {
     assert_eq!(d2[1].tech, Tech::Slide);
     // Le MusicXML.
     let spec = ScoreSpec {
+        meter: None,
         title: "t".into(),
         origin_qn: 4.0,
         sig: (4, 4),
@@ -771,6 +774,7 @@ fn les_triolets_se_reconnaissent_et_s_ecrivent() {
     assert_eq!(beat(3), vec![("16th", 0, false, false); 4]);
     // Le MusicXML porte le 3 : sept signes de triolet, deux crochets.
     let spec = ScoreSpec {
+        meter: None,
         title: "t".into(),
         origin_qn: 0.0,
         sig: (4, 4),
@@ -870,6 +874,7 @@ fn une_basse_tenue_sous_la_melodie_fait_une_deuxieme_voix() {
     assert_eq!(v1, vec!["eighth"; 8]);
     // Le MusicXML : les voix 2 et 6, trois retours au debut de la mesure 1.
     let spec = ScoreSpec {
+        meter: None,
         title: "t".into(),
         origin_qn: 0.0,
         sig: (4, 4),
@@ -915,6 +920,7 @@ fn les_techniques_de_jeu_se_gardent_et_s_ecrivent() {
     // Le MusicXML : un seul « P.M. » pour le passage, la tete x, le
     // losange et l'harmonique, l'onde du vibrato.
     let spec = ScoreSpec {
+        meter: None,
         title: "t".into(),
         origin_qn: 0.0,
         sig: (4, 4),
@@ -954,6 +960,7 @@ fn les_noms_d_accords_suivent_les_changements() {
     assert_eq!(names, vec!["Em", "C", "G", "D"]);
     assert_eq!(e.harmony[1].0, 4 * 4);
     let spec = ScoreSpec {
+        meter: None,
         title: "t".into(),
         origin_qn: 0.0,
         sig: (4, 4),
@@ -964,4 +971,60 @@ fn les_noms_d_accords_suivent_les_changements() {
     let (x, _) = crate::score::write_musicxml(&tab, &spec, 0);
     assert_eq!(x.matches("<harmony>").count(), 4);
     assert!(x.contains("<root-step>E</root-step></root><kind text=\"m\">minor</kind>"));
+}
+
+#[test]
+fn le_chiffrage_change_en_route() {
+    // 4/4, puis 3/4 a la noire 8, puis 4/4 a la noire 11 : une blanche a
+    // cheval sur le changement se coupe a la barre et se lie ; chaque
+    // mesure fait sa longueur.
+    let meter = crate::meter::Meter::new(vec![(0.0, (4, 4)), (8.0, (3, 4)), (11.0, (4, 4))]);
+    let mut tab = vec![
+        tri_note(0.0, 1.0, 0),
+        tri_note(7.0, 2.0, 2),
+        tri_note(9.0, 1.0, 4),
+        tri_note(11.0, 4.0, 5),
+    ];
+    doc::sort(&mut tab);
+    let e = crate::engrave::engrave_meter(&tab, 0.0, &meter, 4, crate::key::detect(&tab));
+    assert_eq!(e.bars, vec![0, 16, 32, 44, 60]);
+    assert_eq!(e.sigs, vec![(4, 4), (4, 4), (3, 4), (4, 4)]);
+    for m in 0..e.measures {
+        let sum: i64 = e
+            .signs
+            .iter()
+            .filter(|s| s.measure == m && s.voice == 1)
+            .map(|s| s.dur)
+            .sum();
+        assert_eq!(sum, e.bar_len(m), "mesure {m}");
+    }
+    // La blanche : une noire en fin de mesure 2, liee a une noire au debut
+    // de la mesure 3 (3/4).
+    let half: Vec<(i64, i64, bool, bool)> = e
+        .signs
+        .iter()
+        .filter(|s| e.events[s.ev].notes.iter().any(|&i| tab[i].fret == 2))
+        .map(|s| (s.measure, s.start, s.tie_in, s.tie_out))
+        .collect();
+    assert_eq!(half, vec![(1, 28, false, true), (2, 32, true, false)]);
+    // En MusicXML : un chiffrage a chaque changement, chaque mesure a sa
+    // longueur.
+    let spec = ScoreSpec {
+        meter: Some(meter),
+        title: "3/4".into(),
+        origin_qn: 0.0,
+        sig: (4, 4),
+        bpm: 100.0,
+        grid: 4,
+        tuning: Tuning::standard(),
+    };
+    let (xml, _) = crate::score::write_musicxml(&tab, &spec, 0);
+    assert_eq!(xml.matches("<beats>3</beats>").count(), 1);
+    assert_eq!(xml.matches("<beats>4</beats>").count(), 2);
+    let sums = measure_sums(&xml);
+    let g = 4;
+    assert_eq!(
+        sums.iter().map(|s| s.0).collect::<Vec<_>>(),
+        vec![4 * g, 4 * g, 3 * g, 4 * g]
+    );
 }

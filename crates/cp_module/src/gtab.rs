@@ -1137,6 +1137,9 @@ impl App {
         let _ = bq;
         self.gt.arr.sig = sig;
         self.gt.arr.bpm = bpm;
+        // Les changements de chiffrage du projet : les barres de la vue, et
+        // les mesures de chaque partition.
+        self.gt.arr.meter = cp_tab::meter::Meter::new(r.meter_changes());
         // Les items d'avant, par GUID : on les garde s'ils n'ont pas change.
         let mut old: HashMap<String, Item> = HashMap::new();
         let mut old_heads: HashMap<String, Head> = HashMap::new();
@@ -1430,10 +1433,20 @@ impl App {
         let midi_hash = midi.and_then(|m| m.take()).and_then(|t| t.hash.clone());
         let midi_take_ok = midi.and_then(|m| m.ext[I_TAKE].as_deref()) == Some(tk.guid.as_str());
         let forced = self.gt.force.remove(&is.guid);
+        // Ses mesures : celle ou il commence, et celles du projet.
+        let (o_qn, o_sig, _) = r.measure_at(is.pos);
+        let meter = self.gt.arr.meter.clone();
         // L'item n'a pas change : on le garde tel quel (le cas courant).
         if let Some(mut o) = old {
             o.fade_in = fade_in;
             o.fade_out = fade_out;
+            // Le chiffrage du projet a change : la partition se refait.
+            if o.meter.as_ref() != Some(&meter) || (o.origin_qn - o_qn).abs() > 1e-9 {
+                o.meter = Some(meter.clone());
+                o.origin_qn = o_qn;
+                o.sig = o_sig;
+                o.touch();
+            }
             let same = o.take == tk.guid
                 && o.akey == akey
                 && (o.qn0 - qn0).abs() < 1e-6
@@ -1496,6 +1509,7 @@ impl App {
         it.fade_out = fade_out;
         it.origin_qn = origin_qn;
         it.sig = sig;
+        it.meter = Some(meter);
         it.bpm = bpm;
         it.takes = takes;
         it.active = is.active;
@@ -1881,6 +1895,7 @@ impl App {
     /// Ecrit la partition d'un item (MusicXML) dans `Guitar Tab/<nom>.musicxml`.
     fn gtab_export_item(&self, it: &Item) -> (Option<PathBuf>, cp_tab::score::Stats) {
         let spec = ScoreSpec {
+            meter: it.meter.clone(),
             title: it.name.clone(),
             origin_qn: it.origin_qn,
             sig: it.sig,
@@ -3805,6 +3820,7 @@ fn arr_sig(a: &Arr) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut h = std::collections::hash_map::DefaultHasher::new();
     a.sig.hash(&mut h);
+    format!("{:?}", a.meter.changes).hash(&mut h);
     a.bpm.to_bits().hash(&mut h);
     for t in &a.tracks {
         format!("{:?}", t.head).hash(&mut h);

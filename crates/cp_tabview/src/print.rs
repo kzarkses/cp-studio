@@ -91,8 +91,6 @@ fn key_w(fifths: i32, staff: bool) -> f32 {
 /// `MIN_BAR`.
 pub(crate) fn need_ppq(eng: &Engraved) -> Vec<f32> {
     let g = eng.grid.max(1);
-    let ml = eng.mlen.max(1);
-    let bq = ml as f32 / g as f32;
     let n = eng.measures.max(0) as usize;
     let mut starts: Vec<Vec<i64>> = vec![Vec::new(); n];
     for sg in &eng.signs {
@@ -106,7 +104,9 @@ pub(crate) fn need_ppq(eng: &Engraved) -> Vec<f32> {
         .map(|(m, mut v)| {
             v.sort_unstable();
             v.dedup();
-            let end = (m as i64 + 1) * ml;
+            let ml = eng.bar_len(m as i64);
+            let bq = ml as f32 / g as f32;
+            let end = eng.bar_start(m as i64 + 1);
             let mut gap = ml;
             for w in v.windows(2) {
                 gap = gap.min(w[1] - w[0]);
@@ -120,12 +120,24 @@ pub(crate) fn need_ppq(eng: &Engraved) -> Vec<f32> {
         .collect()
 }
 
+/// La place d'un chiffrage qui change au debut de la mesure `m`.
+pub(crate) fn sig_room(eng: &Engraved, m: i64) -> f32 {
+    if m > 0 && eng.sig_of(m) != eng.sig_of(m - 1) {
+        s(HEAD_SIG)
+    } else {
+        0.0
+    }
+}
+
 /// Les systemes : chacun prend les mesures qu'il tient (`first_w` pour le
 /// premier, `w` ensuite), puis les etire a la largeur. Le dernier reste a
-/// sa largeur naturelle s'il est court.
-pub(crate) fn systems(need: &[f32], bq: f64, first_w: f32, w: f32) -> Vec<System> {
+/// sa largeur naturelle s'il est court. `bq` : les noires de chaque
+/// mesure ; `room` : la place de son chiffrage s'il change.
+pub(crate) fn systems(need: &[f32], bq: &[f64], room: &[f32], first_w: f32, w: f32) -> Vec<System> {
     let n = need.len();
-    let nat = |m: usize| need[m] * bq as f32;
+    let nat = |m: usize| {
+        need[m] * bq.get(m).copied().unwrap_or(4.0) as f32 + room.get(m).copied().unwrap_or(0.0)
+    };
     let mut out: Vec<System> = Vec::new();
     let mut m = 0usize;
     while m < n {
@@ -287,12 +299,15 @@ pub(crate) fn render(
         (score, tab) = (true, true);
     }
     let r = rows(score, tab, nstr);
-    let bq = eng.mlen.max(1) as f64 / eng.grid.max(1) as f64;
+    let bq: Vec<f64> = (0..eng.measures)
+        .map(|m| eng.bar_len(m) as f64 / eng.grid.max(1) as f64)
+        .collect();
+    let room: Vec<f32> = (0..eng.measures).map(|m| sig_room(&eng, m)).collect();
     let x0 = mm(MARGIN_X);
     let cw = PAGE_W as f32 - 2.0 * x0;
     let need = need_ppq(&eng);
     let (first_w, w) = avail(key_w(eng.key.fifths, r.staff.is_some()));
-    let sys = systems(&need, bq, first_w, w);
+    let sys = systems(&need, &bq, &room, first_w, w);
     let bottom = PAGE_H as f32 - mm(MARGIN_BOTTOM);
 
     // Combien de pages : les systemes empiles, la premiere sous son en-tete.
@@ -461,19 +476,30 @@ fn draw_system(
     let sx = x0 + head;
     let width = sy.width();
     let xr = sx + width;
-    let bq = eng.mlen.max(1) as f64 / eng.grid.max(1) as f64;
-    let span = ((sy.m1 - sy.m0) as f64 * bq).max(1e-6);
+    let bstart = |m: i64| eng.qn(eng.bar_start(m));
+    let span = (bstart(sy.m1) - bstart(sy.m0)).max(1e-6);
     let pad = s(6.0);
-    // L'axe passe par chaque barre de mesure.
-    let mut pts = vec![(eng.origin_qn + sy.m0 as f64 * bq, sx)];
+    // Les barres de mesure du systeme, et l'axe qui passe par chacune ; un
+    // chiffrage qui change ouvre sa mesure (deux points a la meme noire :
+    // les notes commencent apres lui).
+    let mut bar_x = vec![sx];
     let mut x = sx;
-    for (j, w) in sy.widths.iter().enumerate() {
+    for w in &sy.widths {
         x += w;
-        pts.push((eng.origin_qn + (sy.m0 + j as i64 + 1) as f64 * bq, x));
+        bar_x.push(x);
+    }
+    let mut pts = Vec::new();
+    for (j, &bx) in bar_x.iter().enumerate() {
+        let m = sy.m0 + j as i64;
+        pts.push((bstart(m), bx));
+        let room = sig_room(eng, m);
+        if j + 1 < bar_x.len() && room > 0.0 {
+            pts.push((bstart(m), bx + room));
+        }
     }
     let geo = Geo {
         sx,
-        scroll: eng.origin_qn + sy.m0 as f64 * bq,
+        scroll: bstart(sy.m0),
         ppq: (width as f64 / span) as f32,
         s: S,
         // Seules les notes du systeme : celles de la mesure voisine sont
@@ -576,9 +602,23 @@ fn draw_system(
     let top = staff.or(tabs).map_or(y, |v| v.0);
     let bot = tabs.or(staff).map_or(y, |v| v.1);
     cv.fill_rect(x0, top, bar_w, bot - top, ink);
+    // Les chiffrages qui changent, au debut de leur mesure.
+    for m in sy.m0..sy.m1 {
+        if sig_room(eng, m) <= 0.0 {
+            continue;
+        }
+        let (n, d) = eng.sig_of(m);
+        let bx = bar_x[(m - sy.m0) as usize] + s(1.0);
+        if let Some((top, _)) = staff {
+            time_sig(cv, text, ink, bx, top, 2.0 * gap, n, d);
+        } else if let Some((top, _)) = tabs {
+            let h = (nstr.max(2) - 1) as f32 * tg;
+            time_sig(cv, text, ink, bx, top, h * 0.5, n, d);
+        }
+    }
     // Les barres de mesure ; la double barre a la fin du morceau.
     for m in sy.m0 + 1..=sy.m1 {
-        let x = geo.x(eng.origin_qn + m as f64 * bq).min(xr);
+        let x = bar_x[(m - sy.m0) as usize].min(xr);
         for (a, b) in [staff, tabs].into_iter().flatten() {
             if m == sy.m1 && last {
                 cv.fill_rect(xr - s(2.4), a, s(2.4), b - a, ink);

@@ -328,6 +328,8 @@ pub struct Item {
     /// La barre de mesure ou commence sa partition.
     pub origin_qn: f64,
     pub sig: (i32, i32),
+    /// Les mesures du projet (`None` : `sig` partout depuis `origin_qn`).
+    pub meter: Option<cp_tab::meter::Meter>,
     pub bpm: f64,
     pub takes: Vec<TakeInfo>,
     pub active: usize,
@@ -833,8 +835,10 @@ pub struct Arr {
     pub listen: Listen,
     /// En « Both » : l'original a gauche, la tab a droite.
     pub split: bool,
-    /// La mesure du projet (barres a partir de la noire 0).
+    /// La mesure du projet (barres a partir de la noire 0) : la premiere, et
+    /// tous ses changements de chiffrage.
     pub sig: (i32, i32),
+    pub meter: cp_tab::meter::Meter,
     pub bpm: f64,
     /// Pixels par noire a 96 DPI.
     pub zoom: f32,
@@ -1151,6 +1155,7 @@ impl Arr {
             listen: Listen::Both,
             split: false,
             sig: (4, 4),
+            meter: cp_tab::meter::Meter::uniform((4, 4)),
             bpm: 120.0,
             zoom: 56.0,
             scroll: 0.0,
@@ -1316,9 +1321,16 @@ impl Arr {
         out
     }
 
-    /// Les noires d'une mesure.
+    /// Les noires d'une mesure (la premiere du projet).
     pub fn bar_qn(&self) -> f64 {
         self.sig.0.max(1) as f64 * 4.0 / self.sig.1.max(1) as f64
+    }
+
+    /// Les mesures visibles (d'apres les changements de chiffrage).
+    pub fn view_bars(&self) -> Vec<cp_tab::meter::Bar> {
+        let q0 = self.scroll.max(0.0);
+        self.meter
+            .bars(q0, (self.scroll + self.view_qn()).max(q0 + 1e-6))
     }
 
     pub fn x_of(&self, qn: f64) -> f32 {
@@ -2960,9 +2972,8 @@ impl Arr {
             Hit::Note { t, i, n } => {
                 let it = self.item(t, i)?;
                 let nt = it.doc.get(n)?;
-                let bar_qn = self.bar_qn();
-                let bar = (nt.qn0 / bar_qn).floor();
-                let beat = nt.qn0 - bar * bar_qn;
+                let b = self.meter.bar_at(nt.qn0);
+                let (bar, beat) = (b.index as f64, (nt.qn0 - b.qn) / b.beat());
                 let names = [
                     "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B",
                 ];
@@ -3155,9 +3166,8 @@ impl Arr {
         let s = self.sel?;
         let it = self.item(s.t, s.i?)?;
         let n = it.doc.get(s.n?)?;
-        let bar_qn = self.bar_qn();
-        let bar = (n.qn0 / bar_qn).floor();
-        let beat = n.qn0 - bar * bar_qn;
+        let b = self.meter.bar_at(n.qn0);
+        let (bar, beat) = (b.index as f64, (n.qn0 - b.qn) / b.beat());
         let names = [
             "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B",
         ];

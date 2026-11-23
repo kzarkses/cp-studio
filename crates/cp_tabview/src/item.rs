@@ -32,9 +32,18 @@ impl Item {
     /// La partition (refaite si la tablature a change).
     pub fn engraved(&mut self) -> &Engraved {
         if !self.eng_ok {
-            self.eng = match self.key {
-                Some(k) => engrave_in(&self.doc, self.origin_qn, self.sig, self.detect.grid, k),
-                None => engrave(&self.doc, self.origin_qn, self.sig, self.detect.grid),
+            self.eng = match (&self.meter, self.key) {
+                (Some(m), k) => cp_tab::engrave::engrave_meter(
+                    &self.doc,
+                    self.origin_qn,
+                    m,
+                    self.detect.grid,
+                    k.unwrap_or_else(|| cp_tab::key::detect(&self.doc)),
+                ),
+                (None, Some(k)) => {
+                    engrave_in(&self.doc, self.origin_qn, self.sig, self.detect.grid, k)
+                }
+                (None, None) => engrave(&self.doc, self.origin_qn, self.sig, self.detect.grid),
             };
             self.eng_ok = true;
         }

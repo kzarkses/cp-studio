@@ -122,6 +122,63 @@ impl Reaper {
         }
     }
 
+    /// Les changements de chiffrage du projet : (noire, chiffrage), le
+    /// chiffrage du debut compris. Les marqueurs de tempo seul (sans
+    /// chiffrage) n'y sont pas.
+    pub fn meter_changes(&self) -> Vec<(f64, (i32, i32))> {
+        type Count = unsafe extern "C" fn(P) -> i32;
+        type Get = unsafe extern "C" fn(
+            P,
+            i32,
+            *mut f64,
+            *mut i32,
+            *mut f64,
+            *mut f64,
+            *mut i32,
+            *mut i32,
+            *mut bool,
+        ) -> bool;
+        let (_, sig0, _) = self.measure_at(0.0);
+        let mut out = vec![(0.0, sig0)];
+        // SAFETY: int CountTempoTimeSigMarkers(ReaProject*) ; bool
+        // GetTempoTimeSigMarker(ReaProject*, int, double* timepos, int*
+        // measurepos, double* beatpos, double* bpm, int* num, int* denom,
+        // bool* linear).
+        let fns = unsafe {
+            (
+                self.api::<Count>(c"CountTempoTimeSigMarkers"),
+                self.api::<Get>(c"GetTempoTimeSigMarker"),
+            )
+        };
+        let (Some(count), Some(get)) = fns else {
+            return out;
+        };
+        // SAFETY: projet nul = courant.
+        let n = unsafe { count(null_mut()) }.clamp(0, 100_000);
+        for i in 0..n {
+            let (mut t, mut mp, mut bp, mut bpm) = (0f64, 0i32, 0f64, 0f64);
+            let (mut num, mut den, mut lin) = (0i32, 0i32, false);
+            // SAFETY: sorties a nous ; projet nul = courant.
+            let ok = unsafe {
+                get(
+                    null_mut(),
+                    i,
+                    &mut t,
+                    &mut mp,
+                    &mut bp,
+                    &mut bpm,
+                    &mut num,
+                    &mut den,
+                    &mut lin,
+                )
+            };
+            if ok && num > 0 && den > 0 {
+                out.push((self.time_to_qn(t), (num, den)));
+            }
+        }
+        out
+    }
+
     /// La mesure qui contient l'instant `t` : (son debut en noires,
     /// signature, tempo).
     pub fn measure_at(&self, t: f64) -> (f64, (i32, i32), f64) {
