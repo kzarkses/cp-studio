@@ -13,7 +13,7 @@ use core::ffi::{c_char, c_void};
 
 /// Version du contrat. Un entier : jamais de mineure (le piege du double de
 /// l'ancien moteur, ou `1.10` valait `1.1`).
-pub const ABI: u32 = 11;
+pub const ABI: u32 = 12;
 
 /// Le symbole exporte par le module.
 pub const ENTRY_SYMBOL: &[u8] = b"cp_module_entry\0";
@@ -180,6 +180,24 @@ pub struct ClipInfo {
     pub decoded: i64,
 }
 
+/// Un message d'une prise MIDI : son frame depuis le debut de la prise, son
+/// entree, sa longueur (2 ou 3), ses octets. ABI 12.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct MidiEvent {
+    pub frame: i64,
+    pub dev: u8,
+    pub len: u8,
+    pub msg: [u8; 3],
+    pub pad: [u8; 3],
+}
+
+/// L'etat d'une prise audio (`rec_state`).
+pub const REC_RECORDING: i32 = 0;
+pub const REC_READY: i32 = 1;
+pub const REC_FAILED: i32 = -1;
+pub const REC_UNKNOWN: i32 = -2;
+
 /// Le moteur audio vu du module. Les clips et les voix sont des entiers a
 /// generation : 0 n'est jamais valide, et un handle perime est refuse.
 #[repr(C)]
@@ -259,6 +277,38 @@ pub struct AudioApi {
     /// note, velocite, entree) en octets, du bas vers le haut. Rend leur
     /// nombre. ABI 11.
     pub midi_notes: extern "C" fn(out: *mut u32, cap: usize) -> usize,
+    /// Le temps du moteur maintenant, en frames (ce qu'un lancement date
+    /// vise). ABI 12.
+    pub now: extern "C" fn() -> i64,
+    /// `play`, au frame `at` du moteur (< 0 : tout de suite) : un lancement
+    /// quantifie, a l'echantillon. ABI 12.
+    pub play_at: extern "C" fn(
+        port: u32,
+        clip: u32,
+        start: i64,
+        end: i64,
+        looped: i32,
+        gain: f64,
+        at: i64,
+    ) -> u32,
+    /// Une prise audio des entrees `ch0`, `ch1` de la carte (-1 : mono), du
+    /// frame `start` (< 0 : maintenant), la latence retiree. 0 si refusee.
+    /// ABI 12.
+    pub rec_start: extern "C" fn(ch0: i32, ch1: i32, start: i64) -> u32,
+    /// Sa fin, au frame `at` (< 0 : maintenant). ABI 12.
+    pub rec_stop: extern "C" fn(id: u32, at: i64),
+    /// Son etat : REC_RECORDING (`*out` : frames pris), REC_READY (`*out` :
+    /// le clip), REC_FAILED, REC_UNKNOWN. ABI 12.
+    pub rec_state: extern "C" fn(id: u32, out: *mut i64) -> i32,
+    /// Une prise MIDI de l'entree `dev` (-1 : toutes), du frame `start`
+    /// (< 0 : maintenant), la latence de sortie retiree. ABI 12.
+    pub midi_rec_start: extern "C" fn(dev: i32, start: i64) -> u32,
+    /// Sa fin, au frame `at` (< 0 : maintenant). ABI 12.
+    pub midi_rec_stop: extern "C" fn(id: u32, at: i64),
+    /// Ses messages une fois finie : -1 tant qu'elle court ; sinon leur
+    /// nombre, copies dans `out` (et la prise oubliee) ; s'ils ne tiennent
+    /// pas dans `cap`, -(nombre) - 2 et rien n'est oublie. ABI 12.
+    pub midi_rec_take: extern "C" fn(id: u32, out: *mut MidiEvent, cap: usize) -> i64,
 }
 
 /// Ce que le module offre au chargeur. Tous les appels se font sur le fil

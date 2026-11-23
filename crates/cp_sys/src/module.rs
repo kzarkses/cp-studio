@@ -169,6 +169,68 @@ impl HostRef {
         (self.0.audio.levels)(port, v.as_mut_ptr());
         v
     }
+    /// Le temps du moteur, en frames.
+    pub fn audio_now(&self) -> i64 {
+        (self.0.audio.now)()
+    }
+    /// Un lancement au frame `at` du moteur (`None` : tout de suite).
+    #[allow(clippy::too_many_arguments)]
+    pub fn audio_play_at(
+        &self,
+        port: u32,
+        clip: u32,
+        start: i64,
+        end: i64,
+        looped: bool,
+        gain: f64,
+        at: Option<i64>,
+    ) -> u32 {
+        (self.0.audio.play_at)(
+            port,
+            clip,
+            start,
+            end,
+            looped as i32,
+            gain,
+            at.unwrap_or(-1),
+        )
+    }
+    /// Une prise audio des entrees `ch0`, `ch1` (-1 : mono).
+    pub fn rec_start(&self, ch0: i32, ch1: i32, start: Option<i64>) -> u32 {
+        (self.0.audio.rec_start)(ch0, ch1, start.unwrap_or(-1))
+    }
+    pub fn rec_stop(&self, id: u32, at: Option<i64>) {
+        (self.0.audio.rec_stop)(id, at.unwrap_or(-1))
+    }
+    /// (etat `cp_abi::REC_*`, frames pris ou clip).
+    pub fn rec_state(&self, id: u32) -> (i32, i64) {
+        let mut v = 0i64;
+        let st = (self.0.audio.rec_state)(id, &mut v);
+        (st, v)
+    }
+    /// Une prise MIDI de l'entree `dev` (-1 : toutes).
+    pub fn midi_rec_start(&self, dev: i32, start: Option<i64>) -> u32 {
+        (self.0.audio.midi_rec_start)(dev, start.unwrap_or(-1))
+    }
+    pub fn midi_rec_stop(&self, id: u32, at: Option<i64>) {
+        (self.0.audio.midi_rec_stop)(id, at.unwrap_or(-1))
+    }
+    /// Les messages d'une prise MIDI finie (`None` tant qu'elle court).
+    pub fn midi_rec_take(&self, id: u32) -> Option<Vec<cp_abi::MidiEvent>> {
+        let mut cap = 256usize;
+        loop {
+            let mut v = vec![cp_abi::MidiEvent::default(); cap];
+            let n = (self.0.audio.midi_rec_take)(id, v.as_mut_ptr(), cap);
+            if n == -1 {
+                return None;
+            }
+            if n >= 0 {
+                v.truncate(n as usize);
+                return Some(v);
+            }
+            cap = (-(n + 2)) as usize;
+        }
+    }
     /// Ecouter (ou plus) les notes des entrees MIDI.
     pub fn midi_listen(&self, on: bool) {
         (self.0.audio.midi_listen)(on as i32)

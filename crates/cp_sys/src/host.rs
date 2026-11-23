@@ -97,6 +97,48 @@ pub trait Host: Send + Sync {
     fn clock_read(&self) -> Option<[f64; 14]> {
         None
     }
+    /// Le temps du moteur, en frames.
+    fn audio_now(&self) -> i64 {
+        0
+    }
+    /// Un lancement date (`at` : frame du moteur, `None` : tout de suite).
+    #[allow(clippy::too_many_arguments)]
+    fn audio_play_at(
+        &self,
+        _port: u32,
+        _clip: u32,
+        _start: i64,
+        _end: i64,
+        _looped: bool,
+        _gain: f64,
+        _at: Option<i64>,
+    ) -> u32 {
+        0
+    }
+    /// Une prise audio.
+    fn rec_start(&self, _ch0: i32, _ch1: i32, _start: Option<i64>) -> u32 {
+        0
+    }
+    fn rec_stop(&self, _id: u32, _at: Option<i64>) {}
+    /// (etat, frames pris ou clip).
+    fn rec_state(&self, _id: u32) -> (i32, i64) {
+        (cp_abi::REC_UNKNOWN, 0)
+    }
+    /// Une prise MIDI.
+    fn midi_rec_start(&self, _dev: i32, _start: Option<i64>) -> u32 {
+        0
+    }
+    fn midi_rec_stop(&self, _id: u32, _at: Option<i64>) {}
+    /// Ses messages si elle est finie et qu'ils tiennent dans `cap` ;
+    /// `Err(n)` : n messages qui ne tiennent pas (rien n'est oublie) ;
+    /// `Ok(None)` : elle court encore.
+    fn midi_rec_take(
+        &self,
+        _id: u32,
+        _cap: usize,
+    ) -> Result<Option<Vec<cp_abi::MidiEvent>>, usize> {
+        Ok(None)
+    }
 
     // --- les vues (ABI 3)
     #[allow(clippy::too_many_arguments)]
@@ -171,6 +213,14 @@ static API: HostApi = HostApi {
         clock_read: a_clock_read,
         midi_listen: a_midi_listen,
         midi_notes: a_midi_notes,
+        now: a_now,
+        play_at: a_play_at,
+        rec_start: a_rec_start,
+        rec_stop: a_rec_stop,
+        rec_state: a_rec_state,
+        midi_rec_start: a_midi_rec_start,
+        midi_rec_stop: a_midi_rec_stop,
+        midi_rec_take: a_midi_rec_take,
     },
     create_view: v_create,
     destroy_window: v_destroy,
@@ -433,6 +483,69 @@ extern "C" fn a_midi_notes(out: *mut u32, cap: usize) -> usize {
     // SAFETY: le module passe `cap` u32 a lui.
     unsafe { std::ptr::copy_nonoverlapping(v.as_ptr(), out, n) };
     n
+}
+
+fn when(v: i64) -> Option<i64> {
+    (v >= 0).then_some(v)
+}
+
+extern "C" fn a_now() -> i64 {
+    with(0, |h| h.audio_now())
+}
+
+extern "C" fn a_play_at(
+    port: u32,
+    clip: u32,
+    start: i64,
+    end: i64,
+    looped: i32,
+    gain: f64,
+    at: i64,
+) -> u32 {
+    with(0, |h| {
+        h.audio_play_at(port, clip, start, end, looped != 0, gain, when(at))
+    })
+}
+
+extern "C" fn a_rec_start(ch0: i32, ch1: i32, start: i64) -> u32 {
+    with(0, |h| h.rec_start(ch0, ch1, when(start)))
+}
+
+extern "C" fn a_rec_stop(id: u32, at: i64) {
+    with((), |h| h.rec_stop(id, when(at)));
+}
+
+extern "C" fn a_rec_state(id: u32, out: *mut i64) -> i32 {
+    let (st, v) = with((cp_abi::REC_UNKNOWN, 0), |h| h.rec_state(id));
+    if !out.is_null() {
+        // SAFETY: le module passe un i64 a lui.
+        unsafe { *out = v };
+    }
+    st
+}
+
+extern "C" fn a_midi_rec_start(dev: i32, start: i64) -> u32 {
+    with(0, |h| h.midi_rec_start(dev, when(start)))
+}
+
+extern "C" fn a_midi_rec_stop(id: u32, at: i64) {
+    with((), |h| h.midi_rec_stop(id, when(at)));
+}
+
+extern "C" fn a_midi_rec_take(id: u32, out: *mut cp_abi::MidiEvent, cap: usize) -> i64 {
+    let cap = if out.is_null() { 0 } else { cap };
+    match with(Ok(None), |h| h.midi_rec_take(id, cap)) {
+        Ok(None) => -1,
+        Ok(Some(v)) => {
+            let n = v.len().min(cap);
+            if n > 0 {
+                // SAFETY: le module passe `cap` messages a lui ; n <= cap.
+                unsafe { std::ptr::copy_nonoverlapping(v.as_ptr(), out, n) };
+            }
+            n as i64
+        }
+        Err(n) => -(n as i64) - 2,
+    }
 }
 
 extern "C" fn a_clock_device(dev: i32) {

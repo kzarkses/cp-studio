@@ -558,6 +558,20 @@ impl AudioHost {
         Some(self.mrec_done.swap_remove(i).1)
     }
 
+    /// [`Self::midi_rec_take`] seulement si la prise tient dans `cap`
+    /// messages : `Err(n)` sinon (rien n'est oublie).
+    pub fn midi_rec_take_if(
+        &mut self,
+        id: u32,
+        cap: usize,
+    ) -> Result<Option<Vec<midirec::MidiEv>>, usize> {
+        match self.mrec_done.iter().find(|(k, _)| *k == id) {
+            None => Ok(None),
+            Some((_, v)) if v.len() > cap => Err(v.len()),
+            Some(_) => Ok(self.midi_rec_take(id)),
+        }
+    }
+
     /// Les messages deja pris d'une prise MIDI en cours, et les messages
     /// perdus depuis le depart (anneau deborde).
     pub fn midi_rec_count(&self, id: u32) -> (Option<usize>, usize) {

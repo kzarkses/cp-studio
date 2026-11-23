@@ -300,6 +300,75 @@ impl Host for LoaderHost {
         audio((), |a| a.midi_listen(on));
     }
 
+    fn audio_now(&self) -> i64 {
+        audio(0, |a| a.core().clock_now())
+    }
+
+    fn audio_play_at(
+        &self,
+        port: u32,
+        clip: u32,
+        start: i64,
+        end: i64,
+        looped: bool,
+        gain: f64,
+        at: Option<i64>,
+    ) -> u32 {
+        audio(None, |a| {
+            a.play_at(port as usize, ClipH(clip), start, end, looped, gain, at)
+        })
+        .map_or(0, |v| v.0)
+    }
+
+    fn rec_start(&self, ch0: i32, ch1: i32, start: Option<i64>) -> u32 {
+        audio(None, |a| a.rec_start(ch0, ch1, start)).unwrap_or(0)
+    }
+
+    fn rec_stop(&self, id: u32, at: Option<i64>) {
+        audio((), |a| a.rec_stop(id, at));
+    }
+
+    fn rec_state(&self, id: u32) -> (i32, i64) {
+        audio((cp_abi::REC_UNKNOWN, 0), |a| {
+            a.poll();
+            match a.rec_state(id) {
+                cp_audio::RecState::Recording(n) => (cp_abi::REC_RECORDING, n as i64),
+                cp_audio::RecState::Ready(c) => (cp_abi::REC_READY, c.0 as i64),
+                cp_audio::RecState::Failed(_) => (cp_abi::REC_FAILED, 0),
+                cp_audio::RecState::Unknown => (cp_abi::REC_UNKNOWN, 0),
+            }
+        })
+    }
+
+    fn midi_rec_start(&self, dev: i32, start: Option<i64>) -> u32 {
+        audio(0, |a| a.midi_rec_start(dev, start))
+    }
+
+    fn midi_rec_stop(&self, id: u32, at: Option<i64>) {
+        audio((), |a| a.midi_rec_stop(id, at));
+    }
+
+    fn midi_rec_take(&self, id: u32, cap: usize) -> Result<Option<Vec<cp_abi::MidiEvent>>, usize> {
+        audio(Ok(None), |a| {
+            a.poll();
+            match a.midi_rec_take_if(id, cap) {
+                Ok(None) => Ok(None),
+                Ok(Some(v)) => Ok(Some(
+                    v.into_iter()
+                        .map(|e| cp_abi::MidiEvent {
+                            frame: e.frame,
+                            dev: e.dev,
+                            len: e.len,
+                            msg: e.msg,
+                            pad: [0; 3],
+                        })
+                        .collect(),
+                )),
+                Err(n) => Err(n),
+            }
+        })
+    }
+
     fn midi_notes(&self) -> Vec<u32> {
         audio(Vec::new(), |a| a.midi_notes())
     }
