@@ -250,6 +250,7 @@ fn track(g: &str, input: Input) -> TrackInfo {
         armed: false,
         input,
         instrument: false,
+        sound: None,
     }
 }
 
@@ -1015,6 +1016,34 @@ fn un_saut_du_transport_recale_ce_qui_joue() {
         panic!("{c:?}")
     };
     assert!((from - 1.0).abs() < 1e-6, "{from}");
+}
+
+#[test]
+fn une_case_audio_d_une_piste_a_instrument_joue_dans_sa_piste_de_son() {
+    let (mut s, mut e) = setup();
+    let mut t = track("B", Input::None);
+    t.instrument = true;
+    t.sound = Some("Bs".into());
+    s.set_tracks(&mut e, vec![track("A", Input::Midi(-1)), t]);
+    assert_eq!(s.cols[1].port, 2);
+    assert_eq!(s.audio_port(1), 3);
+    e.srcs.insert(
+        "C:/x/a.wav".into(),
+        AudioSrc {
+            clip: 3,
+            frames: 96000,
+            srate: 48000.0,
+            file_bpm: Some(120.0),
+        },
+    );
+    let id = s.fresh_id();
+    s.put(1, 0, Clip::audio(id, "C:/x/a.wav"));
+    s.click(&mut e, 1, 0);
+    assert!(
+        e.take()
+            .iter()
+            .any(|c| matches!(c, Call::VoicePlay { port: 3, .. }))
+    );
 }
 
 #[test]

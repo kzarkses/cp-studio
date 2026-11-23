@@ -138,6 +138,7 @@ fn track(g: &str, name: &str, input: Input, color: Option<(u8, u8, u8)>) -> Trac
         armed: false,
         input,
         instrument: false,
+        sound: None,
     }
 }
 

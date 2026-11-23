@@ -500,9 +500,24 @@ impl App {
     /// les pistes de son de la Session).
     fn ses_tracks(&mut self) -> Vec<TrackInfo> {
         let all = self.r.session_tracks(false);
+        // Les pistes de son : marquees « session:sound:<piste> ».
+        let sounds: HashMap<String, String> = all
+            .iter()
+            .filter_map(|t| {
+                let m = t.mark.as_deref()?.strip_prefix("session:sound:")?;
+                Some((m.to_string(), t.guid.clone()))
+            })
+            .collect();
         all.into_iter()
-            .filter(|t| t.show && t.mark.as_deref() != Some("session:sound"))
+            .filter(|t| {
+                t.show
+                    && !t
+                        .mark
+                        .as_deref()
+                        .is_some_and(|m| m.starts_with("session:sound"))
+            })
             .map(|t| TrackInfo {
+                sound: sounds.get(&t.guid).cloned(),
                 guid: t.guid,
                 name: if t.name.is_empty() {
                     format!("Track {}", t.index + 1)
@@ -515,6 +530,58 @@ impl App {
                 instrument: t.instrument,
             })
             .collect()
+    }
+
+    /// Une colonne dont la piste porte un instrument et qui a des cases
+    /// audio : une piste de son, soeur juste apres elle (l'instrument
+    /// avalerait le son ; dans un dossier, l'enfant passerait par lui).
+    fn ses_sound_tracks(&mut self) {
+        let need: Vec<(String, String)> = self
+            .ses
+            .ses
+            .cols
+            .iter()
+            .filter(|c| !c.held && c.track.instrument && c.track.sound.is_none())
+            .filter(|c| {
+                self.ses
+                    .ses
+                    .cells
+                    .iter()
+                    .any(|(k, v)| k.0 == c.track.guid && !v.is_midi())
+            })
+            .map(|c| (c.track.guid.clone(), c.track.name.clone()))
+            .collect();
+        if need.is_empty() {
+            return;
+        }
+        let r = self.r;
+        r.undo_begin();
+        for (g, name) in need {
+            let all = r.session_tracks(false);
+            let Some(t) = all.iter().find(|t| t.guid == g) else {
+                continue;
+            };
+            // Juste apres la piste (et apres ses enfants, si c'est un
+            // dossier : la soeur ne doit pas y entrer).
+            let mut idx = t.index + 1;
+            if t.depth > 0 {
+                let mut d = t.depth;
+                for x in all.iter().skip((t.index + 1) as usize) {
+                    idx = x.index + 1;
+                    d += x.depth;
+                    if d <= 0 {
+                        break;
+                    }
+                }
+            }
+            if let Some(s) = r.insert_track(idx, &format!("{name} audio")) {
+                r.set_track_ext(&s, "CP", &format!("session:sound:{g}"));
+                self.host.info(&format!(
+                    "Session : piste de son pour « {name} » (elle porte un instrument)"
+                ));
+            }
+        }
+        r.undo_end("CP Session: sound track", -1);
     }
 
     /// Les tranches, dans l'ordre des colonnes.
@@ -623,6 +690,7 @@ impl App {
         let sc = self.r.state_count();
         if sc != self.ses.state_seen || self.ses.ticks % 30 == 0 {
             self.ses.state_seen = sc;
+            self.ses_sound_tracks();
             let tr = self.ses_tracks();
             self.ses_with(|s, e| {
                 s.set_tracks(e, tr);

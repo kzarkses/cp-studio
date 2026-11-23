@@ -193,6 +193,9 @@ pub struct TrackInfo {
     pub input: Input,
     /// La piste porte un instrument (elle avale l'audio qu'on y verse).
     pub instrument: bool,
+    /// La piste de son de la colonne (une soeur creee par la Session) : les
+    /// cases audio d'une piste a instrument y jouent.
+    pub sound: Option<String>,
 }
 
 /// Ce qui joue (ou va partir) dans une colonne.
@@ -278,6 +281,8 @@ pub struct Column {
     /// La piste a disparu mais la colonne garde des clips.
     pub held: bool,
     pub port: u32,
+    /// Le port des cases audio, s'il n'est pas `port` (la piste de son).
+    pub aport: u32,
     pub motion: Motion,
     pub run: ColRun,
 }
@@ -497,10 +502,23 @@ impl Session {
             let g = self.cols[i].track.guid.clone();
             let p = self.port_for(e, &g);
             self.cols[i].port = p;
+            let sound = self.cols[i].track.sound.clone();
+            self.cols[i].aport = match sound {
+                Some(sg) => self.port_for(e, &sg),
+                None => 0,
+            };
         }
         if self.sel.0 >= self.cols.len() {
             self.sel.0 = self.cols.len().saturating_sub(1);
         }
+    }
+
+    /// Le port des cases audio d'une colonne : sa piste de son si elle en a
+    /// une (une piste a instrument avalerait le son), sinon le sien.
+    pub fn audio_port(&self, col: usize) -> u32 {
+        self.cols
+            .get(col)
+            .map_or(0, |c| if c.aport != 0 { c.aport } else { c.port })
     }
 
     /// Le port d'une piste : le meme tant que la piste vit ; 0 = aucun.
@@ -813,6 +831,7 @@ impl Session {
         let lat = self.lat(e);
         self.cancel_next(e, col);
         let port = self.cols[col].port;
+        let vport = self.audio_port(col);
         let qpb = self.tl.qpb;
         let fpb = self.tl.fpb;
         let srate = e.srate().max(1.0);
@@ -917,7 +936,7 @@ impl Session {
                 let start = ap.start + (late as f64 * rate * ap.src.srate / srate) as i64;
                 let at = tf.max(now + lat);
                 let v = e.voice_play(
-                    port,
+                    vport,
                     &ap.src.clone(),
                     start.min(ap.end - 1).max(0),
                     ap.end,
@@ -1261,7 +1280,7 @@ impl Session {
         let fpb = self.tl.fpb;
         for i in 0..self.cols.len() {
             // --- un lancement atteint sa frontiere
-            let port = self.cols[i].port;
+            let port = self.audio_port(i);
             let guid = self.cols[i].track.guid.clone();
             if self.cols[i]
                 .run
@@ -1375,7 +1394,7 @@ impl Session {
         let lat = self.lat(e);
         let fpb = self.tl.fpb;
         for i in 0..self.cols.len() {
-            let port = self.cols[i].port;
+            let port = self.audio_port(i);
             let run = &mut self.cols[i].run;
             if run.next.is_some() || run.stop_at.is_some() {
                 continue;
