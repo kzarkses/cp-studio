@@ -61,6 +61,16 @@ pub enum Icon {
     Free,
     /// La timeline de l'item seul : un item entre crochets.
     Isolate,
+    /// La Session : une grille de cases.
+    Grid,
+    /// Une piste neuve.
+    SquarePlus,
+    /// L'overdub : un cercle et un plus.
+    CirclePlus,
+    /// Capturer une scene : un appareil photo.
+    Camera,
+    /// La panique : un eclair.
+    Zap,
 }
 
 impl Icon {
@@ -178,6 +188,21 @@ impl Icon {
             }
             Icon::Bars => r#"<path d="M5 21v-6" /><path d="M12 21V3" /><path d="M19 21V9" />"#,
             Icon::Free => r#"<path d="M2 12c2.5-6 5-6 7.5 0s5 6 7.5 0c1.2-3 2.5-4.5 5-4.5" />"#,
+            Icon::Grid => {
+                r#"<rect width="7" height="7" x="3" y="3" rx="1" /><rect width="7" height="7" x="14" y="3" rx="1" /><rect width="7" height="7" x="14" y="14" rx="1" /><rect width="7" height="7" x="3" y="14" rx="1" />"#
+            }
+            Icon::SquarePlus => {
+                r#"<rect width="18" height="18" x="3" y="3" rx="2" /><path d="M8 12h8" /><path d="M12 8v8" />"#
+            }
+            Icon::CirclePlus => {
+                r#"<circle cx="12" cy="12" r="10" /><path d="M8 12h8" /><path d="M12 8v8" />"#
+            }
+            Icon::Camera => {
+                r#"<path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z" /><circle cx="12" cy="13" r="3" />"#
+            }
+            Icon::Zap => {
+                r#"<path d="M4 14a1 1 0 0 1-.78-1.63l9.9-10.2a.5.5 0 0 1 .86.46l-1.92 6.02A1 1 0 0 0 13 10h7a1 1 0 0 1 .78 1.63l-9.9 10.2a.5.5 0 0 1-.86-.46l1.92-6.02A1 1 0 0 0 11 14z" />"#
+            }
             Icon::Isolate => {
                 r#"<path d="M8 3H5v18h3" /><path d="M16 3h3v18h-3" /><rect x="9" y="9" width="6" height="6" rx="1" />"#
             }
@@ -305,6 +330,11 @@ mod tests {
             Icon::Bars,
             Icon::Free,
             Icon::Isolate,
+            Icon::Grid,
+            Icon::SquarePlus,
+            Icon::CirclePlus,
+            Icon::Camera,
+            Icon::Zap,
         ];
         for i in all {
             let (n, m) = c.mask(i, 24, false);

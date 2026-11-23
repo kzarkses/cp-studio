@@ -81,6 +81,8 @@ dependencies = [
  "cp_browser",
  "cp_editview",
  "cp_gfx",
+ "cp_session",
+ "cp_sessionview",
  "cp_sys",
  "cp_tab",
  "cp_tabview",
@@ -113,6 +115,16 @@ version = "0.1.0"
 [[package]]
 name = "cp_session"
 version = "0.1.0"
+
+[[package]]
+name = "cp_sessionview"
+version = "0.1.0"
+dependencies = [
+ "cp_gfx",
+ "cp_session",
+ "cp_sys",
+ "cp_ui",
+]
 
 [[package]]
 name = "cp_sys"

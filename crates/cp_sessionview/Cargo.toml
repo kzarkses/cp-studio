@@ -1,0 +1,18 @@
+[package]
+name = "cp_sessionview"
+description = "La vue de la Session : grille, scenes, barre d'outils, tranches de mixage (sans Windows)"
+edition.workspace = true
+version.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+cp_gfx = { path = "../cp_gfx" }
+cp_session = { path = "../cp_session" }
+cp_ui = { path = "../cp_ui" }
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+cp_sys = { path = "../cp_sys" }
