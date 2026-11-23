@@ -8,7 +8,8 @@ use std::ptr::null_mut;
 use std::sync::OnceLock;
 
 use cp_abi::{
-    ABI, AudioApi, ClipInfo, FrameInfo, HostApi, LOAD_FAILED, LOAD_PENDING, LOAD_READY, ViewSpec,
+    ABI, AudioApi, ClipInfo, EXT_NAME, EXT_VERSION, ExtApi, FrameInfo, HostApi, LOAD_FAILED,
+    LOAD_PENDING, LOAD_READY, LaneClip, LaneInfo, LaneNote, ViewSpec,
 };
 
 use crate::guard;
@@ -171,6 +172,43 @@ pub trait Host: Send + Sync {
     fn set_keyless(&self, _hwnd: isize, _on: bool) {}
 
     // --- l'entree de la carte son (ABI 7)
+    // --- l'extension (EXT_VERSION 1) : les lanes MIDI de la Session
+    fn ports(&self) -> u32 {
+        32
+    }
+    #[allow(clippy::too_many_arguments)]
+    fn lane_play(
+        &self,
+        _port: u32,
+        _clip: LaneClipRef<'_>,
+        _from: f64,
+        _fpb: f64,
+        _at: Option<i64>,
+    ) -> bool {
+        false
+    }
+    fn lane_update(&self, _port: u32, _clip: LaneClipRef<'_>) -> bool {
+        false
+    }
+    fn lane_stop(&self, _port: u32, _at: Option<i64>) -> bool {
+        false
+    }
+    fn lane_rate(&self, _port: u32, _fpb: f64, _at: Option<i64>) -> bool {
+        false
+    }
+    fn lane_msg(&self, _port: u32, _at: Option<i64>, _msg: &[u8]) -> bool {
+        false
+    }
+    fn lane_query(&self, _port: u32) -> Option<LaneInfo> {
+        None
+    }
+    fn stop_at(&self, _voice: u32, _at: i64, _fade_s: f64) -> bool {
+        false
+    }
+    fn midi_sent(&self, _port: u32) -> u64 {
+        0
+    }
+
     fn audio_input(&self, _ch0: i32, _ch1: i32, _out: &mut [f32]) -> usize {
         0
     }
@@ -184,7 +222,30 @@ pub enum AudioLoad {
     Failed(String),
 }
 
+/// Un clip MIDI tel que le module l'a passe, emprunte le temps de l'appel.
+pub struct LaneClipRef<'a> {
+    pub id: u64,
+    pub notes: &'a [LaneNote],
+    pub len: f64,
+    pub loop_a: f64,
+    pub loop_b: f64,
+    pub looped: bool,
+}
+
 static IMPL: OnceLock<Box<dyn Host>> = OnceLock::new();
+
+static EXT: ExtApi = ExtApi {
+    version: EXT_VERSION,
+    ports: e_ports,
+    lane_play: e_lane_play,
+    lane_update: e_lane_update,
+    lane_stop: e_lane_stop,
+    lane_rate: e_lane_rate,
+    lane_msg: e_lane_msg,
+    lane_query: e_lane_query,
+    stop_at: e_stop_at,
+    midi_sent: e_midi_sent,
+};
 
 static API: HostApi = HostApi {
     abi: ABI,
@@ -266,6 +327,10 @@ extern "C" fn t_get_func(name: *const c_char) -> *mut c_void {
     }
     // SAFETY: le module passe une chaine terminee par zero.
     let n = unsafe { CStr::from_ptr(name) };
+    // L'extension n'est pas une fonction de REAPER : la table elle-meme.
+    if n.to_bytes_with_nul() == EXT_NAME {
+        return &EXT as *const ExtApi as *mut c_void;
+    }
     guard(|| IMPL.get().map(|h| h.get_func(n)))
         .flatten()
         .unwrap_or(null_mut())
@@ -637,4 +702,89 @@ extern "C" fn i_input(ch0: i32, ch1: i32, out: *mut f32, n: usize) -> usize {
         unsafe { std::slice::from_raw_parts_mut(out, n) }
     };
     with(0, |h| h.audio_input(ch0, ch1, buf))
+}
+
+// ---------------------------------------------------------------------------
+// L'extension
+// ---------------------------------------------------------------------------
+
+/// # Safety
+/// `c` est nul, ou pointe un `LaneClip` dont les notes sont lisibles pendant
+/// l'appel.
+unsafe fn lane_clip<'a>(c: *const LaneClip) -> Option<LaneClipRef<'a>> {
+    if c.is_null() {
+        return None;
+    }
+    // SAFETY: garanti par l'appelant.
+    let c = unsafe { &*c };
+    let notes: &[LaneNote] = if c.notes.is_null() || c.count == 0 {
+        &[]
+    } else {
+        // SAFETY: garanti par l'appelant ; borne a 1 million de notes.
+        unsafe { std::slice::from_raw_parts(c.notes, c.count.min(1 << 20)) }
+    };
+    Some(LaneClipRef {
+        id: c.id,
+        notes,
+        len: c.len,
+        loop_a: c.loop_a,
+        loop_b: c.loop_b,
+        looped: c.looped != 0,
+    })
+}
+
+extern "C" fn e_ports() -> u32 {
+    with(32, |h| h.ports())
+}
+
+extern "C" fn e_lane_play(port: u32, clip: *const LaneClip, from: f64, fpb: f64, at: i64) -> i32 {
+    // SAFETY: le module passe un clip valide pendant l'appel.
+    let Some(c) = (unsafe { lane_clip(clip) }) else {
+        return 0;
+    };
+    with(false, |h| h.lane_play(port, c, from, fpb, when(at))) as i32
+}
+
+extern "C" fn e_lane_update(port: u32, clip: *const LaneClip) -> i32 {
+    // SAFETY: comme e_lane_play.
+    let Some(c) = (unsafe { lane_clip(clip) }) else {
+        return 0;
+    };
+    with(false, |h| h.lane_update(port, c)) as i32
+}
+
+extern "C" fn e_lane_stop(port: u32, at: i64) -> i32 {
+    with(false, |h| h.lane_stop(port, when(at))) as i32
+}
+
+extern "C" fn e_lane_rate(port: u32, fpb: f64, at: i64) -> i32 {
+    with(false, |h| h.lane_rate(port, fpb, when(at))) as i32
+}
+
+extern "C" fn e_lane_msg(port: u32, at: i64, msg: *const u8, len: usize) -> i32 {
+    // SAFETY: tranche valide pendant l'appel.
+    let m = unsafe { bytes(msg, len.min(3)) };
+    with(false, |h| h.lane_msg(port, when(at), m)) as i32
+}
+
+extern "C" fn e_lane_query(port: u32, out: *mut LaneInfo) -> i32 {
+    if out.is_null() {
+        return 0;
+    }
+    match with(None, |h| h.lane_query(port)) {
+        Some(i) => {
+            // SAFETY: le module passe une case valide.
+            unsafe { *out = i };
+            1
+        }
+        None => 0,
+    }
+}
+
+extern "C" fn e_stop_at(voice: u32, at: i64, fade_s: f64) -> i32 {
+    with(false, |h| h.stop_at(voice, at, fade_s)) as i32
+}
+
+extern "C" fn e_midi_sent(port: u32) -> u64 {
+    with(0, |h| h.midi_sent(port))
 }

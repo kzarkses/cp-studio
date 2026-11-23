@@ -311,6 +311,90 @@ pub struct AudioApi {
     pub midi_rec_take: extern "C" fn(id: u32, out: *mut MidiEvent, cap: usize) -> i64,
 }
 
+// ---------------------------------------------------------------------------
+// L'extension : ce qu'un chargeur plus recent offre en plus, SANS changer
+// l'ABI
+// ---------------------------------------------------------------------------
+
+/// Le nom que le module demande a `get_func` pour trouver l'extension. Un
+/// chargeur qui ne la connait pas transmet la demande a REAPER, qui rend nul :
+/// le module sait alors que la fonction manque (il le dit, il ne plante pas).
+/// C'est ce qui laisse un module neuf tourner dans un chargeur deja installe,
+/// le temps que REAPER redemarre.
+pub const EXT_NAME: &[u8] = b"__cp_studio_ext\0";
+
+/// La version de [`ExtApi`] ; elle ne fait que monter, et un champ n'est
+/// jamais retire ni deplace (on n'ajoute qu'a la fin).
+pub const EXT_VERSION: u32 = 1;
+
+/// Une note d'un clip MIDI de la Session, en noires depuis son debut.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct LaneNote {
+    pub start: f64,
+    pub len: f64,
+    pub chan: u8,
+    pub pitch: u8,
+    pub vel: u8,
+    pub pad: [u8; 5],
+}
+
+/// Un clip MIDI tel que le module le passe (les notes sont empruntees le
+/// temps de l'appel : le chargeur les copie).
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct LaneClip {
+    pub id: u64,
+    pub notes: *const LaneNote,
+    pub count: usize,
+    pub len: f64,
+    pub loop_a: f64,
+    pub loop_b: f64,
+    pub looped: i32,
+    pub pad: u32,
+}
+
+/// Ce que la lane d'un port publie.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct LaneInfo {
+    /// 0 : rien ; 1 : un clip attend son frame ; 2 : il joue.
+    pub state: i32,
+    pub dropped: u32,
+    pub clip: u64,
+    /// La position dans le clip, en noires.
+    pub pos: f64,
+    /// Les noires jouees depuis le lancement.
+    pub beats: f64,
+    pub frame: i64,
+    pub started: i64,
+}
+
+/// L'extension du chargeur. Tous les appels sur le fil principal.
+#[repr(C)]
+pub struct ExtApi {
+    pub version: u32,
+    /// Le nombre de ports du moteur (32 avant l'extension).
+    pub ports: extern "C" fn() -> u32,
+    /// Joue un clip MIDI sur la lane d'un port, a partir de la position
+    /// `from` (noires), `fpb` frames par noire, au frame `at` du moteur (< 0 :
+    /// tout de suite). 1 si poste.
+    pub lane_play:
+        extern "C" fn(port: u32, clip: *const LaneClip, from: f64, fpb: f64, at: i64) -> i32,
+    /// Les notes du clip qui joue (meme identite), remplacees sans relance.
+    pub lane_update: extern "C" fn(port: u32, clip: *const LaneClip) -> i32,
+    pub lane_stop: extern "C" fn(port: u32, at: i64) -> i32,
+    /// Un autre tempo (frames par noire) a partir du frame `at`.
+    pub lane_rate: extern "C" fn(port: u32, fpb: f64, at: i64) -> i32,
+    /// Un message court (1 a 3 octets) au frame `at`.
+    pub lane_msg: extern "C" fn(port: u32, at: i64, msg: *const u8, len: usize) -> i32,
+    pub lane_query: extern "C" fn(port: u32, out: *mut LaneInfo) -> i32,
+    /// Arrete une voix au frame `at` (le fondu finit pile la).
+    pub stop_at: extern "C" fn(voice: u32, at: i64, fade_s: f64) -> i32,
+    /// Les messages MIDI qu'un port a poses dans les listes de REAPER.
+    pub midi_sent: extern "C" fn(port: u32) -> u64,
+}
+
 /// Ce que le module offre au chargeur. Tous les appels se font sur le fil
 /// principal de REAPER.
 #[repr(C)]

@@ -15,8 +15,8 @@ use std::ffi::{CStr, c_void};
 use std::sync::{Mutex, OnceLock, TryLockError};
 
 use cp_abi::{
-    ABI, BUSY, ClipInfo, FAULT, FrameInfo, HostApi, LOAD_PENDING, LOAD_READY, LOG_ERROR, LOG_INFO,
-    LOG_WARN, ModuleApi, OK, ViewSpec,
+    ABI, BUSY, ClipInfo, EXT_NAME, ExtApi, FAULT, FrameInfo, HostApi, LOAD_PENDING, LOAD_READY,
+    LOG_ERROR, LOG_INFO, LOG_WARN, LaneClip, LaneInfo, LaneNote, ModuleApi, OK, ViewSpec,
 };
 
 pub use crate::host::AudioLoad;
@@ -85,6 +85,114 @@ impl HostRef {
     /// L'API de REAPER, par la table du chargeur (sans `Register`).
     pub fn reaper(&self) -> crate::reaper::Reaper {
         crate::reaper::Reaper::from_get_func(self.0.get_func)
+    }
+
+    // --- l'extension du chargeur (absente d'un chargeur plus ancien)
+
+    /// La table d'extension, si le chargeur l'a.
+    pub fn ext(&self) -> Option<&'static ExtApi> {
+        let p = (self.0.get_func)(EXT_NAME.as_ptr() as *const core::ffi::c_char);
+        if p.is_null() {
+            return None;
+        }
+        // SAFETY: le chargeur rend sa table statique pour ce nom (et un
+        // chargeur qui ne la connait pas rend nul, REAPER n'ayant pas de
+        // fonction de ce nom).
+        let e = unsafe { &*(p as *const ExtApi) };
+        (e.version >= 1).then_some(e)
+    }
+
+    /// Les ports du moteur (32 avec un chargeur sans extension).
+    pub fn ports(&self) -> u32 {
+        self.ext().map_or(32, |e| (e.ports)())
+    }
+
+    /// Joue un clip MIDI sur la lane d'un port. Faux sans extension.
+    #[allow(clippy::too_many_arguments)]
+    pub fn lane_play(
+        &self,
+        port: u32,
+        id: u64,
+        notes: &[LaneNote],
+        len: f64,
+        brace: (f64, f64),
+        looped: bool,
+        from: f64,
+        fpb: f64,
+        at: Option<i64>,
+    ) -> bool {
+        let Some(e) = self.ext() else { return false };
+        let c = LaneClip {
+            id,
+            notes: notes.as_ptr(),
+            count: notes.len(),
+            len,
+            loop_a: brace.0,
+            loop_b: brace.1,
+            looped: looped as i32,
+            pad: 0,
+        };
+        (e.lane_play)(port, &c, from, fpb, at.unwrap_or(-1)) == 1
+    }
+
+    /// Les notes du clip qui joue, remplacees sans relance.
+    pub fn lane_update(
+        &self,
+        port: u32,
+        id: u64,
+        notes: &[LaneNote],
+        len: f64,
+        brace: (f64, f64),
+        looped: bool,
+    ) -> bool {
+        let Some(e) = self.ext() else { return false };
+        let c = LaneClip {
+            id,
+            notes: notes.as_ptr(),
+            count: notes.len(),
+            len,
+            loop_a: brace.0,
+            loop_b: brace.1,
+            looped: looped as i32,
+            pad: 0,
+        };
+        (e.lane_update)(port, &c) == 1
+    }
+
+    pub fn lane_stop(&self, port: u32, at: Option<i64>) -> bool {
+        self.ext()
+            .is_some_and(|e| (e.lane_stop)(port, at.unwrap_or(-1)) == 1)
+    }
+
+    pub fn lane_rate(&self, port: u32, fpb: f64, at: Option<i64>) -> bool {
+        self.ext()
+            .is_some_and(|e| (e.lane_rate)(port, fpb, at.unwrap_or(-1)) == 1)
+    }
+
+    pub fn lane_msg(&self, port: u32, at: Option<i64>, msg: &[u8]) -> bool {
+        self.ext().is_some_and(|e| {
+            (e.lane_msg)(port, at.unwrap_or(-1), msg.as_ptr(), msg.len().min(3)) == 1
+        })
+    }
+
+    pub fn lane_query(&self, port: u32) -> Option<LaneInfo> {
+        let e = self.ext()?;
+        let mut i = LaneInfo::default();
+        ((e.lane_query)(port, &mut i) == 1).then_some(i)
+    }
+
+    /// Arrete une voix au frame `at` ; sans extension, tout de suite.
+    pub fn audio_stop_at(&self, voice: u32, at: i64, fade_s: f64) {
+        match self.ext() {
+            Some(e) => {
+                (e.stop_at)(voice, at, fade_s);
+            }
+            None => self.audio_stop(voice, fade_s),
+        }
+    }
+
+    pub fn midi_sent(&self, port: u32) -> u64 {
+        self.ext().map_or(0, |e| (e.midi_sent)(port))
     }
 
     // --- le moteur audio (il vit dans le chargeur)

@@ -99,6 +99,29 @@ struct TestState {
 }
 
 /// Le moteur, s'il est la et libre.
+/// Le clip du module, copie dans la forme du moteur.
+fn midi_clip(c: &cp_sys::host::LaneClipRef<'_>) -> cp_engine::MidiClip {
+    cp_engine::MidiClip {
+        id: c.id,
+        notes: c
+            .notes
+            .iter()
+            .map(|n| cp_engine::MNote {
+                start: n.start,
+                len: n.len,
+                chan: n.chan,
+                pitch: n.pitch,
+                vel: n.vel,
+            })
+            .collect(),
+        len: c.len,
+        loop_a: c.loop_a,
+        loop_b: c.loop_b,
+        looped: c.looped,
+    }
+    .normalized()
+}
+
 fn audio<T>(default: T, f: impl FnOnce(&mut AudioHost) -> T) -> T {
     match AUDIO.try_lock() {
         Ok(mut g) => g.as_mut().map_or(default, f),
@@ -402,6 +425,87 @@ impl Host for LoaderHost {
 
     fn audio_route(&self, port: u32, guid: Option<&str>) -> bool {
         audio(false, |a| a.route_port(port as usize, guid))
+    }
+
+    // --- l'extension : les lanes MIDI de la Session
+
+    fn ports(&self) -> u32 {
+        cp_engine::types::MAX_PORTS as u32
+    }
+
+    fn lane_play(
+        &self,
+        port: u32,
+        clip: cp_sys::host::LaneClipRef<'_>,
+        from: f64,
+        fpb: f64,
+        at: Option<i64>,
+    ) -> bool {
+        let c = std::sync::Arc::new(midi_clip(&clip));
+        audio(false, |a| {
+            a.lane(
+                port as usize,
+                at,
+                cp_engine::LaneOp::Play { clip: c, from, fpb },
+            )
+        })
+    }
+
+    fn lane_update(&self, port: u32, clip: cp_sys::host::LaneClipRef<'_>) -> bool {
+        let c = std::sync::Arc::new(midi_clip(&clip));
+        audio(false, |a| a.lane_update(port as usize, c))
+    }
+
+    fn lane_stop(&self, port: u32, at: Option<i64>) -> bool {
+        audio(false, |a| {
+            a.lane(port as usize, at, cp_engine::LaneOp::Stop)
+        })
+    }
+
+    fn lane_rate(&self, port: u32, fpb: f64, at: Option<i64>) -> bool {
+        audio(false, |a| {
+            a.lane(port as usize, at, cp_engine::LaneOp::Rate { fpb })
+        })
+    }
+
+    fn lane_msg(&self, port: u32, at: Option<i64>, msg: &[u8]) -> bool {
+        if msg.is_empty() || msg.len() > 3 {
+            return false;
+        }
+        let mut m = [0u8; 3];
+        m[..msg.len()].copy_from_slice(msg);
+        audio(false, |a| {
+            a.lane(
+                port as usize,
+                at,
+                cp_engine::LaneOp::Msg {
+                    len: msg.len() as u8,
+                    msg: m,
+                },
+            )
+        })
+    }
+
+    fn lane_query(&self, port: u32) -> Option<cp_abi::LaneInfo> {
+        audio(None, |a| {
+            a.lane_query(port as usize).map(|s| cp_abi::LaneInfo {
+                state: s.state,
+                dropped: s.dropped,
+                clip: s.clip,
+                pos: s.pos,
+                beats: s.beats,
+                frame: s.frame,
+                started: s.started,
+            })
+        })
+    }
+
+    fn stop_at(&self, voice: u32, at: i64, fade_s: f64) -> bool {
+        audio(false, |a| a.stop_at(VoiceH(voice), at, fade_s))
+    }
+
+    fn midi_sent(&self, port: u32) -> u64 {
+        audio(0, |a| a.port_midi_sent(port as usize))
     }
 
     fn audio_levels(&self, port: u32) -> Option<[f32; 2]> {
