@@ -45,6 +45,10 @@ pub(crate) trait Transport {
     fn bar_qn(&self) -> f64;
     /// La latence de sortie, en secondes.
     fn out_latency_s(&self) -> f64;
+    /// La vitesse d'avant la synchro, gardee hors du module (un
+    /// rechargement a chaud en pleine synchro la retrouve).
+    fn rate0_get(&self) -> Option<f64>;
+    fn rate0_set(&self, r: Option<f64>);
 }
 
 /// Le transport de REAPER.
@@ -88,6 +92,15 @@ impl Transport for Reaper {
             Some(sr) if sr > 1.0 => out as f64 / sr,
             _ => 0.0,
         }
+    }
+    fn rate0_get(&self) -> Option<f64> {
+        self.0
+            .ext_get(crate::SECTION, "clock_rate0")
+            .and_then(|v| v.parse().ok())
+    }
+    fn rate0_set(&self, r: Option<f64>) {
+        let v = r.map_or(String::new(), |r| r.to_string());
+        self.0.ext_set(crate::SECTION, "clock_rate0", &v, false);
     }
 }
 
@@ -187,9 +200,10 @@ impl ClockSync {
     }
 
     /// Rendre la vitesse d'avant la synchro.
-    fn release_rate(&mut self, t: &impl Transport) {
+    pub(crate) fn release_rate(&mut self, t: &impl Transport) {
         if let Some(r0) = self.rate0.take() {
             t.set_rate(r0);
+            t.rate0_set(None);
         }
         self.rate_set = 1.0;
         self.offset = None;
@@ -207,6 +221,9 @@ impl ClockSync {
             self.primed = true;
             self.starts = starts;
             self.stops = stops;
+            // Un module recharge en pleine synchro : la vitesse d'avant est
+            // celle que l'ancien avait gardee.
+            self.rate0 = t.rate0_get();
         }
         let present = flags & PRESENT != 0;
         let running = flags & RUNNING != 0;
@@ -269,6 +286,7 @@ impl ClockSync {
         self.last_err = e;
         if self.rate0.is_none() {
             self.rate0 = Some(t.rate());
+            t.rate0_set(self.rate0);
         }
         let base = bpm / proj;
         if e.abs() > JUMP_QN {
@@ -304,6 +322,7 @@ mod tests {
         rate: Cell<f64>,
         qn: Cell<f64>,
         seeks: Cell<u32>,
+        stash: Cell<Option<f64>>,
     }
 
     impl Transport for Fake {
@@ -343,6 +362,12 @@ mod tests {
         }
         fn out_latency_s(&self) -> f64 {
             0.0036
+        }
+        fn rate0_get(&self) -> Option<f64> {
+            self.stash.get()
+        }
+        fn rate0_set(&self, r: Option<f64>) {
+            self.stash.set(r);
         }
     }
 
@@ -535,5 +560,30 @@ mod tests {
         s.c.step(&s.t, Some(v));
         assert_eq!(s.t.rate.get(), 1.0, "la vitesse rendue");
         assert_eq!(s.t.bpm.get(), 132.0, "le tempo du maitre, a l'arret");
+    }
+
+    #[test]
+    fn un_rechargement_en_pleine_synchro_rend_la_bonne_vitesse() {
+        // La synchro tourne (vitesse 1,003) ; le module se recharge : la
+        // synchro neuve, a l'arret, rend la vitesse d'avant (1), pas 1,003.
+        let mut s = Sim::new(128.0, 0.0);
+        s.run(3.0, |_| 128.4);
+        assert!(
+            (s.t.rate.get() - 1.0).abs() > 1e-3,
+            "la synchro a pris la vitesse"
+        );
+        let t = s.t;
+        let mut fresh = ClockSync {
+            dev: 0,
+            ..Default::default()
+        };
+        t.playing.set(false);
+        let mut v = [0.0; 14];
+        v[0] = 128.4;
+        v[4] = 16.0;
+        v[9] = PRESENT as f64;
+        fresh.step(&t, Some(v));
+        assert_eq!(t.rate.get(), 1.0, "la vitesse d'avant la synchro");
+        assert_eq!(t.stash.get(), None);
     }
 }

@@ -535,6 +535,11 @@ impl App {
     /// et la place (Cedric a-t-il rallume le transport de REAPER ?).
     /// La clock externe : l'entree ecoutee (-1 : aucune), retenue.
     fn clock_set_device(&mut self, dev: i32) {
+        // La synchro qui s'arrete (ou change d'entree) rend la vitesse de
+        // lecture qu'elle avait prise.
+        self.tp
+            .clock
+            .release_rate(&crate::clocksync::Reaper(self.r));
         let delay = self.tp.clock.delay_ms;
         self.tp.clock = crate::clocksync::ClockSync::on(dev);
         self.tp.clock.delay_ms = delay;
