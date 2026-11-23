@@ -437,6 +437,12 @@ pub fn release_capture() {
     unsafe { ReleaseCapture() };
 }
 
+/// La fenetre qui tient la souris (de ce fil), 0 si aucune.
+pub fn capture_window() -> Hwnd {
+    // SAFETY: aucune precondition.
+    Hwnd(unsafe { GetCapture() } as isize)
+}
+
 pub fn has_capture(h: Hwnd) -> bool {
     // SAFETY: aucune precondition.
     unsafe { GetCapture() as isize == h.0 }

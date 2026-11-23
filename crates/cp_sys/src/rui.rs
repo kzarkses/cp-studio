@@ -62,6 +62,18 @@ impl Reaper {
         (d >= 0).then_some(d)
     }
 
+    /// La place d'un docker : 0 en bas, 1 a gauche, 2 en haut, 3 a droite,
+    /// 4 flottant ; -1 s'il n'existe pas.
+    pub fn dock_position(&self, which: i32) -> i32 {
+        type F = unsafe extern "C" fn(i32) -> i32;
+        // SAFETY: int DockGetPosition(int whichDock).
+        match unsafe { self.api::<F>(c"DockGetPosition") } {
+            // SAFETY: un entier, rien d'autre.
+            Some(f) => unsafe { f(which) },
+            None => -1,
+        }
+    }
+
     /// Le docker ou ira `ident` a sa prochaine ouverture.
     pub fn dock_set_target(&self, ident: &str, which: i32) {
         type F = unsafe extern "C" fn(*const c_char, i32);

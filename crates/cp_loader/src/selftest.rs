@@ -64,6 +64,12 @@ pub struct SelfTest {
     place0: String,
     frames0: cp_abi::FrameInfo,
     snapped: bool,
+    /// La poignee mesuree : (docker de depart, boite du docker, fenetres
+    /// du processus avant l'appui) ; ou va le glisser (fenetre, x, y) ;
+    /// l'essai par l'API (docker de depart, docker vise).
+    grip: Option<(i32, isize, usize)>,
+    grip_to: Option<(isize, i32, i32)>,
+    grip_api: Option<(i32, i32)>,
 }
 
 /// La sonde du tempo : etape, heure, tempo et vitesse d'avant, mesures.
@@ -172,6 +178,10 @@ enum Phase {
     Band,
     /// Guitar Tab sur un riff connu.
     GuitarTab,
+    /// La poignee native d'un docker : REAPER prend-il un appui envoye par
+    /// message (pour qu'une poignee a nous lui passe le glisser) ? Et
+    /// l'API des dockers deplace-t-elle une vue d'un docker a l'autre ?
+    DockGrip,
     Done,
 }
 
@@ -207,6 +217,9 @@ pub fn requested() -> Option<SelfTest> {
         place0: String::new(),
         frames0: cp_abi::FrameInfo::default(),
         snapped: false,
+        grip: None,
+        grip_to: None,
+        grip_api: None,
     })
 }
 
@@ -1311,6 +1324,7 @@ impl SelfTest {
             | Phase::Transport
             | Phase::Band
             | Phase::GuitarTab
+            | Phase::DockGrip
             | Phase::Done => {}
         }
         false
@@ -1660,11 +1674,202 @@ impl SelfTest {
             }
             Phase::GuitarTab => {
                 if self.gtab_tick(r) {
+                    self.keys_step = 0;
+                    self.ui_at = Some(Instant::now());
+                    self.phase = Phase::DockGrip;
+                }
+            }
+            Phase::DockGrip => {
+                if self.grip_tick(r) {
                     self.finish_report();
                     return true;
                 }
             }
             Phase::Done => return true,
+            _ => {}
+        }
+        false
+    }
+
+    /// La poignee des dockers, mesuree. 1) Un appui envoye par message a la
+    /// poignee native de 6 px (en bas du docker du navigateur), un
+    /// deplacement, un lacher : qui tient la souris, quelles fenetres
+    /// paraissent, ou finit la vue. 2) L'API : la vue envoyee dans un autre
+    /// docker (Dock_UpdateDockID, retiree puis rajoutee), puis ramenee.
+    /// Rien n'echoue : ce sont des mesures, au journal.
+    fn grip_tick(&mut self, r: &cp_sys::reaper::Reaper) -> bool {
+        use cp_sys::ui;
+        const WM_MOUSEMOVE: u32 = 0x0200;
+        const WM_LBUTTONDOWN: u32 = 0x0201;
+        const WM_LBUTTONUP: u32 = 0x0202;
+        const MK_LBUTTON: usize = 1;
+        let t = self.ui_at.map_or(0.0, |t| t.elapsed().as_secs_f64());
+        let lp = |x: i32, y: i32| ((y as u16 as isize) << 16) | (x as u16 as isize);
+        let Some(h) = crate::first_view() else {
+            self.say(true, "poignee : pas de navigateur, rien a mesurer".into());
+            return true;
+        };
+        match self.keys_step {
+            0 => {
+                let Some(d0) = r.dock_of(h) else {
+                    self.say(true, "poignee : navigateur flottant, rien a mesurer".into());
+                    return true;
+                };
+                let mut host = ui::parent(h);
+                let (hr, vr) = (ui::window_rect(host), ui::window_rect(h));
+                let (sx, sy) = ((hr.left + hr.right) / 2, hr.bottom - 3);
+                // Les enfants de la boite : la poignee est-elle une fenetre ?
+                for c in ui::children(host) {
+                    let cr = ui::window_rect(c);
+                    let under = sx >= cr.left && sx < cr.right && sy >= cr.top && sy < cr.bottom;
+                    crate::log(
+                        cp_abi::LOG_INFO,
+                        &format!(
+                            "selftest : poignee : enfant {} « {} » {}x{} en {},{}{}",
+                            ui::class_name(c),
+                            ui::window_text(c),
+                            cr.right - cr.left,
+                            cr.bottom - cr.top,
+                            cr.left - hr.left,
+                            cr.top - hr.top,
+                            if under { " (sous la poignee)" } else { "" }
+                        ),
+                    );
+                    if under && c != h {
+                        host = c;
+                    }
+                }
+                let (cx, cy) = ui::screen_to_client(host, sx, sy);
+                self.grip = Some((d0, host.0, ui::process_windows().len()));
+                crate::log(
+                    cp_abi::LOG_INFO,
+                    &format!(
+                        "selftest : poignee : docker {d0} (place {}), boite {} {}x{}, vue en bas a {} px du bord ; appui a ({cx},{cy}) dans la boite",
+                        r.dock_position(d0),
+                        ui::class_name(host),
+                        hr.right - hr.left,
+                        hr.bottom - hr.top,
+                        hr.bottom - vr.bottom
+                    ),
+                );
+                cp_sys::win::post_message(host, WM_LBUTTONDOWN, MK_LBUTTON, lp(cx, cy));
+                self.keys_step = 1;
+                self.ui_at = Some(Instant::now());
+            }
+            1 if t > 0.2 => {
+                let cap = ui::capture_window();
+                let (d0, host, _) = self.grip.unwrap_or((0, 0, 0));
+                let to = if cap.0 != 0 {
+                    cap
+                } else {
+                    cp_sys::win::Hwnd(host)
+                };
+                // Vers le milieu de la fenetre principale.
+                let m = ui::window_rect(r.main_hwnd());
+                let (tx, ty) = ((m.left + m.right) / 2, (m.top + m.bottom) / 2);
+                let (cx, cy) = ui::screen_to_client(to, tx, ty);
+                crate::log(
+                    cp_abi::LOG_INFO,
+                    &format!(
+                        "selftest : poignee : apres l'appui, la souris est tenue par {} ({}), docker {d0}",
+                        if cap.0 == 0 {
+                            "personne".to_string()
+                        } else {
+                            ui::class_name(cap)
+                        },
+                        if cap.0 == host {
+                            "la boite du docker"
+                        } else if cap.0 == 0 {
+                            "-"
+                        } else {
+                            "une autre fenetre"
+                        }
+                    ),
+                );
+                for k in 1..=4 {
+                    let f = k as f32 / 4.0;
+                    let (mx, my) = ((cx as f32 * f) as i32, (cy as f32 * f) as i32);
+                    cp_sys::win::post_message(to, WM_MOUSEMOVE, MK_LBUTTON, lp(mx, my));
+                }
+                self.grip_to = Some((to.0, cx, cy));
+                self.keys_step = 2;
+                self.ui_at = Some(Instant::now());
+            }
+            2 if t > 0.3 => {
+                let (_, _, n0) = self.grip.unwrap_or((0, 0, 0));
+                let n1 = ui::process_windows().len();
+                let (to, cx, cy) = self.grip_to.unwrap_or((0, 0, 0));
+                crate::log(
+                    cp_abi::LOG_INFO,
+                    &format!(
+                        "selftest : poignee : pendant le glisser, {} fenetre(s) de plus ; souris tenue : {}",
+                        n1 as i64 - n0 as i64,
+                        ui::class_name(ui::capture_window())
+                    ),
+                );
+                cp_sys::win::post_message(cp_sys::win::Hwnd(to), WM_LBUTTONUP, 0, lp(cx, cy));
+                self.keys_step = 3;
+                self.ui_at = Some(Instant::now());
+            }
+            3 if t > 0.6 => {
+                let (d0, _, _) = self.grip.unwrap_or((0, 0, 0));
+                let d1 = r.dock_of(h);
+                if ui::capture_window().0 != 0 {
+                    ui::release_capture();
+                }
+                self.say(
+                    true,
+                    format!(
+                        "poignee native par message : docker {d0} -> {} ; souris rendue : {}",
+                        d1.map_or("flottante".to_string(), |d| d.to_string()),
+                        ui::capture_window().0 == 0
+                    ),
+                );
+                // L'API : un autre docker, puis le retour.
+                let cur = d1.unwrap_or(d0);
+                let d2 = (cur + 1) % 16;
+                r.dock_set_target("cp_studio_browser", d2);
+                r.dock_remove(h);
+                r.dock_add(h, "CP Browser", "cp_studio_browser");
+                r.dock_activate(h);
+                self.grip_api = Some((cur, d2));
+                self.keys_step = 4;
+                self.ui_at = Some(Instant::now());
+            }
+            4 if t > 0.4 => {
+                let (cur, d2) = self.grip_api.unwrap_or((0, 1));
+                let now = r.dock_of(h);
+                self.say(
+                    now == Some(d2),
+                    format!(
+                        "poignee par l'API : docker {cur} -> {} (attendu {d2}, place {})",
+                        now.map_or("flottante".to_string(), |d| d.to_string()),
+                        r.dock_position(d2)
+                    ),
+                );
+                // Le retour au docker du depart : l'auto-test tourne sur la
+                // configuration de Cedric (reaper.ini), il la rend telle
+                // quelle.
+                let (d0, _, _) = self.grip.unwrap_or((cur, 0, 0));
+                r.dock_set_target("cp_studio_browser", d0);
+                r.dock_remove(h);
+                r.dock_add(h, "CP Browser", "cp_studio_browser");
+                r.dock_activate(h);
+                self.keys_step = 5;
+                self.ui_at = Some(Instant::now());
+            }
+            5 if t > 0.4 => {
+                let (d0, _, _) = self.grip.unwrap_or((0, 0, 0));
+                let now = r.dock_of(h);
+                self.say(
+                    now == Some(d0),
+                    format!(
+                        "et revient a son docker de depart : {}",
+                        now.map_or("flottante".to_string(), |d| d.to_string())
+                    ),
+                );
+                return true;
+            }
             _ => {}
         }
         false
