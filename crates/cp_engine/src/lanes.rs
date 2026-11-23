@@ -30,6 +30,8 @@ pub struct MNote {
     pub chan: u8,
     pub pitch: u8,
     pub vel: u8,
+    /// La probabilite, en % (100 : toujours). Tiree a chaque passe.
+    pub prob: u8,
 }
 
 /// Un clip MIDI tel que la lane le joue. Les notes sont triees par debut.
@@ -55,6 +57,7 @@ impl MidiClip {
         self.notes
             .retain(|n| n.start.is_finite() && n.len.is_finite() && n.len > 0.0);
         for n in &mut self.notes {
+            n.prob = if n.prob == 0 { 100 } else { n.prob.min(100) };
             n.chan &= 0x0F;
             n.pitch &= 0x7F;
             n.vel = n.vel.clamp(1, 127);
@@ -220,6 +223,8 @@ pub(crate) struct Lane {
     nactive: usize,
     pending: Vec<Pending>,
     evs: Vec<Ev>,
+    /// Le hasard des notes probables (xorshift : rien n'est alloue).
+    rng: u64,
 }
 
 impl Lane {
@@ -242,6 +247,7 @@ impl Lane {
             // Reserves une fois, ici, sur le fil principal.
             pending: Vec::with_capacity(MAX_PENDING),
             evs: Vec::with_capacity(MAX_EVENTS),
+            rng: 0x9E37_79B9_7F4A_7C15,
         }
     }
 
@@ -529,6 +535,17 @@ impl Lane {
                     if nt.start < seg_p - 1e-9 {
                         continue;
                     }
+                    // Une note probable : tiree a chaque passage.
+                    if nt.prob < 100 {
+                        let mut x = self.rng;
+                        x ^= x << 13;
+                        x ^= x >> 7;
+                        x ^= x << 17;
+                        self.rng = x;
+                        if (x % 100) as u8 >= nt.prob {
+                            continue;
+                        }
+                    }
                     let u_on = seg_u + (nt.start - seg_p);
                     let end = (nt.start + nt.len).min(seg_end);
                     let u_off = u_on + (end - nt.start).max(1e-6);
@@ -628,6 +645,7 @@ mod tests {
                         chan: 0,
                         pitch: p,
                         vel: 100,
+                        prob: 100,
                     })
                     .collect(),
                 len,
@@ -911,6 +929,25 @@ mod tests {
         // Le premier clip continue : sa note revient a chaque mesure.
         assert!(ev.iter().any(|e| e.0 == 400 && e.1 == vec![0x90, 60, 100]));
         assert!(!ev.iter().any(|e| e.1[1] == 72));
+    }
+
+    #[test]
+    fn une_note_probable_joue_a_peu_pres_une_fois_sur_deux() {
+        let mut l = Lane::new();
+        let mut m = (*clip(&[(0.0, 0.5, 60)], 1.0)).clone();
+        m.notes[0].prob = 50;
+        l.post(
+            0,
+            LaneOp::Play {
+                clip: Arc::new(m.normalized()),
+                from: 0.0,
+                fpb: 100.0,
+            },
+        );
+        let ev = run(&mut l, 0, 100, 100);
+        let ons = ev.iter().filter(|e| e.1[0] == 0x90).count();
+        // 100 passes : entre 30 et 70 notes.
+        assert!((30..=70).contains(&ons), "{ons}");
     }
 
     #[test]

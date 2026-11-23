@@ -112,6 +112,9 @@ fn midi_clip(c: &cp_sys::host::LaneClipRef<'_>) -> cp_engine::MidiClip {
                 chan: n.chan,
                 pitch: n.pitch,
                 vel: n.vel,
+                // La probabilite voyage dans le premier octet de reserve
+                // (0 : toujours ; un module plus ancien n'y ecrit rien).
+                prob: if n.pad[0] == 0 { 100 } else { n.pad[0] },
             })
             .collect(),
         len: c.len,
