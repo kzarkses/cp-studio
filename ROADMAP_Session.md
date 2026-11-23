@@ -123,9 +123,12 @@ frontière tombe à l'échantillon, même si le fil principal s'arrête.
   - Arrange Rec écrit un item de 12 notes, ce qui a joué.
 
 **Reste**
-- ☐ Taire l'arrangement sous une colonne qui joue (l'ancienne passait par
-  les lanes fixes, jamais mesurées), et le vrai Back to Arrangement (pour
-  l'instant : tout s'arrête).
+- ☐ Taire l'arrangement sous une colonne qui joue, et le vrai Back to
+  Arrangement (pour l'instant : tout s'arrête). **Mesuré le 2026-11-24** :
+  une piste en lanes fixes dont aucune lane ne joue se tait (crête 0,000,
+  son item sonnait à 0,4). C'est donc possible. Mais passer une piste de
+  Cedric en lanes fixes change la façon dont REAPER la montre : à décider
+  avec lui avant de le faire.
 - ☐ L'automation d'un clip (les courbes de l'ancien AUTO) ; ouvrir une case
   audio dans l'éditeur (sa région).
 - ☐ Le clavier virtuel de REAPER n'entre pas dans une prise : elle lit les
