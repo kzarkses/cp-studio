@@ -27,6 +27,39 @@ struct Fake {
     rate: f64,
     thumbs_asked: std::collections::HashSet<String>,
     stretches: usize,
+    /// Les longs fichiers, charges par le vrai moteur (en flux) : (ticket
+    /// du navigateur, ticket du moteur).
+    real: Vec<(u32, u32)>,
+}
+
+/// Un long fichier synthetique : a gauche un La a 0,25, a droite la seconde
+/// jouee (0,9 * (s mod 1000) / 1000) : ce qu'on entend dit ou l'on est.
+struct LongSrc {
+    frames: usize,
+}
+
+impl cp_audio::decode::Reader for LongSrc {
+    fn channels(&mut self) -> i32 {
+        2
+    }
+    fn sample_rate(&mut self) -> f64 {
+        48000.0
+    }
+    fn length(&mut self) -> f64 {
+        self.frames as f64 / 48000.0
+    }
+    fn read(&mut self, time_s: f64, _srate: f64, nch: usize, out: &mut [f64]) -> usize {
+        let start = (time_s * 48000.0).round() as usize;
+        let want = out.len() / nch;
+        let got = want.min(self.frames.saturating_sub(start));
+        for i in 0..got {
+            let f = start + i;
+            let t = f as f64 / 48000.0;
+            out[i * nch] = (t * 440.0 * std::f64::consts::TAU).sin() * 0.25;
+            out[i * nch + 1] = 0.9 * ((f / 48000) % 1000) as f64 / 1000.0;
+        }
+        got
+    }
 }
 
 /// Les tickets de cuisson du vrai moteur, distingues de ceux du faux
@@ -46,6 +79,7 @@ impl Fake {
             rate: 1.0,
             thumbs_asked: std::collections::HashSet::new(),
             stretches: 0,
+            real: Vec::new(),
         }
     }
 
@@ -78,6 +112,14 @@ impl Host for Fake {
     fn load(&mut self, path: &str) -> u32 {
         let t = self.next;
         self.next += 1;
+        if path.contains("Long") {
+            // Vingt minutes : le vrai moteur les lit en flux.
+            let at = self.a.load_reader(Box::new(LongSrc {
+                frames: 48000 * 60 * 20,
+            }));
+            self.real.push((t, at));
+            return t;
+        }
         self.tickets.push((t, path.to_string()));
         t
     }
@@ -86,6 +128,14 @@ impl Host for Fake {
         if ticket & STRETCH_T != 0 {
             self.a.poll();
             return match self.a.ticket(ticket & !STRETCH_T) {
+                cp_audio::Load::Pending => Loaded::Pending,
+                cp_audio::Load::Ready(c) => Loaded::Ready(c.0),
+                cp_audio::Load::Failed(e) => Loaded::Failed(e),
+            };
+        }
+        if let Some(&(_, at)) = self.real.iter().find(|x| x.0 == ticket) {
+            self.a.poll();
+            return match self.a.ticket(at) {
                 cp_audio::Load::Pending => Loaded::Pending,
                 cp_audio::Load::Ready(c) => Loaded::Ready(c.0),
                 cp_audio::Load::Failed(e) => Loaded::Failed(e),
@@ -745,4 +795,98 @@ fn la_barre_s_explique_en_infobulle() {
     assert!(at(l.star_x).unwrap().contains("Favorite"));
     assert!(at(l.play_x).unwrap().contains("Space"));
     assert!(b.tip_at(10.0, l.list_y + 10.0).is_none());
+}
+
+#[test]
+fn un_long_fichier_s_ecoute_en_flux_dans_le_navigateur() {
+    // Vingt minutes : le navigateur l'ecoute des le debut, saute au milieu
+    // par un clic dans la forme d'onde, et l'on entend la bonne seconde ;
+    // aucun bloc sans sa page (les blocs sont tires au rythme de REAPER).
+    let root = std::env::temp_dir().join("cp_browser_long");
+    let _ = std::fs::create_dir_all(&root);
+    let file = root.join("Long Take 100 bpm.wav");
+    if !file.exists() {
+        std::fs::write(&file, b"RIFF").unwrap();
+    }
+    let pl = Places {
+        recordings: None,
+        folders: Places::from_shortcuts(
+            &[Shortcut {
+                target: root.to_string_lossy().into_owned(),
+                title: Some("Long".into()),
+            }],
+            Path::new("."),
+            None,
+        ),
+    };
+    let mut h = Fake::new();
+    let mut b = Browser::new(pl, Path::new("."), Vec::new());
+    b.layout(420.0, 640.0, 1.0);
+    let top = b
+        .rows
+        .iter()
+        .position(|&r| matches!(r, Row::Node(id) if b.tree.nodes[id].name == "Long"))
+        .unwrap();
+    b.sel = Some(top);
+    key(&mut b, &mut h, vk::RIGHT);
+    key(&mut b, &mut h, vk::DOWN);
+    // Au rythme de REAPER : un bloc de 512 toutes les 10,7 ms.
+    let period = std::time::Duration::from_secs_f64(512.0 / 48000.0);
+    let run = |b: &mut Browser, h: &mut Fake, blocks: usize| -> Vec<f64> {
+        let mut out = Vec::new();
+        for _ in 0..blocks {
+            b.tick(h);
+            out.extend(h.run_audio(512));
+            std::thread::sleep(period);
+        }
+        out
+    };
+    let a = run(&mut b, &mut h, 60);
+    assert!(b.wave.has(), "la forme d'onde est la");
+    let heard_l = a.chunks_exact(2).map(|x| x[0].abs()).fold(0.0, f64::max);
+    assert!(heard_l > 0.2, "on entend le debut ({heard_l})");
+    // Un clic au milieu de la forme d'onde : on y saute.
+    let y = b.lay.wave_y + 20.0;
+    let x = b.lay.w * 0.5;
+    for ev in [
+        Ev::Down {
+            x,
+            y,
+            b: Button::Left,
+            dbl: false,
+            mods: Mods::default(),
+        },
+        Ev::Up {
+            x,
+            y,
+            b: Button::Left,
+            mods: Mods::default(),
+        },
+    ] {
+        b.event(&mut h, &ev);
+    }
+    let after = run(&mut b, &mut h, 60);
+    let right: Vec<f64> = after.chunks_exact(2).map(|x| x[1]).collect();
+    let tail = &right[right.len() - 4800..];
+    let v = tail.iter().copied().fold(0.0, f64::max);
+    let sec = (v / 0.9 * 1000.0).round() as i64;
+    assert!(
+        (400..=800).contains(&sec),
+        "apres le clic on entend la seconde {sec} (un saut vers le milieu des 20 min)"
+    );
+    eprintln!("navigateur : apres le clic au milieu, la seconde {sec}");
+    // Le calage au tempo (T) : un long fichier ne se cuit pas ; l'ecoute
+    // continue, calee par la vitesse.
+    key(&mut b, &mut h, 0x54);
+    let synced = run(&mut b, &mut h, 40);
+    assert!(b.sync, "le calage est pris");
+    let loud = synced
+        .chunks_exact(2)
+        .map(|x| x[0].abs())
+        .fold(0.0, f64::max);
+    assert!(loud > 0.2, "l'ecoute continue ({loud})");
+    let st = h.a.stats();
+    assert_eq!(st.streams, 1, "lu en flux");
+    assert_eq!(st.stream_misses, 0, "aucun bloc sans sa page");
+    assert!(st.bytes < 64 << 20, "{} Mo", st.bytes >> 20);
 }
