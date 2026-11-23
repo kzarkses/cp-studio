@@ -55,10 +55,13 @@ struct AudioEntry {
     err: Option<String>,
 }
 
-/// Les fichiers des cases, charges une fois.
+/// Les fichiers des cases, charges une fois ; les regions etirees, cuites
+/// une fois.
 #[derive(Default)]
 pub(crate) struct AudioCache {
     files: HashMap<String, AudioEntry>,
+    /// (clip, debut, fin, tempo en millioniemes) -> la version cuite.
+    baked: HashMap<(u32, i64, i64, i64), AudioEntry>,
 }
 
 /// Le moteur du chargeur, tel que la Session le demande.
@@ -188,6 +191,10 @@ impl Engine for Eng<'_> {
     fn voice_rate(&mut self, voice: u32, rate: f64) {
         self.host.audio_set(voice, 0, rate);
     }
+    fn voice_seek(&mut self, voice: u32, pos: f64) {
+        // Param::Pos : un saut croise sur 5 ms dans le moteur.
+        self.host.audio_set(voice, 7, pos.max(0.0));
+    }
     fn midi_rec_start(&mut self, dev: i32, at: i64) -> u32 {
         self.host.midi_rec_start(dev, Some(at))
     }
@@ -223,6 +230,43 @@ impl Engine for Eng<'_> {
             }
             _ => RecPoll::Failed,
         }
+    }
+    fn stretched(&mut self, src: &AudioSrc, start: i64, end: i64, tempo: f64) -> Option<AudioSrc> {
+        let host = self.host;
+        let key = (src.clip, start, end, (tempo * 1e6).round() as i64);
+        let e = self.cache.baked.entry(key).or_default();
+        if e.err.is_some() {
+            return None;
+        }
+        if e.clip == 0 {
+            if e.ticket == 0 {
+                e.ticket = host.audio_stretch(src.clip, start, end, tempo, 1.0);
+                if e.ticket == 0 {
+                    e.err = Some("refused".into());
+                    return None;
+                }
+            }
+            match host.audio_poll(e.ticket) {
+                AudioLoad::Pending => return None,
+                AudioLoad::Failed(m) => {
+                    e.err = Some(m);
+                    return None;
+                }
+                AudioLoad::Ready(c) => {
+                    e.clip = c;
+                    if let Some(i) = host.audio_info(c) {
+                        e.frames = i.frames;
+                        e.srate = i.srate;
+                    }
+                }
+            }
+        }
+        Some(AudioSrc {
+            clip: e.clip,
+            frames: e.frames,
+            srate: if e.srate > 1.0 { e.srate } else { src.srate },
+            file_bpm: None,
+        })
     }
     fn save_take(&mut self, clip: u32, name: &str) -> Option<String> {
         let dir = self
@@ -271,13 +315,14 @@ impl Engine for Eng<'_> {
 fn lane_notes(c: &LaneClip) -> Vec<LaneNote> {
     c.notes
         .iter()
-        .map(|&(start, len, chan, pitch, vel)| LaneNote {
+        .map(|&(start, len, chan, pitch, vel, prob)| LaneNote {
             start,
             len,
             chan,
             pitch,
             vel,
-            pad: [0; 5],
+            // La probabilite : le premier octet de reserve (100 : toujours).
+            pad: [prob.min(100), 0, 0, 0, 0],
         })
         .collect()
 }
@@ -592,6 +637,24 @@ impl App {
         }
         self.ses_clock();
         self.ses_with(|s, e| s.tick(e));
+        // Arrange Rec fini (le transport s'est arrete) : ce qui a joue
+        // s'ecrit dans l'arrangement.
+        if !self.ses.ses.arr_rec && !self.ses.ses.arr_log.is_empty() {
+            self.host.info(&format!(
+                "Session : Arrange Rec fini, {} entree(s) : {:?}",
+                self.ses.ses.arr_log.len(),
+                self.ses
+                    .ses
+                    .arr_log
+                    .iter()
+                    .map(|p| (p.start_b, p.end_b))
+                    .collect::<Vec<_>>()
+            ));
+        }
+        let log = self.ses.ses.take_arrange();
+        if !log.is_empty() {
+            self.ses_write_arrange(log);
+        }
         if let Some(f) = self.ses.ses.flash.take() {
             self.ses_say(f.0);
         }
@@ -1058,6 +1121,8 @@ impl App {
             }
             _ => return,
         };
+        // Le passage choisi dans le navigateur (le glisser le garde).
+        let section = crate::DROP_SECTION.lock().ok().and_then(|mut s| s.take());
         let mut s = scene;
         for (k, f) in audio.iter().enumerate() {
             if k > 0 {
@@ -1066,7 +1131,14 @@ impl App {
                 }
             }
             let id = self.ses.ses.fresh_id();
-            self.ses.ses.put(col, s, Clip::audio(id, f));
+            let mut clip = Clip::audio(id, f);
+            if let (Some((p, a, b)), Kind::Audio(au)) = (&section, &mut clip.kind) {
+                if p == f && b > a {
+                    au.offs = *a;
+                    au.len = b - a;
+                }
+            }
+            self.ses.ses.put(col, s, clip);
             // Charge tout de suite (le lancement n'attendra pas).
             let mut e = Eng {
                 host: self.host,
@@ -1138,22 +1210,88 @@ impl App {
         }
     }
 
-    /// Arrange Rec : le transport enregistre (pistes armees) ou joue, en
-    /// Follow ; ce que la Session lance s'entend dans le projet.
+    /// Arrange Rec : en Follow, le transport part (il enregistre si une
+    /// piste est armee) ; ce que la Session joue est note, puis ecrit dans
+    /// l'arrangement quand le transport s'arrete. Recliquer l'arrete.
     fn ses_arrange_rec(&mut self) {
         let r = self.r;
+        let ps = r.play_state();
+        if self.ses.ses.arr_rec && ps & play::PLAYING != 0 {
+            r.main_on_command(1016);
+            return;
+        }
         if self.ses.ses.clock != ClockMode::Follow {
             self.ses_with(|s, e| s.panic(e));
             self.ses.ses.clock = ClockMode::Follow;
             self.ses.ses.dirty += 1;
         }
-        let ps = r.play_state();
-        if ps & play::PLAYING != 0 {
-            r.main_on_command(1016);
-            return;
+        self.ses.ses.arr_rec = true;
+        self.ses.ses.arr_log.clear();
+        if ps & play::PLAYING == 0 {
+            let armed = self.ses.ses.cols.iter().any(|c| c.track.armed);
+            r.main_on_command(if armed { 1013 } else { 1007 });
         }
-        let armed = self.ses.ses.cols.iter().any(|c| c.track.armed);
-        r.main_on_command(if armed { 1013 } else { 1007 });
+        self.ses_say("Arrange Rec: what the Session plays goes into the arrangement");
+    }
+
+    /// Le journal d'Arrange Rec ecrit : un item par clip joue, sur sa piste,
+    /// la ou il a joue. Le MIDI deplie passe par passe ; l'audio, un item
+    /// par passe (la region, a son taux). Un pas d'annulation.
+    fn ses_write_arrange(&mut self, log: Vec<cp_session::Played>) {
+        let r = self.r;
+        r.undo_begin();
+        let mut n = 0;
+        for p in log {
+            let Some(end) = p.end_b else { continue };
+            let dur = end - p.start_b;
+            let t0 = r.qn_to_time(p.start_b);
+            let t1 = r.qn_to_time(end);
+            match &p.clip.kind {
+                Kind::Midi(_) => {
+                    let Some(item) = r.create_midi_item_on(&p.track, &p.clip.name, t0, t1) else {
+                        continue;
+                    };
+                    let notes: Vec<cp_sys::items::EdNote> =
+                        cp_session::unfold(&p.clip, p.from, p.span, dur)
+                            .into_iter()
+                            .map(|x| cp_sys::items::EdNote {
+                                qn0: p.start_b + x.start,
+                                qn1: p.start_b + x.start + x.len,
+                                pitch: x.pitch as i32,
+                                chan: x.chan as i32,
+                                vel: x.vel as i32,
+                                sel: false,
+                                mute: false,
+                            })
+                            .collect();
+                    r.set_ed_notes(&item, &notes, None, "");
+                    n += 1;
+                }
+                Kind::Audio(a) => {
+                    let Some((s0, s1, sr, rate, _)) = p.audio else {
+                        continue;
+                    };
+                    let region = (s1 - s0) as f64 / sr.max(1.0) / rate.max(1e-6);
+                    let mut k = 0.0;
+                    while k < dur - 1e-6 {
+                        let q0 = p.start_b + k;
+                        let q1 = (q0 + p.len).min(end);
+                        let (a0, a1) = (r.qn_to_time(q0), r.qn_to_time(q1));
+                        if let Some(item) = r.insert_audio_item(&p.track, &a.path, a0) {
+                            r.set_item_value(&item, "D_LENGTH", (a1 - a0).min(region).max(0.001));
+                            r.set_active_take_value(&item, "D_STARTOFFS", s0 as f64 / sr.max(1.0));
+                            r.set_active_take_value(&item, "D_PLAYRATE", rate);
+                            r.set_item_value(&item, "D_VOL", a.gain);
+                            n += 1;
+                        }
+                        k += p.len.max(1e-3);
+                    }
+                }
+            }
+        }
+        r.undo_end("CP Session: Arrange Rec", -1);
+        r.refresh_arrange();
+        self.ses_say(format!("Arrange Rec: {n} item(s) written"));
     }
 
     /// Back to Arrangement : la Session s'arrete, les pistes rendent leurs
@@ -2018,9 +2156,86 @@ impl App {
     /// tout s'arrete.
     pub(crate) fn ses_selftest(&mut self) {
         let r = self.r;
-        let first = !r
-            .ext_get(SECTION, "selftest_session")
-            .is_some_and(|s| s.starts_with("launched"));
+        let prev = r.ext_get(SECTION, "selftest_session").unwrap_or_default();
+        // 3) Arrange Rec : le transport joue, la case du synthe joue ; 4)
+        // l'arret ; 5) ce qui a ete ecrit dans l'arrangement.
+        if prev.starts_with("report") {
+            let Some(cs) = self
+                .ses
+                .ses
+                .cols
+                .iter()
+                .position(|c| c.track.name == "CPS test synth")
+            else {
+                r.ext_set(SECTION, "selftest_session", "arr_done items=-1", false);
+                return;
+            };
+            self.ses.ses.q = Quant::Off;
+            // Depuis le debut du projet, sans la boucle de REAPER (rendue a
+            // la fin).
+            let rep = r.repeat();
+            r.ext_set(
+                SECTION,
+                "selftest_session_repeat",
+                if rep { "1" } else { "0" },
+                false,
+            );
+            if rep {
+                r.main_on_command(crate::tview::cmd::REPEAT);
+            }
+            r.set_edit_cursor(0.0);
+            self.ses_arrange_rec();
+            self.ses_with(|s, e| {
+                s.launch(e, cs, 0);
+            });
+            let c = &self.ses.ses.cols[cs];
+            self.host.info(&format!(
+                "Session (auto-test) : Arrange Rec lance ; horloge {:?} arr_rec {} attente {:?} suivante {} transport {}",
+                self.ses.ses.clock,
+                self.ses.ses.arr_rec,
+                c.run.wait,
+                c.run.next.is_some(),
+                r.play_state()
+            ));
+            r.ext_set(SECTION, "selftest_session", "arr_started", false);
+            return;
+        }
+        if prev.starts_with("arr_started") {
+            let s = &self.ses.ses;
+            self.host.info(&format!(
+                "Session (auto-test) : avant l'arret ; journal {} ; joue {:?} ; temps {:?}",
+                s.arr_log.len(),
+                s.cols
+                    .iter()
+                    .map(|c| c.run.play.as_ref().map(|p| p.start_b))
+                    .collect::<Vec<_>>(),
+                s.tl
+            ));
+            r.main_on_command(1016);
+            r.ext_set(SECTION, "selftest_session", "arr_stopped", false);
+            return;
+        }
+        if prev.starts_with("arr_stopped") {
+            if r.ext_get(SECTION, "selftest_session_repeat").as_deref() == Some("1") && !r.repeat()
+            {
+                r.main_on_command(crate::tview::cmd::REPEAT);
+            }
+            let snap = r.snapshot_tracks(&[], &[], &|_| true);
+            let synth = snap.iter().find(|t| t.name == "CPS test synth");
+            let items = synth.map_or(0, |t| t.items.len());
+            let notes = synth
+                .and_then(|t| t.items.first())
+                .and_then(|it| r.ed_notes(&it.guid))
+                .map_or(0, |n| n.len());
+            r.ext_set(
+                SECTION,
+                "selftest_session",
+                &format!("arr_done items={items} notes={notes}"),
+                false,
+            );
+            return;
+        }
+        let first = !prev.starts_with("launched");
         if first {
             self.ses.proj = None;
             self.ses_project();

@@ -83,6 +83,7 @@ impl View {
             let on = match tool {
                 Tool::Clock => ses.clock == ClockMode::Follow,
                 Tool::Overdub => any_dub,
+                Tool::ArrangeRec => ses.arr_rec,
                 _ => false,
             };
             let bg = if on {

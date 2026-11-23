@@ -71,6 +71,7 @@ struct Fake {
     loading: Vec<String>,
     takes: HashMap<u32, Vec<(i64, [u8; 3])>>,
     rec_stop: HashMap<u32, i64>,
+    baked: bool,
 }
 
 impl Fake {
@@ -85,6 +86,7 @@ impl Fake {
             loading: Vec::new(),
             takes: HashMap::new(),
             rec_stop: HashMap::new(),
+            baked: false,
         }
     }
     fn take(&mut self) -> Vec<Call> {
@@ -212,6 +214,14 @@ impl Engine for Fake {
             }),
             _ => RecPoll::Recording,
         }
+    }
+    fn stretched(&mut self, src: &AudioSrc, start: i64, end: i64, tempo: f64) -> Option<AudioSrc> {
+        self.baked.then(|| AudioSrc {
+            clip: src.clip + 100,
+            frames: ((end - start) as f64 / tempo) as i64,
+            srate: src.srate,
+            file_bpm: None,
+        })
     }
     fn save_take(&mut self, clip: u32, name: &str) -> Option<String> {
         let p = format!("C:/rec/{name}.wav");
@@ -887,6 +897,124 @@ fn les_tempos_d_un_nom_et_d_une_duree() {
     assert_eq!(bars_for(3.9, 4.0), 1.0);
     assert_eq!(bars_for(4.2, 4.0), 2.0);
     assert_eq!(bars_for(1.0, 4.0), 0.25);
+}
+
+#[test]
+fn arrange_rec_note_ce_qui_joue_et_le_rend_a_l_arret() {
+    let (mut s, mut e) = setup();
+    s.clock = ClockMode::Follow;
+    let a = s.fresh_id();
+    s.put(0, 0, Clip::midi(a, 1.0, notes(&[(0.0, 1.0, 60)])));
+    let b = s.fresh_id();
+    s.put(0, 1, Clip::midi(b, 1.0, notes(&[(0.0, 1.0, 62)])));
+    s.arr_rec = true;
+    // Le transport part a la noire 0.
+    s.sync_clock(&mut e, 0, 0.0, FPB, 4.0, true);
+    s.click(&mut e, 0, 0);
+    e.now = lat() + 10;
+    s.tick(&mut e);
+    // La scene 1, demandee a mi-mesure : a la mesure 2 (noire 4).
+    e.now = BAR / 2;
+    s.click(&mut e, 0, 1);
+    e.now = BAR + 10;
+    s.tick(&mut e);
+    // Le transport s'arrete a la noire 10 ; REAPER rend son curseur au
+    // depart (noire 0).
+    e.now = (10.0 * FPB) as i64;
+    let n = e.now;
+    s.sync_clock(&mut e, n, 0.0, FPB, 4.0, false);
+    assert!(!s.arr_rec);
+    let log = s.take_arrange();
+    assert_eq!(log.len(), 2);
+    assert_eq!((log[0].start_b, log[0].end_b), (0.0, Some(4.0)));
+    assert_eq!((log[1].start_b, log[1].end_b), (4.0, Some(10.0)));
+    // Deplie : 6 noires d'un clip d'une mesure = deux passes (la seconde
+    // coupee).
+    let n = unfold(&log[1].clip, log[1].from, log[1].span, 6.0);
+    assert_eq!(
+        n.iter().map(|n| n.start).collect::<Vec<_>>(),
+        vec![0.0, 4.0]
+    );
+}
+
+#[test]
+fn deplier_une_accolade_et_un_depart() {
+    let mut c = Clip::midi(
+        1,
+        2.0,
+        notes(&[(1.0, 0.5, 60), (4.0, 0.5, 62), (5.0, 3.0, 64)]),
+    );
+    c.loop_a = 4.0;
+    c.loop_b = 6.0;
+    let n = unfold(&c, 0.0, c.span(4.0), 9.0);
+    // Premiere passe 0..6 : 60 a 1, 62 a 4, 64 a 5 (coupee a 6) ; puis la
+    // zone 4..6 : 62 a 6, 64 a 7 (coupee), 62 a 8.
+    let v: Vec<(f64, u8, f64)> = n.iter().map(|n| (n.start, n.pitch, n.len)).collect();
+    assert_eq!(
+        v,
+        vec![
+            (1.0, 60, 0.5),
+            (4.0, 62, 0.5),
+            (5.0, 64, 1.0),
+            (6.0, 62, 0.5),
+            (7.0, 64, 1.0),
+            (8.0, 62, 0.5)
+        ]
+    );
+}
+
+#[test]
+fn une_case_etiree_change_de_hauteur_puis_prend_sa_version_cuite() {
+    let (mut s, mut e) = setup();
+    e.srcs.insert(
+        "C:/x/loop 100bpm.wav".into(),
+        AudioSrc {
+            clip: 7,
+            frames: (4.8 * 48000.0) as i64,
+            srate: 48000.0,
+            file_bpm: None,
+        },
+    );
+    let id = s.fresh_id();
+    let mut c = Clip::audio(id, "C:/x/loop 100bpm.wav");
+    if let Kind::Audio(a) = &mut c.kind {
+        a.tempo = TempoMode::Stretch;
+    }
+    s.put(1, 0, c);
+    s.click(&mut e, 1, 0);
+    let c = e.take();
+    // Pas encore cuite : le taux 1,2 (120 / 100).
+    assert!(matches!(c[0], Call::VoicePlay { rate, .. } if (rate - 1.2).abs() < 1e-9));
+    e.baked = true;
+    e.now = lat() + 100;
+    s.tick(&mut e);
+    let c = e.take();
+    // La version cuite, a taux 1, a la fin de la passe (2 mesures).
+    assert!(c.iter().any(|c| matches!(c, Call::VoicePlay { rate, at, .. } if *rate == 1.0 && *at == lat() + 2 * BAR)), "{c:?}");
+}
+
+#[test]
+fn un_saut_du_transport_recale_ce_qui_joue() {
+    let (mut s, mut e) = setup();
+    s.clock = ClockMode::Follow;
+    let a = s.fresh_id();
+    s.put(0, 0, Clip::midi(a, 1.0, notes(&[(0.0, 1.0, 60)])));
+    s.sync_clock(&mut e, 0, 0.0, FPB, 4.0, true);
+    s.click(&mut e, 0, 0);
+    e.now = lat() + 10;
+    s.tick(&mut e);
+    e.take();
+    // Une noire plus tard, le transport saute a la noire 13 (une mesure de
+    // 4 : position 1 dans le clip).
+    e.now = FPB as i64;
+    let n = e.now;
+    s.sync_clock(&mut e, n, 13.0 - time::LATENCY_S * 2.0, FPB, 4.0, true);
+    let c = e.take();
+    let Some(Call::LanePlay { from, .. }) = c.iter().find(|c| matches!(c, Call::LanePlay { .. }))
+    else {
+        panic!("{c:?}")
+    };
+    assert!((from - 1.0).abs() < 1e-6, "{from}");
 }
 
 #[test]

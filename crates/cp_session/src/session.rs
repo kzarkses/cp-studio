@@ -21,8 +21,8 @@ use crate::time::{ClockMode, LATENCY_S, Quant, Timeline};
 #[derive(Clone, Debug, PartialEq)]
 pub struct LaneClip {
     pub id: u64,
-    /// (debut, longueur, canal, hauteur, velocite), en noires.
-    pub notes: Vec<(f64, f64, u8, u8, u8)>,
+    /// (debut, longueur, canal, hauteur, velocite, probabilite %), en noires.
+    pub notes: Vec<(f64, f64, u8, u8, u8, u8)>,
     pub len: f64,
     pub brace: (f64, f64),
     pub looped: bool,
@@ -82,6 +82,8 @@ pub trait Engine {
     fn voice_stop(&mut self, voice: u32, at: Option<i64>, fade_s: f64);
     /// Annule un arret date pas encore atteint.
     fn voice_keep(&mut self, voice: u32);
+    /// Deplace la tete d'une voix (frames de la source) : un saut croise.
+    fn voice_seek(&mut self, _voice: u32, _pos: f64) {}
     fn voice_rate(&mut self, voice: u32, rate: f64);
     fn midi_rec_start(&mut self, dev: i32, at: i64) -> u32;
     fn midi_rec_stop(&mut self, id: u32, at: i64);
@@ -93,6 +95,18 @@ pub trait Engine {
     fn audio_rec_poll(&mut self, id: u32) -> RecPoll;
     /// Ecrit une prise sur le disque ; rend son chemin.
     fn save_take(&mut self, clip: u32, name: &str) -> Option<String>;
+    /// La region `[start, end)` d'une source etiree par l'etireur de REAPER
+    /// (`tempo` : 1,5 = une fois et demie plus vite), cuite une fois :
+    /// `None` tant qu'elle cuit (la case joue alors en changeant de hauteur).
+    fn stretched(
+        &mut self,
+        _src: &AudioSrc,
+        _start: i64,
+        _end: i64,
+        _tempo: f64,
+    ) -> Option<AudioSrc> {
+        None
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -214,6 +228,9 @@ pub struct AudioPlay {
     pub next_pass: i64,
     /// La voix de la passe d'avant (un one-shot qui sonne encore).
     pub prev: Option<u32>,
+    /// Une case etiree qui joue en attendant sa version cuite : le taux
+    /// voulu.
+    pub bake: Option<f64>,
 }
 
 /// Une prise en cours.
@@ -287,6 +304,22 @@ pub enum CellState {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Flash(pub String);
 
+/// Ce qu'une colonne a joue pendant Arrange Rec : de la noire `start_b` a
+/// `end_b` du projet (Follow : la ligne de temps est celle du projet).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Played {
+    pub track: String,
+    pub clip: Clip,
+    pub from: f64,
+    pub span: (f64, f64),
+    pub len: f64,
+    pub start_b: f64,
+    pub end_b: Option<f64>,
+    /// Une case audio : (debut, fin) de la region en frames de la source,
+    /// son taux, la matiere qui boucle.
+    pub audio: Option<(i64, i64, f64, f64, bool)>,
+}
+
 // ---------------------------------------------------------------------------
 // La Session
 // ---------------------------------------------------------------------------
@@ -317,6 +350,10 @@ pub struct Session {
     pub now_seen: i64,
     /// Les suites de lecture lues avant les colonnes.
     pub pending_motion: Option<String>,
+    /// Arrange Rec : ce qui joue s'ecrit dans l'arrangement a l'arret du
+    /// transport.
+    pub arr_rec: bool,
+    pub arr_log: Vec<Played>,
 }
 
 /// Au moins tant de scenes, et une rangee vide sous la derniere pleine.
@@ -348,6 +385,8 @@ impl Session {
             bpm: 120.0,
             now_seen: 0,
             pending_motion: None,
+            arr_rec: false,
+            arr_log: Vec::new(),
         }
     }
 
@@ -526,6 +565,12 @@ impl Session {
             ClockMode::Follow => {
                 let was = self.tl.running;
                 let changed = (fpb - self.tl.fpb).abs() > 1e-6;
+                // Le transport a saute (un deplacement, la boucle de REAPER) :
+                // ce qui joue se recale sur la nouvelle position.
+                let jumped = was && playing && (self.tl.beat(now) - qn).abs() > 0.05;
+                // La derniere noire jouee : a l'arret, REAPER rend le curseur
+                // la ou la lecture est partie.
+                let last_b = self.tl.beat(now);
                 self.tl.f0 = now;
                 self.tl.b0 = qn;
                 self.tl.fpb = fpb;
@@ -533,11 +578,14 @@ impl Session {
                 if changed && playing {
                     self.retime(e, now);
                 }
+                if jumped {
+                    self.resync(e, now, last_b);
+                }
                 if playing && !was {
                     self.start_waiting(e);
                 }
                 if !playing && was {
-                    self.transport_stopped(e);
+                    self.transport_stopped(e, last_b);
                 }
             }
             ClockMode::Free => {
@@ -579,6 +627,78 @@ impl Session {
                     _ => e.lane_rate(port, fpb, now),
                 }
             }
+        }
+    }
+
+    /// Apres un saut du transport : chaque clip qui joue reprend la ou il en
+    /// serait s'il avait joue depuis son lancement jusqu'a la nouvelle
+    /// position (un saut en arriere de son lancement : modulo sa boucle).
+    fn resync(&mut self, e: &mut dyn Engine, now: i64, last_b: f64) {
+        let lat = self.lat(e);
+        let at = now + lat;
+        let b = self.tl.beat(at);
+        // Arrange Rec : ce qui jouait avant le saut se ferme la ; la suite
+        // s'ecrit a la nouvelle position.
+        if self.arr_rec {
+            let open: Vec<Played> = self
+                .arr_log
+                .iter()
+                .filter(|p| p.end_b.is_none())
+                .cloned()
+                .collect();
+            for c in &self.cols {
+                close_played(&mut self.arr_log, &c.track.guid, last_b);
+            }
+            for mut p in open {
+                let u = (last_b - p.start_b).max(0.0);
+                p.from = crate::clip_pos(p.span, p.len, p.from, u);
+                p.start_b = b;
+                self.arr_log.push(p);
+            }
+        }
+        let fpb = self.tl.fpb;
+        let srate = e.srate().max(1.0);
+        let qpb = self.tl.qpb;
+        // Un lancement qui attendait sa frontiere : visee de nouveau sur la
+        // nouvelle position.
+        let pending: Vec<(usize, usize)> = self
+            .cols
+            .iter()
+            .enumerate()
+            .filter_map(|(i, c)| c.run.next.as_ref().map(|n| (i, n.scene)))
+            .collect();
+        for (i, scene) in pending {
+            self.cancel_next(e, i);
+            self.launch(e, i, scene);
+        }
+        for i in 0..self.cols.len() {
+            let port = self.cols[i].port;
+            let guid = self.cols[i].track.guid.clone();
+            let run = &mut self.cols[i].run;
+            if run.next.is_some() || run.stop_at.is_some() {
+                continue;
+            }
+            let Some(p) = run.play.as_mut() else { continue };
+            let span = (p.span.1 - p.span.0).max(1e-9);
+            let mut u = b - p.start_b;
+            if u < 0.0 {
+                u = u.rem_euclid(span);
+            }
+            let pos = crate::clip_pos(p.span, p.len, p.from, u);
+            match (&p.audio, p.voice) {
+                (Some(a), Some(v)) => {
+                    let f = a.start as f64 + (pos - p.span.0) * fpb * a.rate * a.src.srate / srate;
+                    e.voice_seek(v, f);
+                }
+                _ => {
+                    if let Some(c) = self.cells.get(&(guid, p.scene)) {
+                        e.lane_play(port, &lane_clip(c, qpb), pos, fpb, at);
+                    }
+                }
+            }
+            p.start_f = at;
+            p.start_b = b;
+            p.from = pos;
         }
     }
 
@@ -770,6 +890,7 @@ impl Session {
                     rate,
                     next_pass: i64::MIN,
                     prev: None,
+                    bake: None,
                 };
                 if a.tempo != TempoMode::None {
                     if let Some(r) = rate_for_pass(&ap, pass_s) {
@@ -777,13 +898,27 @@ impl Session {
                         ap.rate = r;
                     }
                 }
+                // Etiree : la version cuite si elle est prete ; sinon la case
+                // change de hauteur le temps d'une passe.
+                if a.tempo == TempoMode::Stretch && (rate - 1.0).abs() > 1e-4 {
+                    match e.stretched(&src, ap.start, ap.end, rate) {
+                        Some(st) => {
+                            ap.src = st.clone();
+                            ap.start = 0;
+                            ap.end = st.frames;
+                            ap.rate = 1.0;
+                            rate = 1.0;
+                        }
+                        None => ap.bake = Some(rate),
+                    }
+                }
                 // Un lancement tardif (dans la tolerance) entre en phase.
                 let late = (now + lat - tf).max(0);
-                let start = ap.start + (late as f64 * rate * src.srate / srate) as i64;
+                let start = ap.start + (late as f64 * rate * ap.src.srate / srate) as i64;
                 let at = tf.max(now + lat);
                 let v = e.voice_play(
                     port,
-                    &src,
+                    &ap.src.clone(),
                     start.min(ap.end - 1).max(0),
                     ap.end,
                     ap.looped,
@@ -1127,9 +1262,37 @@ impl Session {
         for i in 0..self.cols.len() {
             // --- un lancement atteint sa frontiere
             let port = self.cols[i].port;
-            let run = &mut self.cols[i].run;
-            if run.next.as_ref().is_some_and(|n| n.start_f <= now) {
-                let n = run.next.take();
+            let guid = self.cols[i].track.guid.clone();
+            if self.cols[i]
+                .run
+                .next
+                .as_ref()
+                .is_some_and(|n| n.start_f <= now)
+            {
+                let n = self.cols[i].run.next.take();
+                if self.arr_rec {
+                    let g = guid.clone();
+                    if let Some(n) = &n {
+                        let b = n.start_b;
+                        close_played(&mut self.arr_log, &g, b);
+                        if let Some(c) = self.cells.get(&(g.clone(), n.scene)) {
+                            self.arr_log.push(Played {
+                                track: g,
+                                clip: c.clone(),
+                                from: n.from,
+                                span: n.span,
+                                len: n.len,
+                                start_b: b,
+                                end_b: None,
+                                audio: n
+                                    .audio
+                                    .as_ref()
+                                    .map(|a| (a.start, a.end, a.src.srate, a.rate, a.looped)),
+                            });
+                        }
+                    }
+                }
+                let run = &mut self.cols[i].run;
                 if let Some(old) = run.play.take() {
                     // Deja date a la frontiere ; si l'arret s'est perdu, il
                     // part ici.
@@ -1146,12 +1309,18 @@ impl Session {
                 run.passes = 0;
             }
             // --- un arret atteint sa frontiere
-            if run.stop_at.is_some_and(|s| s <= now) {
+            if let Some(st) = self.cols[i].run.stop_at.filter(|&s| s <= now) {
+                if self.arr_rec {
+                    let b = self.tl.beat(st);
+                    close_played(&mut self.arr_log, &guid, b);
+                }
+                let run = &mut self.cols[i].run;
                 run.stop_at = None;
                 run.play = None;
                 run.dub = None;
             }
             // --- les passes d'un one-shot audio, et le compte des passes
+            let run = &mut self.cols[i].run;
             if let Some(p) = run.play.as_mut() {
                 let pass = (p.len * fpb).max(1.0);
                 run.passes = ((now - p.start_f).max(0) as f64 / pass) as u32;
@@ -1176,6 +1345,7 @@ impl Session {
                 }
             }
         }
+        self.tick_bakes(e);
         self.tick_takes(e);
         self.tick_dub(e);
         self.tick_motion(e);
@@ -1196,6 +1366,44 @@ impl Session {
         }
         let _ = (now, lat);
         self.idle_check();
+    }
+
+    /// Une case etiree qui changeait de hauteur : sa version cuite est
+    /// prete, elle la remplace a la fin de la passe.
+    fn tick_bakes(&mut self, e: &mut dyn Engine) {
+        let now = e.now();
+        let lat = self.lat(e);
+        let fpb = self.tl.fpb;
+        for i in 0..self.cols.len() {
+            let port = self.cols[i].port;
+            let run = &mut self.cols[i].run;
+            if run.next.is_some() || run.stop_at.is_some() {
+                continue;
+            }
+            let Some(p) = run.play.as_mut() else { continue };
+            let Some((rate, src, start, end, looped, gain)) = p.audio.as_ref().and_then(|a| {
+                a.bake
+                    .map(|r| (r, a.src.clone(), a.start, a.end, a.looped, a.gain))
+            }) else {
+                continue;
+            };
+            let Some(st) = e.stretched(&src, start, end, rate) else {
+                continue;
+            };
+            let at = next_pass_end(p, fpb, now + lat);
+            if let Some(v) = e.voice_play(port, &st, 0, st.frames, looped, gain, 1.0, at) {
+                if let Some(old) = p.voice {
+                    e.voice_stop(old, Some(at), 0.005);
+                }
+                p.voice = Some(v);
+                let Some(a) = p.audio.as_mut() else { continue };
+                a.src = st.clone();
+                a.start = 0;
+                a.end = st.frames;
+                a.rate = 1.0;
+                a.bake = None;
+            }
+        }
     }
 
     fn tick_takes(&mut self, e: &mut dyn Engine) {
@@ -1450,8 +1658,16 @@ impl Session {
     }
 
     /// Quand le transport s'arrete (Follow) : tout se tait ; ce qui jouait
-    /// est oublie (comme Ableton : relancer demande un geste).
-    fn transport_stopped(&mut self, e: &mut dyn Engine) {
+    /// est oublie (comme Ableton : relancer demande un geste). Arrange Rec
+    /// se ferme : son journal attend d'etre ecrit.
+    fn transport_stopped(&mut self, e: &mut dyn Engine, last_b: f64) {
+        if self.arr_rec {
+            let b = last_b;
+            for c in &self.cols {
+                close_played(&mut self.arr_log, &c.track.guid, b);
+            }
+            self.arr_rec = false;
+        }
         for i in 0..self.cols.len() {
             let mut c = std::mem::take(&mut self.cols[i]);
             self.silence(e, &mut c);
@@ -1708,8 +1924,75 @@ impl Session {
 // Les calculs
 // ---------------------------------------------------------------------------
 
-/// Le clip tel que la lane le joue (les notes de probabilite sont jouees
-/// toujours : la lane ne tire pas encore au sort).
+/// Ferme ce que la piste jouait (a la noire `b`).
+fn close_played(log: &mut [Played], track: &str, b: f64) {
+    for p in log.iter_mut().rev() {
+        if p.track == track && p.end_b.is_none() {
+            p.end_b = Some(b.max(p.start_b));
+        }
+    }
+}
+
+impl Session {
+    /// Le journal d'Arrange Rec, une fois le transport arrete : ce qui a
+    /// joue, ferme. Vide tant qu'Arrange Rec tourne.
+    pub fn take_arrange(&mut self) -> Vec<Played> {
+        if self.arr_rec || self.arr_log.is_empty() {
+            return Vec::new();
+        }
+        std::mem::take(&mut self.arr_log)
+            .into_iter()
+            .filter(|p| p.end_b.is_some_and(|e| e > p.start_b + 1e-6))
+            .collect()
+    }
+}
+
+/// Les notes que joue un clip pendant `dur` noires, a partir de la position
+/// `from` (la premiere passe jusqu'a la fin de la zone qui boucle, puis la
+/// zone), en noires depuis son lancement. Une note coupee par la fin.
+pub fn unfold(c: &Clip, from: f64, span: (f64, f64), dur: f64) -> Vec<Note> {
+    let (a, b) = span;
+    let mut out = Vec::new();
+    let mut u = 0.0;
+    let mut p = from;
+    let mut guard = 0;
+    while u < dur && guard < 100_000 {
+        guard += 1;
+        let seg = (b - p).max(0.0);
+        if seg <= 1e-9 {
+            if b - a <= 1e-9 {
+                break;
+            }
+            p = a;
+            continue;
+        }
+        for n in c.notes() {
+            if n.start < p - 1e-9 || n.start >= b - 1e-9 {
+                continue;
+            }
+            let s = u + (n.start - p);
+            if s >= dur {
+                continue;
+            }
+            let end = (n.start + n.len).min(b);
+            let len = (end - n.start).min(dur - s);
+            if len > 1e-6 {
+                out.push(Note {
+                    start: s,
+                    len,
+                    ..*n
+                });
+            }
+        }
+        u += seg;
+        p = a;
+    }
+    out.sort_by(|x, y| x.start.total_cmp(&y.start));
+    out
+}
+
+/// Le clip tel que la lane le joue (la lane tire les notes probables a
+/// chaque passe).
 pub fn lane_clip(c: &Clip, qpb: f64) -> LaneClip {
     let len = c.len_beats(qpb);
     LaneClip {
@@ -1718,7 +2001,7 @@ pub fn lane_clip(c: &Clip, qpb: f64) -> LaneClip {
             .notes()
             .iter()
             .filter(|n| n.start < len)
-            .map(|n| (n.start, n.len, n.chan, n.pitch, n.vel))
+            .map(|n| (n.start, n.len, n.chan, n.pitch, n.vel, n.prob))
             .collect(),
         len,
         brace: c.span(qpb),

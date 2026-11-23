@@ -17,8 +17,8 @@ pub mod time;
 
 pub use clip::{Audio, COLORS, Clip, Kind, Note, TempoMode, TempoWhy};
 pub use session::{
-    AudioSrc, CellState, ColRun, Column, Engine, Input, LaneClip, Motion, Play, RecPoll, Session,
-    Take, TrackInfo,
+    AudioSrc, CellState, ColRun, Column, Engine, Input, LaneClip, Motion, Play, Played, RecPoll,
+    Session, Take, TrackInfo, unfold,
 };
 pub use time::{ClockMode, Quant, Timeline};
 

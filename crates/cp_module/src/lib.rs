@@ -145,6 +145,8 @@ struct Adapter<'a> {
     hwnd: Hwnd,
     /// La fenetre de Guitar Tab (un depot y arrive en WM_DROPFILES).
     gtab: Option<Hwnd>,
+    /// La fenetre de la Session (un depot y garde aussi le passage choisi).
+    session: Option<Hwnd>,
     place: Place,
     perf: bool,
     action: &'a mut Option<u32>,
@@ -207,7 +209,10 @@ impl BrowserHost for Adapter<'_> {
                 // garde le passage choisi).
                 let in_gtab = self
                     .gtab
-                    .is_some_and(|g| cp_sys::shell::pending(g, cp_sys::shell::WM_DROPFILES));
+                    .is_some_and(|g| cp_sys::shell::pending(g, cp_sys::shell::WM_DROPFILES))
+                    || self
+                        .session
+                        .is_some_and(|g| cp_sys::shell::pending(g, cp_sys::shell::WM_DROPFILES));
                 if in_gtab {
                     if let (Some((a, b)), Ok(mut s)) = (section, DROP_SECTION.lock()) {
                         *s = Some((path.to_string(), a, b));
@@ -523,6 +528,7 @@ impl App {
             r: self.r,
             hwnd,
             gtab: self.gt.win.as_ref().map(|w| w.hwnd),
+            session: self.ses.win.as_ref().map(|w| w.hwnd),
             place,
             perf: self.show_perf,
             action: &mut self.action,
@@ -831,6 +837,7 @@ impl App {
                 r: self.r,
                 hwnd,
                 gtab: self.gt.win.as_ref().map(|w| w.hwnd),
+                session: self.ses.win.as_ref().map(|w| w.hwnd),
                 place,
                 perf: self.show_perf,
                 action: &mut self.action,
@@ -1789,6 +1796,7 @@ impl Module for App {
             r: self.r,
             hwnd,
             gtab: self.gt.win.as_ref().map(|w| w.hwnd),
+            session: self.ses.win.as_ref().map(|w| w.hwnd),
             place,
             perf: self.show_perf,
             action: &mut self.action,

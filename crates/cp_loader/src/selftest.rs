@@ -1798,6 +1798,39 @@ impl SelfTest {
                     field("stopped") == 1.0,
                     "Session : tout arrete a la fin (Panic)".to_string(),
                 );
+                // Arrange Rec : le transport joue 3 s avec la case du synthe.
+                act("_CPSTUDIO_SESSION_SELFTEST");
+                self.keys_step = 3;
+                self.ui_at = Some(Instant::now());
+            }
+            3 => {
+                if t < 3.0 {
+                    return false;
+                }
+                act("_CPSTUDIO_SESSION_SELFTEST");
+                self.keys_step = 4;
+                self.ui_at = Some(Instant::now());
+            }
+            4 => {
+                if t < 1.0 {
+                    return false;
+                }
+                act("_CPSTUDIO_SESSION_SELFTEST");
+                let st = r
+                    .ext_get("CP_Studio", "selftest_session")
+                    .unwrap_or_default();
+                let field = |k: &str| -> i64 {
+                    st.split_whitespace()
+                        .find_map(|w| w.strip_prefix(&format!("{k}=")))
+                        .and_then(|v| v.parse().ok())
+                        .unwrap_or(-1)
+                };
+                // 3 s a 120 BPM ou plus : au moins une passe d'une mesure,
+                // ses huit notes.
+                self.say(
+                    field("items") >= 1 && field("notes") >= 8,
+                    format!("Session : Arrange Rec ecrit ce qui a joue dans l'arrangement ; {st}"),
+                );
                 return true;
             }
             _ => return true,
