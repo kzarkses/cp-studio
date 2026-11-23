@@ -175,6 +175,9 @@ pub trait MidiSink {
     fn push(&mut self, offset: i32, msg: &[u8]) -> bool;
 }
 
+/// Les messages qu'un bloc n'a pas pu garder (plus de `MAX_EVENTS`).
+static LOST: AtomicU32 = AtomicU32::new(0);
+
 /// Notes tenues au plus par lane.
 const MAX_ACTIVE: usize = 128;
 /// Commandes datees en attente par lane.
@@ -332,6 +335,7 @@ impl Lane {
         let mut t = f0;
         loop {
             let next = self.pending.first().map(|q| q.at.max(t));
+            let orig = self.pending.first().map_or(t, |q| q.at);
             let seg_end = match next {
                 Some(at) if at < f1 => at,
                 _ => f1,
@@ -343,7 +347,7 @@ impl Lane {
             match next {
                 Some(at) if at < f1 => {
                     let q = self.pending.remove(0);
-                    self.apply(f0, at, q.op);
+                    self.apply(f0, at, orig, q.op);
                 }
                 _ => break,
             }
@@ -361,7 +365,7 @@ impl Lane {
             }
             evs[j] = e;
         }
-        let mut lost = 0u32;
+        let mut lost = LOST.swap(0, Relaxed);
         if let Some(s) = sink {
             for e in evs.iter() {
                 let off = e.off.clamp(0, n.max(1) as i32 - 1);
@@ -402,7 +406,10 @@ impl Lane {
         }
     }
 
-    fn apply(&mut self, f0: Frame, at: Frame, op: LaneOp) {
+    /// `at` : le frame ou la commande prend effet (pas avant le bloc) ;
+    /// `orig` : celui qu'elle demandait (un lancement en retard reste en
+    /// phase avec sa vraie date).
+    fn apply(&mut self, f0: Frame, at: Frame, orig: Frame, op: LaneOp) {
         let off = (at - f0) as i32;
         match op {
             LaneOp::Play { clip, from, fpb } => {
@@ -421,9 +428,9 @@ impl Lane {
                 };
                 self.clip = Some(clip);
                 self.fpb = fpb;
-                self.anchor_f = at;
+                self.anchor_f = orig.min(at);
                 self.anchor_u = 0.0;
-                self.started = at;
+                self.started = orig.min(at);
                 self.done = false;
             }
             LaneOp::Stop => {
@@ -491,7 +498,12 @@ impl Lane {
             return;
         }
 
-        // --- les debuts : passe par passe dans la zone jouee
+        // --- les debuts : passe par passe dans la zone jouee. Un debut est
+        // choisi par son frame ARRONDI dans [a, b) : sans ca, une note juste
+        // avant une frontiere (arret, relance) tombait sur elle, apres sa
+        // fin, et restait tenue.
+        let h = 0.5 / fpb;
+        let (u0, u1) = (u0 - h, u1 - h);
         let (la, lb) = clip.span();
         let looped = clip.looped && lb > la + 1e-9;
         let first_end = if looped { lb } else { clip.len };
@@ -593,9 +605,13 @@ impl Lane {
 }
 
 fn push_ev(evs: &mut Vec<Ev>, off: i32, kind: u8, len: u8, msg: [u8; 3]) {
-    // La capacite est reservee : au-dela, le message se perd (compte par
-    // l'appelant comme une perte), on n'alloue jamais ici.
-    if evs.len() < evs.capacity() {
+    // La capacite est reservee : au-dela, le message se perd (compte dans
+    // `dropped` a la publication), on n'alloue jamais ici.
+    if evs.len() >= evs.capacity() {
+        LOST.fetch_add(1, Relaxed);
+        return;
+    }
+    {
         evs.push(Ev {
             off,
             kind,
@@ -948,6 +964,65 @@ mod tests {
         let ons = ev.iter().filter(|e| e.1[0] == 0x90).count();
         // 100 passes : entre 30 et 70 notes.
         assert!((30..=70).contains(&ons), "{ons}");
+    }
+
+    #[test]
+    fn une_note_juste_avant_un_arret_ne_reste_pas_tenue() {
+        // 130 BPM a 48 kHz : des frames par noire fractionnaires. Chaque
+        // arret a une frontiere de mesure arrondie : jamais de note sans fin.
+        let fpb = 48000.0 * 60.0 / 130.0;
+        for k in 1..40 {
+            let mut l = Lane::new();
+            l.post(
+                0,
+                LaneOp::Play {
+                    clip: clip(&[(0.0, 0.5, 60), (1.0, 0.5, 62)], 4.0),
+                    from: 0.0,
+                    fpb,
+                },
+            );
+            let stop = (4.0 * k as f64 * fpb).round() as Frame;
+            l.post(stop, LaneOp::Stop);
+            let ev = run(&mut l, 0, (stop as usize / 64) + 4, 64);
+            // Un synthe qui suit les messages dans l'ordre ou ils partent.
+            let mut held = std::collections::HashSet::new();
+            for e in &ev {
+                match e.1[0] & 0xF0 {
+                    0x90 => {
+                        held.insert(e.1[1]);
+                    }
+                    0x80 => {
+                        held.remove(&e.1[1]);
+                    }
+                    _ => {}
+                }
+            }
+            assert!(held.is_empty(), "arret a la mesure {k} : {held:?} tenue(s)");
+        }
+    }
+
+    #[test]
+    fn un_lancement_en_retard_reste_en_phase() {
+        // Demande au frame 100, recu au bloc 256 : les notes d'apres 256
+        // tombent la ou elles seraient tombees depuis 100.
+        let mut l = Lane::new();
+        let p = LanePub::new();
+        let mut r = Rec(Vec::new(), 0);
+        l.render(0, 128, Some(&mut r), &p);
+        l.render(128, 128, Some(&mut r), &p);
+        l.post(
+            100,
+            LaneOp::Play {
+                clip: clip(&[(0.0, 0.5, 60), (2.0, 0.5, 62)], 4.0),
+                from: 0.0,
+                fpb: 100.0,
+            },
+        );
+        let ev = run(&mut l, 256, 10, 64);
+        let ons: Vec<Frame> = ev.iter().filter(|e| e.1[0] == 0x90).map(|e| e.0).collect();
+        // La note de la noire 0 (frame 100) est passee ; celle de la noire 2
+        // tombe au frame 300.
+        assert_eq!(ons[0], 300);
     }
 
     #[test]

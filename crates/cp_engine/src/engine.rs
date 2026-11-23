@@ -701,6 +701,9 @@ fn apply(a: &mut PortAudio, ps: &PortSlot, c: Cmd, block_start: Frame, srate: f6
                     stop_now(v, five_ms);
                 }
             }
+            // Les lancements a venir s'oublient d'abord (ils relanceraient
+            // la lane), et l'arret trouve sa place.
+            let _ = a.lane.post(block_start, LaneOp::Cancel);
             let _ = a.lane.post(block_start, LaneOp::Stop);
         }
         // Drainees avant (voir `drain`).
