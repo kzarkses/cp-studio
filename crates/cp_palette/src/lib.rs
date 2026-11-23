@@ -369,6 +369,9 @@ pub struct Ctx {
     pub host: Host,
     /// La grille (noires) ; 0 : aucune (le jeu libre de Guitar Tab).
     pub grid: f64,
+    /// Ou part la grille (noires) : 0, ou le debut de l'item vu dans sa
+    /// propre timeline.
+    pub origin: f64,
     /// Son nom (« 1/16 »).
     pub grid_name: String,
     pub strength: f64,
@@ -397,6 +400,7 @@ impl Default for Ctx {
         Ctx {
             host: Host::Editor,
             grid: 0.25,
+            origin: 0.0,
             grid_name: "1/16".into(),
             strength: 1.0,
             swing: 0.0,
@@ -762,7 +766,10 @@ pub fn apply(id: u32, r: &mut Roll, c: &Ctx, seed: u64) -> (usize, &'static str)
         return (0, "");
     }
     if id == 54 {
-        return (r.quantize(g, c.strength, c.swing), lab!(h, "quantize"));
+        return (
+            r.quantize_from(c.origin, g, c.strength, c.swing),
+            lab!(h, "quantize"),
+        );
     }
     // Le rythme euclidien : sur la plage de la regle, sinon l'etendue des
     // notes choisies, sinon la mesure du curseur ; a la hauteur de la
@@ -773,7 +780,7 @@ pub fn apply(id: u32, r: &mut Roll, c: &Ctx, seed: u64) -> (usize, &'static str)
         .or_else(|| r.bounds().filter(|_| r.has_sel()));
     let bar = c.bar.max(1e-6);
     let eu_span = eu_span.unwrap_or_else(|| {
-        let a = (c.cursor / bar).floor() * bar;
+        let a = c.origin + ((c.cursor - c.origin) / bar).floor() * bar;
         (a, a + bar)
     });
     let eu_note = r.notes.iter().find(|n| n.sel).copied();

@@ -231,8 +231,10 @@ pub enum Hit {
     RateChip,
     Reverse,
     Normalize,
+    /// La timeline de l'item seul (bouton de la barre).
+    Isolate,
     // La palette du clic droit
-    /// Un groupe (rang dans [`Cat::ALL`]).
+    /// Un groupe (rang dans [`Cat::EDITOR`]).
     PalCat(u8),
     /// Une operation (son numero).
     PalOp(u32),
@@ -540,6 +542,10 @@ pub struct Ed {
     pub(crate) bend_note: Option<u64>,
     /// La poignee de la vue ancree, montree (le module en decide).
     pub dock_handle: bool,
+    /// La timeline de l'item seul : les mesures comptees depuis son debut
+    /// (la grille, le magnetisme, la quantification aussi), la vue bornee a
+    /// l'item ; sinon la timeline du projet.
+    pub isolate: bool,
 }
 
 /// La hauteur d'un rang par defaut, et ses bornes (px a 96 DPI).
@@ -603,6 +609,7 @@ impl Ed {
             euclid: EUCLID,
             bend_note: None,
             dock_handle: false,
+            isolate: false,
         }
     }
 
@@ -880,9 +887,54 @@ impl Ed {
     /// d'edition, la ligne a la souris : comme REAPER).
     pub fn snap_near(&self, q: f64, snap: bool) -> f64 {
         if snap && self.snap && self.grid > 0.0 {
-            (q / self.grid).round() * self.grid
+            let o = self.origin();
+            o + ((q - o) / self.grid).round() * self.grid
         } else {
             q
+        }
+    }
+
+    /// Ou partent les mesures et la grille : le debut de l'item dans sa
+    /// propre timeline, sinon le debut du projet.
+    pub fn origin(&self) -> f64 {
+        if self.isolate {
+            self.span().map_or(0.0, |s| s.0)
+        } else {
+            0.0
+        }
+    }
+
+    /// Ce que la vue peut montrer (noires) : l'item et une marge dans sa
+    /// propre timeline ; sinon du debut du projet a la fin du contenu.
+    pub fn hrange(&self) -> (f64, f64) {
+        match self.span().filter(|_| self.isolate) {
+            Some((a, b)) => {
+                let m = ((b - a) * 0.03).max(0.05);
+                (a - m, b + m)
+            }
+            None => (0.0, self.end_qn()),
+        }
+    }
+
+    /// Dans la timeline de l'item : la vue ne sort pas de l'item (ni en
+    /// defilant, ni en dezoomant au-dela de sa longueur).
+    pub(crate) fn bound_view(&mut self) {
+        if !self.isolate || self.span().is_none() {
+            return;
+        }
+        let (lo, hi) = self.hrange();
+        let sw = self.lay.sw.max(1.0);
+        let s = self.scale.max(0.5);
+        let min_zoom = (sw / s) / ((hi - lo).max(1e-3) as f32);
+        if self.zoom < min_zoom - 1e-3 {
+            self.zoom = min_zoom.min(1600.0);
+            self.lay.ppq = self.zoom * s;
+        }
+        let v = self.view_qn();
+        let max_s = (hi - v).max(lo);
+        let ns = self.scroll.clamp(lo, max_s);
+        if (ns - self.scroll).abs() > 1e-9 {
+            self.scroll = ns;
         }
     }
 
@@ -1173,11 +1225,12 @@ impl Ed {
 
     pub fn hthumb(&self) -> (f32, f32) {
         let l = self.lay;
-        let end = self.end_qn().max(1e-6);
-        let tw = ((self.view_qn() / end) as f32 * l.sw).clamp((24.0 * self.scale).min(l.sw), l.sw);
+        let (lo, hi) = self.hrange();
+        let len = (hi - lo).max(1e-6);
+        let tw = ((self.view_qn() / len) as f32 * l.sw).clamp((24.0 * self.scale).min(l.sw), l.sw);
         let room = (l.sw - tw).max(0.0);
-        let maxs = (end - self.view_qn()).max(1e-6);
-        let t = (self.scroll / maxs).clamp(0.0, 1.0) as f32;
+        let maxs = (len - self.view_qn()).max(1e-6);
+        let t = ((self.scroll - lo) / maxs).clamp(0.0, 1.0) as f32;
         (l.sx + room * t, tw)
     }
 
@@ -1197,17 +1250,14 @@ impl Ed {
 
     /// Cale `q` sur la grille (au plus pres).
     fn snap_q(&self, q: f64, snap: bool) -> f64 {
-        if snap && self.snap && self.grid > 0.0 {
-            (q / self.grid).round() * self.grid
-        } else {
-            q
-        }
+        self.snap_near(q, snap)
     }
 
     /// La case sous `q` (une note posee tombe dans la case du pointeur).
     fn snap_floor(&self, q: f64, snap: bool) -> f64 {
         if snap && self.snap && self.grid > 0.0 {
-            (q / self.grid + 1e-4).floor() * self.grid
+            let o = self.origin();
+            o + ((q - o) / self.grid + 1e-4).floor() * self.grid
         } else {
             q
         }
@@ -1623,9 +1673,9 @@ impl Ed {
             Hit::HScroll => {
                 let (tx, tw) = self.hthumb();
                 if x < tx || x > tx + tw {
-                    let end = self.end_qn();
-                    let k = end / self.lay.sw.max(1.0) as f64;
-                    self.scroll = ((x - self.lay.sx - tw * 0.5) as f64 * k).clamp(0.0, end);
+                    let (lo, hi) = self.hrange();
+                    let k = (hi - lo) / self.lay.sw.max(1.0) as f64;
+                    self.scroll = (lo + (x - self.lay.sx - tw * 0.5) as f64 * k).clamp(lo, hi);
                     self.unfollow();
                 }
                 self.drag = Some(Drag::HScroll {
@@ -1676,6 +1726,11 @@ impl Ed {
             }
             Hit::Follow => {
                 self.follow = !self.follow;
+                Vec::new()
+            }
+            Hit::Isolate => {
+                self.isolate = !self.isolate;
+                self.fit();
                 Vec::new()
             }
             Hit::Help
@@ -2338,9 +2393,9 @@ impl Ed {
                 Vec::new()
             }
             Drag::HScroll { x0, s0 } => {
-                let end = self.end_qn();
-                let k = end / self.lay.sw.max(1.0) as f64;
-                self.scroll = (s0 + (x - x0) as f64 * k).clamp(0.0, end);
+                let (lo, hi) = self.hrange();
+                let k = (hi - lo) / self.lay.sw.max(1.0) as f64;
+                self.scroll = (s0 + (x - x0) as f64 * k).clamp(lo, hi);
                 self.unfollow();
                 Vec::new()
             }
@@ -2695,10 +2750,11 @@ impl Ed {
 
     pub fn quantize(&mut self) -> Vec<Act> {
         let (g, s, w) = (self.grid, self.strength, self.swing);
+        let o = self.origin();
         let Some(md) = self.midi_mut() else {
             return Vec::new();
         };
-        let k = md.roll.quantize(g, s, w);
+        let k = md.roll.quantize_from(o, g, s, w);
         self.commit_if(k, "CP Editor: quantize")
     }
 
@@ -3622,6 +3678,12 @@ impl Ed {
             Hit::DockHandle => cp_ui::handle::HANDLE_TIP.into(),
             Hit::VelToggle => "Velocity lane".into(),
             Hit::Follow => "Follow playback (F)".into(),
+            Hit::Isolate => if self.isolate {
+                "Item timeline: bars from the item start, the view stays on the item (on)"
+            } else {
+                "Item timeline: bars from the item start, the view stays on the item (off)"
+            }
+            .into(),
             Hit::Help => HELP.into(),
             Hit::Ruler => "Click: edit cursor \u{00b7} drag: time selection\nShift+click: select the notes in it \u{00b7} Alt+click: clear".into(),
             Hit::Grid => "Click: new note \u{00b7} drag: its length".into(),

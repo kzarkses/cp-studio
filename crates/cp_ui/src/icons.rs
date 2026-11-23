@@ -59,6 +59,8 @@ pub enum Icon {
     Bars,
     /// Le jeu libre (sans mesure) : une onde.
     Free,
+    /// La timeline de l'item seul : un item entre crochets.
+    Isolate,
 }
 
 impl Icon {
@@ -176,6 +178,9 @@ impl Icon {
             }
             Icon::Bars => r#"<path d="M5 21v-6" /><path d="M12 21V3" /><path d="M19 21V9" />"#,
             Icon::Free => r#"<path d="M2 12c2.5-6 5-6 7.5 0s5 6 7.5 0c1.2-3 2.5-4.5 5-4.5" />"#,
+            Icon::Isolate => {
+                r#"<path d="M8 3H5v18h3" /><path d="M16 3h3v18h-3" /><rect x="9" y="9" width="6" height="6" rx="1" />"#
+            }
         }
     }
 }
@@ -299,6 +304,7 @@ mod tests {
             Icon::Normalize,
             Icon::Bars,
             Icon::Free,
+            Icon::Isolate,
         ];
         for i in all {
             let (n, m) = c.mask(i, 24, false);

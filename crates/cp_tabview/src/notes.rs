@@ -571,6 +571,9 @@ impl Arr {
         Ctx {
             host: Host::Tab,
             grid: g,
+            // La grille de l'item part de sa premiere barre (comme son
+            // magnetisme).
+            origin: it.map_or(0.0, |x| x.origin_qn),
             grid_name: grid_name(g),
             strength: self.strength,
             swing: self.swing,

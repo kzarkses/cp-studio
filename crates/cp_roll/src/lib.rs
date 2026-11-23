@@ -643,6 +643,12 @@ impl Roll {
     /// Cale les debuts sur la grille de `grid` noires, a `strength` (0..1).
     /// `swing` (0..1) retarde les pas impairs d'autant de demi-pas.
     pub fn quantize(&mut self, grid: f64, strength: f64, swing: f64) -> usize {
+        self.quantize_from(0.0, grid, strength, swing)
+    }
+
+    /// [`Roll::quantize`] sur une grille qui part de `origin` (le debut d'un
+    /// item vu dans sa propre timeline).
+    pub fn quantize_from(&mut self, origin: f64, grid: f64, strength: f64, swing: f64) -> usize {
         if grid <= 0.0 {
             return 0;
         }
@@ -650,8 +656,8 @@ impl Roll {
         let mut k = 0;
         for &i in &t {
             let s = self.notes[i].qn0;
-            let step = (s / grid).round();
-            let mut q = step * grid;
+            let step = ((s - origin) / grid).round();
+            let mut q = origin + step * grid;
             if (step as i64).rem_euclid(2) == 1 {
                 q += swing.clamp(0.0, 1.0) * grid * 0.5;
             }

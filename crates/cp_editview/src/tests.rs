@@ -1257,3 +1257,71 @@ fn la_poignee_de_la_vue_ancree() {
     assert!(matches!(a.as_slice(), [Act::ViewMenu { .. }]), "{a:?}");
     b.shot(&mut v, "23_poignee");
 }
+
+/// La timeline de l'item seul (le bouton de la barre) : la regle et la grille
+/// partent du debut de l'item, le magnetisme et la quantification aussi ; la
+/// vue ne defile pas hors de l'item et ne dezoome pas au-dela de lui.
+#[test]
+fn la_timeline_de_l_item_seul() {
+    let mut b = Bench::new(1280, 760);
+    let mut v = riff();
+    // L'item commence hors de la grille du projet (un jeu libre).
+    let d = 0.37;
+    if let Clip::Midi(m) = &mut v.clip {
+        m.qn0 += d;
+        m.qn1 += d;
+        for n in &mut m.roll.notes {
+            n.qn0 += d;
+            n.anchor += d;
+        }
+    }
+    v.fit();
+    b.draw(&mut v);
+    assert_eq!(v.origin(), 0.0);
+    // La grille du projet : la noire 16 attire, pas le debut de l'item.
+    assert!((v.snap_near(16.01, true) - 16.0).abs() < 1e-9);
+    let r = v.rect_of(Hit::Isolate).expect("le bouton");
+    assert!(v.label(Hit::Isolate).unwrap().contains("Item timeline"));
+    down(&mut v, r.0 + 4.0, r.1 + 4.0, Button::Left, m0());
+    up(&mut v, r.0 + 4.0, r.1 + 4.0, Button::Left, m0());
+    assert!(v.isolate);
+    b.draw(&mut v);
+    let (a, z) = v.span().unwrap();
+    assert!((v.origin() - a).abs() < 1e-9);
+    // Le magnetisme part du debut de l'item.
+    let g = v.grid;
+    assert!((v.snap_near(a + g * 1.1, true) - (a + g)).abs() < 1e-9);
+    // La vue reste sur l'item : ni a gauche, ni plus large que lui.
+    let (lo, hi) = v.hrange();
+    assert!(lo < a && hi > z && hi - lo < (z - a) * 1.1);
+    v.scroll = 0.0;
+    v.zoom = 1.0;
+    b.draw(&mut v);
+    assert!(v.scroll >= lo - 1e-9, "{} < {lo}", v.scroll);
+    assert!(v.view_qn() <= hi - lo + 1e-6);
+    v.scroll = 500.0;
+    b.draw(&mut v);
+    assert!(v.scroll + v.view_qn() <= hi + 1e-6);
+    // La quantification aussi : une note a un tic du debut y revient.
+    if let Clip::Midi(m) = &mut v.clip {
+        for n in &mut m.roll.notes {
+            n.sel = false;
+        }
+        let n = &mut m.roll.notes[0];
+        n.sel = true;
+        n.qn0 = a + 0.02;
+    }
+    v.quantize();
+    let q = v
+        .midi()
+        .unwrap()
+        .roll
+        .notes
+        .iter()
+        .find(|n| n.sel)
+        .unwrap()
+        .qn0;
+    assert!((q - a).abs() < 1e-9, "{q} != {a}");
+    v.fit();
+    b.shot(&mut v, "24_timeline_de_l_item");
+}

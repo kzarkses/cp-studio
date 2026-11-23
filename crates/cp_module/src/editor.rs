@@ -92,6 +92,7 @@ impl EPart {
         ed.snap = get("ed_snap") != "0";
         ed.vel_lane = get("ed_vel") != "0";
         ed.hear = get("ed_hear") != "0";
+        ed.isolate = get("ed_isolate") == "1";
         EPart {
             ed,
             win: None,
@@ -116,7 +117,7 @@ impl EPart {
 /// Les reglages de la vue, en une ligne (pour savoir s'ils ont change).
 fn prefs(ed: &Ed) -> String {
     format!(
-        "{}|{}|{}|{}|{}|{}",
+        "{}|{}|{}|{}|{}|{}|{}",
         ed.colors.key(),
         if ed.rows_mode == Rows::Notes {
             "notes"
@@ -126,7 +127,8 @@ fn prefs(ed: &Ed) -> String {
         ed.grid,
         ed.snap as u8,
         ed.vel_lane as u8,
-        ed.hear as u8
+        ed.hear as u8,
+        ed.isolate as u8
     )
 }
 
@@ -655,6 +657,8 @@ impl App {
                 self.ed_keep("ed_vel", v);
                 let h = if self.ed.ed.hear { "1" } else { "0" };
                 self.ed_keep("ed_hear", h);
+                let i = if self.ed.ed.isolate { "1" } else { "0" };
+                self.ed_keep("ed_isolate", i);
             }
         }
         // Un geste qui sort de la vue : elle defile au bord, le geste suit.

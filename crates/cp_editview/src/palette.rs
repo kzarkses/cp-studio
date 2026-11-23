@@ -37,6 +37,7 @@ impl Ed {
         Ctx {
             host: Host::Editor,
             grid: self.grid,
+            origin: self.origin(),
             grid_name: crate::grid_name(if self.grid > 0.0 { self.grid } else { 0.25 }).into(),
             strength: self.strength,
             swing: self.swing,

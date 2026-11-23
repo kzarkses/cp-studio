@@ -95,6 +95,8 @@ impl Ed {
             rh,
             content_h: rh * n,
         };
+        // La timeline de l'item : la vue reste sur l'item.
+        self.bound_view();
         let maxv = (self.lay.content_h - gh).max(0.0);
         self.vscroll = self.vscroll.clamp(0.0, maxv);
         if !self.dragging() {
@@ -524,6 +526,21 @@ impl Ed {
             self.follow,
             Hit::Follow,
         );
+        if !matches!(self.clip, Clip::None) {
+            rx -= s(4.0) + bh;
+            self.icon_btn(
+                cv,
+                icons,
+                th,
+                bx,
+                rx,
+                by,
+                bh,
+                Icon::Isolate,
+                self.isolate,
+                Hit::Isolate,
+            );
+        }
         if matches!(self.clip, Clip::Midi(_)) {
             rx -= s(4.0) + bh;
             self.icon_btn(
@@ -583,8 +600,9 @@ impl Ed {
             cv.fill_rect(xa, ry, xb - xa, l.ruler_h, rp.m_selbg.with_alpha(60));
         }
         let bq = self.bar_qn();
-        let first = (self.scroll / bq).floor().max(0.0) as i64;
-        let last = ((self.scroll + self.view_qn()) / bq).ceil() as i64;
+        let o = self.origin();
+        let first = ((self.scroll - o) / bq).floor().max(0.0) as i64;
+        let last = ((self.scroll + self.view_qn() - o) / bq).ceil() as i64;
         let bar_px = bq as f32 * l.ppq;
         let step = [1i64, 2, 4, 8, 16, 32, 64]
             .into_iter()
@@ -592,7 +610,7 @@ impl Ed {
             .unwrap_or(128);
         let fb = Font::new(0, s(11.0) as u16, 700);
         for m in first..=last {
-            let q = m as f64 * bq;
+            let q = o + m as f64 * bq;
             let x = self.x_of(q).round();
             let major = m % step == 0;
             cv.fill_rect(
@@ -689,8 +707,9 @@ impl Ed {
         let bq = self.bar_qn();
         let beat = 4.0 / self.sig.1.max(1) as f64;
         let g = if self.grid > 0.0 { self.grid } else { beat };
-        let q0 = self.scroll;
-        let q1 = self.scroll + self.view_qn();
+        let o = self.origin();
+        let q0 = self.scroll - o;
+        let q1 = self.scroll + self.view_qn() - o;
         let gpx = g as f32 * l.ppq;
         let step = if gpx >= s(7.0) {
             g
@@ -705,7 +724,7 @@ impl Ed {
             if q > q1 {
                 break;
             }
-            let x = self.x_of(q).round();
+            let x = self.x_of(o + q).round();
             let on_bar = ((q / bq).round() * bq - q).abs() < 1e-6;
             let on_beat = ((q / beat).round() * beat - q).abs() < 1e-6;
             let c = if on_bar {
@@ -1096,9 +1115,10 @@ impl Ed {
         cv.fill_rect(xa, l.gy, xb - xa, l.gh, th.bg.mix(th.text, 0.04));
         // Les lignes de mesure.
         let bq = self.bar_qn();
-        let mut k = (self.scroll / bq).floor() as i64;
+        let o = self.origin();
+        let mut k = ((self.scroll - o) / bq).floor() as i64;
         loop {
-            let q = k as f64 * bq;
+            let q = o + k as f64 * bq;
             if q > self.scroll + self.view_qn() {
                 break;
             }
