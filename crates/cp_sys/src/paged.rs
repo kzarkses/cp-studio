@@ -383,28 +383,36 @@ mod tests {
         // decroche les pages : jamais une valeur fausse, jamais un plantage.
         let p = std::sync::Arc::new(Paged::new(64 * 256, 1, 256));
         let stop = std::sync::Arc::new(AtomicBool::new(false));
-        let (p2, s2) = (p.clone(), stop.clone());
+        // Les passes du lecteur : l'ecrivain continue tant qu'il n'en a pas
+        // fait assez (sous charge, il pouvait finir avant que le lecteur ait
+        // lu une seule fois ; 190 echecs sur 192 sous 24 essais paralleles,
+        // tous de ce compte, aucun d'une valeur fausse).
+        let passes = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let (p2, s2, n2) = (p.clone(), stop.clone(), passes.clone());
         let reader = std::thread::spawn(move || {
-            let mut n = 0u64;
             while !s2.load(Ordering::Relaxed) {
                 let r = p2.read();
                 for s in (0..64 * 256).step_by(37) {
                     let v = r.sample(s);
                     assert!(v == 0.0 || v == s as f32, "{s} -> {v}");
                 }
-                n += 1;
+                n2.fetch_add(1, Ordering::Relaxed);
             }
-            n
         });
-        for round in 0..2000 {
+        let mut round = 0usize;
+        while (round < 2000 || passes.load(Ordering::Relaxed) < 50) && round < 20_000_000 {
             let k = round % 64;
             let v: Vec<f32> = (0..256).map(|i| (k * 256 + i) as f32).collect();
             p.fill(k, v);
             p.evict((k + 32) % 64);
             p.reclaim();
+            round += 1;
         }
         stop.store(true, Ordering::Relaxed);
-        assert!(reader.join().unwrap() > 0);
+        reader
+            .join()
+            .expect("le lecteur n'a jamais lu de valeur fausse");
+        assert!(passes.load(Ordering::Relaxed) >= 50, "{round} tours");
         while p.reclaim() > 0 {}
     }
 }
