@@ -542,6 +542,50 @@ fn la_tab_d_une_prise_suit_son_item() {
     assert!(d2[1].locked && !d2[0].locked);
     assert!(s2.contains(&((13.25f64 * 960.0).round() as i64, 50)));
     assert!(tab_from_text("autre chose", 0.0).is_none());
+    assert!(!txt.contains("unit s"));
+}
+
+/// Le jeu libre : la tab se range en secondes depuis l'item ; un tempo pose
+/// plus tard (120 -> 60) la relit la ou l'audio sonne, sa courbe et ses
+/// notes effacees comprises.
+#[test]
+fn la_tab_du_jeu_libre_reste_sur_l_audio() {
+    use crate::doc::{Clock, TNote, tab_from_text, tab_from_text_on, tab_to_text_on};
+    use std::collections::HashSet;
+    // L'item commence a 2 s ; a 120, une noire = 0,5 s (l'item est a la
+    // noire 4).
+    let doc = vec![
+        TNote {
+            qn0: 5.0,
+            qn1: 5.5,
+            pitch: 45,
+            ..Default::default()
+        },
+        TNote {
+            qn0: 6.0,
+            qn1: 7.0,
+            pitch: 47,
+            bend: vec![(0.0, 0.0), (0.5, 1.0)],
+            ..Default::default()
+        },
+    ];
+    let mut sup = HashSet::new();
+    sup.insert(((7.0f64 * 960.0).round() as i64, 50));
+    let at120 = |q: f64| q * 0.5 - 2.0;
+    let txt = tab_to_text_on(&doc, &sup, "", &Clock::Secs(&at120));
+    assert!(txt.contains("unit s"));
+    // Sans la conversion, un fichier en secondes ne se relit pas.
+    assert!(tab_from_text(&txt, 4.0).is_none());
+    // A 60, une noire = 1 s : l'item est a la noire 2.
+    let at60 = |x: f64| 2.0 + x;
+    let (d2, s2, _) = tab_from_text_on(&txt, 2.0, Some(&at60)).expect("relue");
+    assert!((d2[0].qn0 - 2.5).abs() < 1e-6 && (d2[0].qn1 - 2.75).abs() < 1e-6);
+    assert!((d2[1].qn0 - 3.0).abs() < 1e-6 && (d2[1].qn1 - 3.5).abs() < 1e-6);
+    assert!((d2[1].bend[1].0 - 0.25).abs() < 1e-4, "{:?}", d2[1].bend);
+    assert!(
+        s2.contains(&((3.5f64 * 960.0).round() as i64, 50)),
+        "{s2:?}"
+    );
 }
 
 /// Le MIDI modifie par Cedric : une note effacee ne revient ni en fantome ni

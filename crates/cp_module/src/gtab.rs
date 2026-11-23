@@ -77,7 +77,13 @@ const K_TUNING: usize = 4;
 const K_PAN: usize = 5;
 const K_FREE: usize = 6;
 /// ... et sur chaque item.
-const IKEYS: [&str; 4] = ["CPGT_midi", "CPGT_src", "CPGT_take", "CPGT_aoffs"];
+const IKEYS: [&str; 5] = [
+    "CPGT_midi",
+    "CPGT_src",
+    "CPGT_take",
+    "CPGT_aoffs",
+    "CPGT_tb",
+];
 const I_MIDI: usize = 0;
 const I_SRC: usize = 1;
 const I_TAKE: usize = 2;
@@ -85,6 +91,9 @@ const I_TAKE: usize = 2;
 /// Un rognage du debut de l'audio decale d'autant le MIDI dans sa source,
 /// pour que les notes restent ou elles sonnent.
 const I_AOFFS: usize = 3;
+/// Le jeu libre tient l'audio et son MIDI au temps : la base de temps
+/// qu'avait l'item avant (rendue quand le jeu libre s'arrete). Presente = tenu.
+const I_TB: usize = 4;
 
 /// Le synthe : le fichier installe, son nom dans la chaine.
 const SYNTH_SRC: &str = include_str!("cp_guitar_tab_synth.jsfx");
@@ -198,6 +207,16 @@ pub(crate) struct GPart {
     midi_of: HashMap<String, String>,
     /// L'empreinte de la selection de REAPER deja montree (`None` : a relire).
     sel_sig: Option<u64>,
+}
+
+/// Un item audio (et son MIDI) a tenir au temps ou a rendre : (GUID, base de
+/// temps, celle d'avant gardee).
+struct TimeLock {
+    free: bool,
+    audio: (String, i32, Option<String>),
+    midi: Option<(String, i32, Option<String>)>,
+    take: String,
+    ready: bool,
 }
 
 /// La place d'un item : debut, longueur, lane, decalage de sa prise (s).
@@ -576,7 +595,16 @@ impl App {
 
     /// La tablature d'une prise, gardee a cote de son analyse.
     fn gtab_save_tab(&self, it: &Item) {
-        let txt = doc::tab_to_text(&it.doc, &it.suppressed, &it.detect.to_text(), it.qn0);
+        let r = self.r;
+        let t0 = r.qn_to_time(it.qn0);
+        let secs = |q: f64| r.qn_to_time(q) - t0;
+        // En jeu libre, en secondes : un tempo pose plus tard ne la bouge pas.
+        let clock = if it.free {
+            doc::Clock::Secs(&secs)
+        } else {
+            doc::Clock::Qn(it.qn0)
+        };
+        let txt = doc::tab_to_text_on(&it.doc, &it.suppressed, &it.detect.to_text(), &clock);
         let p = self.gtab_cache(&it.take, "cptab");
         if let Some(d) = p.parent() {
             let _ = std::fs::create_dir_all(d);
@@ -586,7 +614,10 @@ impl App {
 
     fn gtab_load_tab(&self, take: &str, at_qn: f64) -> Option<doc::TabFile> {
         let s = std::fs::read_to_string(self.gtab_cache(take, "cptab")).ok()?;
-        doc::tab_from_text(&s, at_qn)
+        let r = self.r;
+        let t0 = r.qn_to_time(at_qn);
+        let from = |x: f64| r.time_to_qn(t0 + x);
+        doc::tab_from_text_on(&s, at_qn, Some(&from))
     }
 
     // -----------------------------------------------------------------------
@@ -1171,6 +1202,7 @@ impl App {
         // lane, decalage de la prise).
         let mut to_follow: Vec<(String, f64, f64, i32, f64)> = Vec::new();
         let mut to_mark: Vec<(String, f64)> = Vec::new();
+        let mut to_lock: Vec<TimeLock> = Vec::new();
         let mut todos: Vec<(String, Todo)> = Vec::new();
         for a in snap
             .iter()
@@ -1299,6 +1331,26 @@ impl App {
                         }
                     }
                 }
+                // Le jeu libre : l'audio et son MIDI tenus au temps, le MIDI
+                // sans le tempo du projet (un tempo pose plus tard ne bouge
+                // pas les notes de l'audio) ; rendus a ce qu'ils etaient
+                // quand il s'arrete.
+                let off = |x: &ItemSnap| {
+                    if head.free {
+                        x.timebase != 0 || x.ext[I_TB].is_none()
+                    } else {
+                        x.ext[I_TB].is_some()
+                    }
+                };
+                if off(is) || midi.is_some_and(off) {
+                    to_lock.push(TimeLock {
+                        free: head.free,
+                        audio: (is.guid.clone(), is.timebase, is.ext[I_TB].clone()),
+                        midi: midi.map(|m| (m.guid.clone(), m.timebase, m.ext[I_TB].clone())),
+                        take: tk.guid.clone(),
+                        ready: it.state == Some(State::Ready),
+                    });
+                }
                 let needs_midi = it.state == Some(State::Ready)
                     && (redo
                         || midi.is_none()
@@ -1384,6 +1436,18 @@ impl App {
                 }
             }
         }
+        // Le jeu libre pris ou quitte : le MIDI reecrit depuis la tab (ses
+        // noires suivent desormais d'autres secondes), sans pas d'annulation
+        // (un entretien, qu'annuler referait aussitot).
+        for l in &to_lock {
+            if self.gtab_time_lock(l) && l.ready {
+                if let Some((t, i)) = self.gtab_find(&l.audio.0) {
+                    if self.gt.arr.tracks[t].items[i].take == l.take {
+                        self.gtab_write(t, i, "");
+                    }
+                }
+            }
+        }
         // Les MIDI a ecrire (transcriptions finies, prises changees, copies).
         for (ig, tg) in to_write {
             if let Some((t, i)) = self.gtab_find(&ig) {
@@ -1411,6 +1475,52 @@ impl App {
         if arr_sig(&self.gt.arr) != before {
             self.gt.arr.mark();
         }
+    }
+
+    /// Tient un item audio et son MIDI au temps (le jeu libre), ou les rend a
+    /// leur base de temps d'avant. Rend vrai si le MIDI a change de facon de
+    /// lire ses noires (il est a reecrire).
+    fn gtab_time_lock(&self, l: &TimeLock) -> bool {
+        let r = self.r;
+        let hold = |(g, tb, prev): &(String, i32, Option<String>)| {
+            if l.free {
+                if prev.is_none() {
+                    r.set_item_ext(g, "CPGT_tb", &tb.to_string());
+                }
+                if *tb != 0 {
+                    r.set_item_value(g, "C_BEATATTACHMODE", 0.0);
+                }
+            } else if let Some(p) = prev {
+                let v = p.parse::<i32>().unwrap_or(-1).clamp(-1, 2);
+                r.set_item_value(g, "C_BEATATTACHMODE", v as f64);
+                r.set_item_ext(g, "CPGT_tb", "");
+            }
+        };
+        hold(&l.audio);
+        let Some(m) = &l.midi else {
+            return false;
+        };
+        // Le MIDI : ignore le tempo du projet en jeu libre, au tempo moyen
+        // de l'item (la tab le reecrit ensuite). Sa marque ne se pose (ou ne
+        // s'enleve) qu'une fois fait : un echec se retente.
+        let flip = l.free != m.2.is_some();
+        if flip {
+            let Some(a) = r.item_audio(&l.audio.0) else {
+                return false;
+            };
+            let (q0, q1) = (r.time_to_qn(a.pos), r.time_to_qn(a.pos + a.len));
+            let bpm = if a.len > 1e-6 {
+                (q1 - q0) * 60.0 / a.len
+            } else {
+                120.0
+            };
+            let (_, sig, _) = r.measure_at(a.pos);
+            if !r.set_midi_ignore_tempo(&m.0, l.free, bpm.clamp(1.0, 960.0), sig.0, sig.1) {
+                return false;
+            }
+        }
+        hold(m);
+        flip
     }
 
     /// Le synthe de la piste tab, s'il y est.
@@ -1459,6 +1569,9 @@ impl App {
             if o.free != head.free {
                 o.free = head.free;
                 o.touch();
+                if self.gtab_cache(&o.take, "cptab").exists() {
+                    self.gtab_save_tab(&o);
+                }
             }
             // Le chiffrage du projet a change : la partition se refait.
             if o.meter.as_ref() != Some(&meter) || (o.origin_qn - o_qn).abs() > 1e-9 {

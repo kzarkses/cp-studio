@@ -903,6 +903,16 @@ pub fn merge(
     out
 }
 
+/// Ou se rangent les dates d'une tablature dans son fichier.
+pub enum Clock<'a> {
+    /// En mesures : en noires depuis le debut de l'item (`at_qn`).
+    Qn(f64),
+    /// En jeu libre : en secondes depuis le debut de l'item (noires du
+    /// projet -> secondes). Un tempo pose plus tard ne les bouge pas : les
+    /// notes restent sur l'audio.
+    Secs(&'a dyn Fn(f64) -> f64),
+}
+
 /// La tablature d'une prise, gardee dans un fichier a cote de son analyse
 /// (`<GUID de la prise>.cptab`) : les notes, les notes effacees et les
 /// reglages de detection. Les positions sont RELATIVES au debut de l'item
@@ -913,14 +923,31 @@ pub fn tab_to_text(
     detect: &str,
     at_qn: f64,
 ) -> String {
-    let base = (at_qn * 960.0).round() as i64;
+    tab_to_text_on(doc, suppressed, detect, &Clock::Qn(at_qn))
+}
+
+/// [`tab_to_text`], les dates selon `clock` (le jeu libre les range en
+/// secondes : la ligne « unit s » le dit).
+pub fn tab_to_text_on(
+    doc: &[TNote],
+    suppressed: &HashSet<(i64, i32)>,
+    detect: &str,
+    clock: &Clock,
+) -> String {
+    let rel = |q: f64| match clock {
+        Clock::Qn(at) => q - at,
+        Clock::Secs(f) => f(q),
+    };
     let mut s = String::from("CPTAB 1\n");
+    if matches!(clock, Clock::Secs(_)) {
+        s += "unit s\n";
+    }
     s += &format!("detect {detect}\n");
     for t in doc {
         s += &format!(
             "n {:.6} {:.6} {} {} {} {} {} {}\n",
-            t.qn0 - at_qn,
-            t.qn1 - at_qn,
+            rel(t.qn0),
+            rel(t.qn1),
             t.pitch,
             t.string,
             t.fret,
@@ -936,7 +963,12 @@ pub fn tab_to_text(
         if !t.bend.is_empty() {
             s += "b";
             for (q, v) in &t.bend {
-                s += &format!(" {q:.5} {v:.3}");
+                // Depuis le debut de la note, dans l'unite du fichier.
+                let d = match clock {
+                    Clock::Qn(_) => *q,
+                    Clock::Secs(_) => rel(t.qn0 + q) - rel(t.qn0),
+                };
+                s += &format!(" {d:.5} {v:.3}");
             }
             s += "\n";
         }
@@ -947,7 +979,13 @@ pub fn tab_to_text(
     let mut sup: Vec<_> = suppressed.iter().collect();
     sup.sort();
     for &(q, p) in sup {
-        s += &format!("s {} {p}\n", q - base);
+        match clock {
+            Clock::Qn(at) => {
+                let base = (at * 960.0).round() as i64;
+                s += &format!("s {} {p}\n", q - base);
+            }
+            Clock::Secs(_) => s += &format!("s {:.6} {p}\n", rel(q as f64 / 960.0)),
+        }
     }
     s
 }
@@ -956,12 +994,35 @@ pub fn tab_to_text(
 pub type TabFile = (Vec<TNote>, HashSet<(i64, i32)>, String);
 
 pub fn tab_from_text(s: &str, at_qn: f64) -> Option<TabFile> {
-    let mut lines = s.lines();
+    tab_from_text_on(s, at_qn, None)
+}
+
+/// [`tab_from_text`] ; `from_secs` (secondes depuis le debut de l'item ->
+/// noires du projet) relit un fichier du jeu libre (« unit s ») ; sans
+/// lui, un tel fichier ne se relit pas.
+pub fn tab_from_text_on(
+    s: &str,
+    at_qn: f64,
+    from_secs: Option<&dyn Fn(f64) -> f64>,
+) -> Option<TabFile> {
+    let mut lines = s.lines().peekable();
     if lines.next()?.trim() != "CPTAB 1" {
         return None;
     }
+    let secs = lines.peek().map(|l| l.trim()) == Some("unit s");
+    if secs {
+        lines.next();
+    }
+    let from = match (secs, from_secs) {
+        (true, None) => return None,
+        (true, f) => f,
+        (false, _) => None,
+    };
+    let abs = |x: f64| from.map_or(x + at_qn, |f| f(x));
     let base = (at_qn * 960.0).round() as i64;
     let mut doc = Vec::new();
+    // Le debut de la note d'avant, dans l'unite du fichier (sa courbe).
+    let mut last_x = 0.0;
     let mut sup = HashSet::new();
     let mut detect = String::new();
     for l in lines {
@@ -978,9 +1039,10 @@ pub fn tab_from_text(s: &str, at_qn: f64) -> Option<TabFile> {
                 else {
                     continue;
                 };
+                last_x = a;
                 doc.push(TNote {
-                    qn0: a + at_qn,
-                    qn1: b + at_qn,
+                    qn0: abs(a),
+                    qn1: abs(b),
                     pitch: p as i32,
                     string: st.max(0.0) as usize,
                     fret: fr as i32,
@@ -1000,11 +1062,29 @@ pub fn tab_from_text(s: &str, at_qn: f64) -> Option<TabFile> {
             Some(&"b") => {
                 if let Some(last) = doc.last_mut() {
                     let v: Vec<f64> = v[1..].iter().filter_map(|x| x.parse().ok()).collect();
-                    last.bend = v.chunks_exact(2).map(|c| (c[0], c[1] as f32)).collect();
+                    let q0 = last.qn0;
+                    last.bend = v
+                        .chunks_exact(2)
+                        .map(|c| {
+                            let d = if from.is_some() {
+                                abs(last_x + c[0]) - q0
+                            } else {
+                                c[0]
+                            };
+                            (d, c[1] as f32)
+                        })
+                        .collect();
                 }
             }
             Some(&"s") if v.len() == 3 => {
-                if let (Ok(q), Ok(p)) = (v[1].parse::<i64>(), v[2].parse::<i32>()) {
+                let Ok(p) = v[2].parse::<i32>() else {
+                    continue;
+                };
+                if from.is_some() {
+                    if let Ok(x) = v[1].parse::<f64>() {
+                        sup.insert(((abs(x) * 960.0).round() as i64, p));
+                    }
+                } else if let Ok(q) = v[1].parse::<i64>() {
                     sup.insert((q + base, p));
                 }
             }

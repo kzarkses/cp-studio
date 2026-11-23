@@ -45,6 +45,10 @@ pub struct ItemSnap {
     /// Les fondus (s) : l'automatique s'il y en a un, sinon le manuel.
     pub fade_in: f64,
     pub fade_out: f64,
+    /// Sa base de temps (`C_BEATATTACHMODE`) : -1 celle de la piste ou du
+    /// projet, 0 le temps, 1 les temps (position, longueur, vitesse), 2 les
+    /// temps (position seule).
+    pub timebase: i32,
     /// Les donnees privees demandees, dans l'ordre des cles.
     pub ext: Vec<Option<String>>,
 }
@@ -306,6 +310,7 @@ impl Reaper {
                 let a = val(c"D_FADEOUTLEN_AUTO");
                 if a > 0.0 { a } else { val(c"D_FADEOUTLEN") }
             },
+            timebase: val(c"C_BEATATTACHMODE") as i32,
             ext: keys
                 .iter()
                 .map(|k| {
@@ -970,6 +975,44 @@ impl Reaper {
         }
     }
 
+    /// Les sources MIDI d'un item ignorent le tempo du projet (`on`) : leurs
+    /// notes se placent alors au tempo `bpm` (`num`/`den`), a des secondes
+    /// fixes depuis le debut de l'item, comme « Ignore project tempo » de ses
+    /// proprietes. Par son etat (le SDK n'a pas d'autre acces).
+    pub fn set_midi_ignore_tempo(
+        &self,
+        item: &str,
+        on: bool,
+        bpm: f64,
+        num: i32,
+        den: i32,
+    ) -> bool {
+        type GetChunk = unsafe extern "C" fn(P, *mut c_char, i32, bool) -> bool;
+        type SetChunk = unsafe extern "C" fn(P, *const c_char, bool) -> bool;
+        let (Some(it), Some(get), Some(put)) = (
+            self.find_item(item, None),
+            self.tf::<GetChunk>(c"GetItemStateChunk"),
+            self.tf::<SetChunk>(c"SetItemStateChunk"),
+        ) else {
+            return false;
+        };
+        // SAFETY: tampon de la taille annoncee ; item vivant.
+        unsafe {
+            let mut buf = vec![0u8; 8 << 20];
+            if !get(it, buf.as_mut_ptr() as *mut c_char, buf.len() as i32, false) {
+                return false;
+            }
+            let text = CStr::from_ptr(buf.as_ptr() as *const c_char).to_string_lossy();
+            let Some(chunk) = ignore_tempo_chunk(&text, on, bpm, num, den) else {
+                return false;
+            };
+            let Ok(c) = CString::new(chunk) else {
+                return false;
+            };
+            put(it, c.as_ptr(), false)
+        }
+    }
+
     /// Un item MIDI vide sur une piste, de `t0` a `t1`. Rend son GUID.
     pub fn create_midi_item_on(&self, track: &str, name: &str, t0: f64, t1: f64) -> Option<String> {
         type NewMidi = unsafe extern "C" fn(P, f64, f64, *const bool) -> P;
@@ -1126,5 +1169,92 @@ impl Reaper {
                 .map(|k| gt(it, k))
                 .find(|&tk| !tk.is_null() && self.tk_str(tk, "GUID", None).as_deref() == Some(guid))
         }
+    }
+}
+
+/// L'etat d'un item dont les sources MIDI ignorent (ou suivent) le tempo du
+/// projet : la ligne `IGNTEMPO` de chacune (posee si elle manque). None si
+/// l'etat n'est pas entier (un tampon trop court) ou sans source MIDI.
+pub fn ignore_tempo_chunk(chunk: &str, on: bool, bpm: f64, num: i32, den: i32) -> Option<String> {
+    let lines: Vec<&str> = chunk.lines().collect();
+    let first = lines.iter().find(|l| !l.trim().is_empty())?;
+    let last = lines.iter().rev().find(|l| !l.trim().is_empty())?;
+    if !first.trim_start().starts_with("<ITEM") || last.trim() != ">" {
+        return None;
+    }
+    let mut b = format!("{bpm:.6}");
+    while b.ends_with('0') {
+        b.pop();
+    }
+    if b.ends_with('.') {
+        b.pop();
+    }
+    let line = format!("IGNTEMPO {} {b} {} {}", on as u8, num.max(1), den.max(1));
+    let mut out = String::with_capacity(chunk.len() + 64);
+    let mut found = 0;
+    // Dans une source MIDI : son retrait, la profondeur des blocs qu'elle
+    // contient (un sysex), sa ligne IGNTEMPO vue ou non.
+    let mut open: Option<(String, i32, bool)> = None;
+    for l in &lines {
+        let t = l.trim_start();
+        let ind = &l[..l.len() - t.len()];
+        if open.is_none() && t.starts_with("<SOURCE MIDI") {
+            found += 1;
+            out += l;
+            out += "\n";
+            open = Some((format!("{ind}  "), 0, false));
+            continue;
+        }
+        if let Some((inner, depth, seen)) = open.as_mut() {
+            if *depth == 0 && t.starts_with("IGNTEMPO") {
+                out += &format!("{ind}{line}\n");
+                *seen = true;
+                continue;
+            }
+            if t.starts_with('<') {
+                *depth += 1;
+            } else if t == ">" {
+                if *depth == 0 {
+                    if !*seen {
+                        out += &format!("{inner}{line}\n");
+                    }
+                    open = None;
+                } else {
+                    *depth -= 1;
+                }
+            }
+        }
+        out += l;
+        out += "\n";
+    }
+    (found > 0).then_some(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ignore_tempo_chunk;
+
+    const ITEM: &str = "<ITEM\n  POSITION 2\n  <SOURCE MIDI\n    HASDATA 1 960 QN\n    E 0 90 40 60\n    IGNTEMPO 0 120 4 4\n  >\n>\n";
+
+    #[test]
+    fn la_source_midi_ignore_le_tempo() {
+        let c = ignore_tempo_chunk(ITEM, true, 112.5, 3, 4).unwrap();
+        assert!(c.contains("    IGNTEMPO 1 112.5 3 4\n"), "{c}");
+        assert!(!c.contains("IGNTEMPO 0"));
+        assert!(c.contains("E 0 90 40 60"));
+        let back = ignore_tempo_chunk(&c, false, 120.0, 4, 4).unwrap();
+        assert_eq!(back, ITEM);
+        // Sans sa ligne : posee avant la fin de la source.
+        let sans = ITEM.replace("    IGNTEMPO 0 120 4 4\n", "");
+        let c = ignore_tempo_chunk(&sans, true, 90.0, 4, 4).unwrap();
+        assert!(c.contains("    IGNTEMPO 1 90 4 4\n  >\n>"), "{c}");
+        // Un etat sans retrait, avec un sysex : la ligne reste dans la source.
+        let plat = "<ITEM\n<SOURCE MIDI\nE 0 90 40 60\n<X 0 0\nAAAA\n>\n>\n>\n";
+        let c = ignore_tempo_chunk(plat, true, 90.0, 4, 4).unwrap();
+        assert!(c.ends_with(">\n  IGNTEMPO 1 90 4 4\n>\n>\n"), "{c}");
+        // Un etat coupe, un item audio : rien.
+        assert!(ignore_tempo_chunk(&ITEM[..40], true, 90.0, 4, 4).is_none());
+        let audio = "<ITEM\n  <SOURCE WAVE\n    FILE \"a.wav\"\n  >\n>\n";
+        assert!(ignore_tempo_chunk(audio, true, 90.0, 4, 4).is_none());
     }
 }

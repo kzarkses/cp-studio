@@ -475,7 +475,7 @@ impl Reaper {
     /// Remplace toutes les notes d'un item MIDI, ses pitch bends et ses
     /// pedales legato (`evs`) ; `bend_range` : l'etendue des pitch bends
     /// (demi-tons), annoncee sur chaque canal avant sa premiere note (RPN 0).
-    /// Un pas d'annulation.
+    /// Un pas d'annulation nomme `undo` (aucun s'il est vide).
     pub fn set_midi_notes(
         &self,
         guid: &str,
@@ -525,8 +525,16 @@ impl Reaper {
         ) else {
             return false;
         };
-        let ub = self.f::<UndoBegin>(c"Undo_BeginBlock2");
-        let ue = self.f::<UndoEnd>(c"Undo_EndBlock2");
+        // Sans nom : sans pas d'annulation (un entretien, qu'annuler referait
+        // aussitot).
+        let (ub, ue) = if undo.is_empty() {
+            (None, None)
+        } else {
+            (
+                self.f::<UndoBegin>(c"Undo_BeginBlock2"),
+                self.f::<UndoEnd>(c"Undo_EndBlock2"),
+            )
+        };
         let upd = self.f::<Update>(c"UpdateArrange");
         let label = CString::new(undo).unwrap_or_default();
         // SAFETY: prise MIDI vivante ; appels du SDK sur le fil principal.
