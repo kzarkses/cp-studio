@@ -734,6 +734,10 @@ fn status_text() -> String {
             st.bytes as f64 / 1e6,
             st.decoding
         );
+        s += &format!(
+            "  streamed files: {}, blocks without their page: {}\n",
+            st.streams, st.stream_misses
+        );
     }
     if let Some(p) = LOG_PATH.get() {
         s += &format!("  log: {}\n", p.display());

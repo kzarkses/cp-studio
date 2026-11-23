@@ -65,7 +65,7 @@ Ce que ces mots veulent dire, en critères :
 | ✅ CP Transport : transport, compteur, tempo (glisser, molette, saisie), signature, Tap, métronome, vitesse, icônes d'actions (ajouter par la liste des actions de REAPER, retirer, déplacer), sélecteur de vues avec la place de chaque vue | 2026-11-22 | 6 tests et planches PNG ; démarre seul avec REAPER |
 | ✅ CP Guitar Tab en Rust : l'item choisi devient une piste MIDI (pour comparer à l'oreille) et une partition MusicXML (portée et tablature, rythme calé sur le tempo du projet, marteaux et tirés), ouverte dans MuseScore ; réglages (seuils, note la plus courte, grille, accordage) ; icône dans CP Transport | 2026-11-22 | réseau à 3,8e-5 d'onnxruntime ; vrai REAPER : un riff de 8 noires retrouvé note pour note en 0,5 s |
 | ✅ Le mode sombre de CP Studio, la part sûre : barres de titre (DWM) et menus (mode d'application de Windows), jamais le contenu des boîtes ; éteint par défaut, action « CP Studio: Dark title bars and menus » | 2026-11-22 | vrai REAPER : la boîte de fichiers « Load Script » ouverte 5 s mode sombre allumé, sombre et sans plantage (l'extension « Reaper Dark Mode » y faisait planter SHELL32 depuis la mise à jour de Windows du 21) |
-| ✅ La nuit du 22 au 23 novembre (autonomie complète, 23 commits) : le moteur audio complété (A4, A5 cuit et temps réel, A7, A8, A9, A10, fondu de boucle), Guitar Tab complété (triolets, deux voix, armure, techniques de jeu, noms d'accords, rythme sous la tab), l'éditeur (bends qui suivent leur note, accords, arpèges, euclides), les onglets des dockers cachés dès le démarrage | 2026-11-23 | `cargo xtask reaper-test` PASS dans le vrai REAPER après chaque morceau ; détails dans chaque section ci-dessous |
+| ✅ La nuit du 22 au 23 novembre (autonomie complète) : le moteur audio complété (A2 lecture en flux, A4, A5 cuit et temps réel mesuré, A7 avec la phase, A8 audio et MIDI, A9, A10, fondu de boucle), Guitar Tab complété (triolets, deux voix, armure, techniques de jeu, noms d'accords, rythme sous la tab, chiffrages qui changent, reprises), l'éditeur (bends qui suivent leur note, accords, arpèges, euclides, saisie pas à pas), les onglets des dockers cachés dès le démarrage | 2026-11-23 | `cargo xtask reaper-test` PASS dans le vrai REAPER après chaque morceau ; détails dans chaque section ci-dessous |
 | ▶ **Maintenant : le jalon 1 à l'usage.** Cedric s'en sert au quotidien ; on corrige et on polit à partir de ses retours. Ensuite, le choix de l'application suivante | | |
 
 **Le but immédiat est le jalon 1** (voir plus bas) : un navigateur de fichiers
@@ -142,9 +142,18 @@ faire un vrai retour.
   boucles. Pour écouter un long fichier (navigateur), il faut une **lecture en
   flux** : un fil lit le disque en avance, la voix lit un anneau.
 - Le budget mémoire, le retrait et le ramassage, comptés.
-- Reste (2026-11-23) : le vrai flux disque au-delà de 1,5 Go (23 min en
-  stéréo à 48 kHz) n'est pas fait : il toucherait au cœur de la lecture du
-  navigateur ; à faire avec une raison (un enregistrement long à écouter).
+- ✅ **La lecture en flux, faite le 2026-11-23** (`cp_sys::paged`,
+  `cp_audio::stream`) : au-delà de 256 Mo décodés (11 min en stéréo à
+  48 kHz), un fichier est coupé en pages d'une seconde ; un fil de flux charge
+  celles qui sont devant chaque tête (une par voix, dans son sens) et lâche
+  celles qui sont loin ; le début reste toujours. Le fil audio ne libère ni
+  n'attend rien (une page lâchée n'est libérée que quand aucune lecture ne la
+  tient). Plus de limite de longueur. Deux heures prêtes en 0,4 ms, 10 Mo
+  en mémoire au lieu de 2,8 Go ; aucun bloc sans sa page en temps réel avec
+  des sauts au hasard. Vrai REAPER, 12 min de WAV : la bonne seconde entendue
+  après deux sauts, 10 Mo, pics complets. L'oracle reste identique au bit.
+- Reste : un flux qui cuit (l'élastique) ne se fait pas sur un clip en flux
+  (refusé, en le disant ; le navigateur se cale alors par la vitesse).
 - **Les pics pour l'affichage** des formes d'onde, calculés sur un fil de
   travail, à plusieurs résolutions (le zoom ne recalcule rien).
 - **Fini quand :** un fichier de 2 h s'écoute sans attente ni coupure, et sa
@@ -226,8 +235,13 @@ et 85 à 139 ms d'amorçage. D'où deux chemins.
   (`try_lock`) et ne libère jamais rien : le vivier du fil principal (16 au
   plus) reste le dernier détenteur. Vrai REAPER : tempo 0,8 et +4 demi-tons
   sur une voix qui joue dans une piste, sans aucun rendu refusé.
-- Reste : l'entendre (Cedric) ; la compensation d'amorçage quand un départ
-  est daté dans le futur.
+- ✅ **Mesuré dans le vrai REAPER le 2026-11-23** (un second moteur rendu
+  hors ligne, le vrai élastique) : la première attaque à -0,77 ms de sa
+  place, les autres à 0,77 ms en médiane, 2,06 ms au pire ; le même départ
+  daté dans 0,3 s donne exactement les mêmes écarts : l'amorçage ne décale
+  rien, la compensation prévue n'est pas nécessaire. +4 demi-tons : 554,3 Hz
+  pour 554,4.
+- Reste : l'entendre (Cedric).
 
 ### A6. Les boucles MIDI (les lanes)
 
@@ -266,8 +280,16 @@ et 85 à 139 ms d'amorçage. D'où deux chemins.
   projet suit le maître au centième, REAPER part à sa première impulsion et
   s'arrête à son Stop. Vrai REAPER : la vraie entrée MIDI 0 lue dans le
   crochet sans incident.
-- Reste : l'essai avec une vraie machine, et la phase (rattraper une fraction
-  de temps par la vitesse de lecture).
+- ✅ **La phase, faite le 2026-11-23** : une sonde dans le vrai REAPER a
+  montré que changer le TEMPO en jouant fait sauter la position (-0,2 noire,
+  70 ms d'arrêt pour +1 %) alors que la VITESSE de lecture change sans
+  heurt. Le tempo ne change donc plus qu'à l'arrêt ; en jouant, une PLL sur
+  la vitesse (rapport des tempos + correction en 2 s, bornée à 2 %), calée
+  sur la mesure du maître, latence de sortie comptée, retard du maître
+  réglable (« Clock delay », -20 à +20 ms). Simulée : 0,65 ms d'écart après
+  5 s, 0,63 ms pendant une rampe 128 → 132 BPM.
+- Reste : l'essai avec une vraie machine (et le réglage du retard à
+  l'oreille).
 
 ### A8. L'enregistrement
 
@@ -281,8 +303,13 @@ et 85 à 139 ms d'amorçage. D'où deux chemins.
   commence et finit à des temps du moteur, la latence d'entrée + de sortie
   retirée (elle tombe là où elle a été jouée). Vrai REAPER : une
   demi-seconde → 24 000 frames exactement, latence 147 + 171 retirée.
-- Reste : la mesure contre une boucle de retour (un câble), la prise MIDI,
-  le branchement dans une application (la Session).
+- ✅ **La prise MIDI, faite le 2026-11-23** (`cp_audio::midirec`) : les
+  messages courts des entrées datés à l'échantillon dans le crochet, la
+  latence de sortie retirée, une entrée ou toutes, les notes tenues relâchées
+  à la fin. Vrai REAPER : une prise de toutes les entrées finie à l'heure,
+  rien de perdu.
+- Reste : la mesure contre une boucle de retour (un câble) ; le branchement
+  dans une application (la Session) et dans l'ABI.
 
 ### A9. La robustesse
 
@@ -582,9 +609,15 @@ Guitar Tab pour le rendre complet ») :
 - **les noms d'accords** au-dessus de la portée, à chaque changement ;
 - **le rythme sous la tablature** quand la partition est cachée (comme Guitar
   Pro), dans la fenêtre et le PDF.
+- **les chiffrages qui changent** (2026-11-23) : les mesures suivent celles
+  de REAPER (un 3/4, un passage en 6/8, une mesure partielle) à l'écran, dans
+  la partition, le PDF et le MusicXML ; les ligatures par temps de la mesure
+  (noire pointée en 6/8) ; le tempo n'y change rien (tout est en noires) ;
+- **les reprises** (2026-11-23) : un passage rejoué tel quel s'écrit une fois
+  entre barres de reprise, « ×3 » au-dessus, dans le PDF et le MusicXML
+  (menu de la piste : « Repeats in exports »).
 Reste : l'oreille et l'œil de Cedric sur ses vraies prises (les seuils
-viennent de tests synthétiques) ; les changements de tempo et de mesure dans
-un morceau ; les reprises.
+viennent de tests synthétiques).
 
 ### L'éditeur de clips revient (demande de Cedric, 2026-11-22)
 
@@ -699,7 +732,9 @@ chaque note, et un test le tient.
   - la probabilité (cases de la Session, à venir) ;
   - les enveloppes ADSR/ENV et l'établi d'un son ;
   - les transients du clip ;
-  - le pas à pas.
+  - ~~le pas à pas~~ : fait le 2026-11-23 (menu des notes, « Step input from
+    MIDI keyboard » : chaque note jouée se pose au curseur, longue d'un pas de
+    grille, le curseur avance ; des notes ensemble font un accord).
 
 **Fini quand :** Cedric ouvre ses items MIDI dans notre éditeur plutôt que dans
 celui de REAPER.
