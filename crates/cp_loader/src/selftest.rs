@@ -178,6 +178,10 @@ enum Phase {
     Band,
     /// Guitar Tab sur un riff connu.
     GuitarTab,
+    /// La Session : un clip MIDI joue par une lane dans une piste avec
+    /// ReaSynth, une case audio dans une autre ; le son mesure dans chaque
+    /// piste.
+    Session,
     /// La poignee native d'un docker : REAPER prend-il un appui envoye par
     /// message (pour qu'une poignee a nous lui passe le glisser) ? Et
     /// l'API des dockers deplace-t-elle une vue d'un docker a l'autre ?
@@ -1324,6 +1328,7 @@ impl SelfTest {
             | Phase::Transport
             | Phase::Band
             | Phase::GuitarTab
+            | Phase::Session
             | Phase::DockGrip
             | Phase::Done => {}
         }
@@ -1676,6 +1681,13 @@ impl SelfTest {
                 if self.gtab_tick(r) {
                     self.keys_step = 0;
                     self.ui_at = Some(Instant::now());
+                    self.phase = Phase::Session;
+                }
+            }
+            Phase::Session => {
+                if self.session_tick(r) {
+                    self.keys_step = 0;
+                    self.ui_at = Some(Instant::now());
                     self.phase = Phase::DockGrip;
                 }
             }
@@ -1687,6 +1699,108 @@ impl SelfTest {
             }
             Phase::Done => return true,
             _ => {}
+        }
+        false
+    }
+
+    /// La Session de bout en bout : deux pistes neuves (ReaSynth ; rien),
+    /// l'action de test du module y pose un clip MIDI et une case audio et
+    /// les lance ; deux secondes plus tard, ce qui a sonne dans chaque piste.
+    fn session_tick(&mut self, r: &cp_sys::reaper::Reaper) -> bool {
+        let t = self.ui_at.map_or(0.0, |t| t.elapsed().as_secs_f64());
+        let act = |name: &str| {
+            let c = r.named_command(name);
+            if c != 0 {
+                r.main_on_command(c);
+            }
+            c != 0
+        };
+        match self.keys_step {
+            0 => {
+                // Un son connu : 1 s de La 440 en stereo.
+                let sr = 48000u32;
+                let x: Vec<f32> = (0..sr as usize * 2)
+                    .map(|i| {
+                        ((i / 2) as f64 * 440.0 * std::f64::consts::TAU / sr as f64).sin() as f32
+                            * 0.4
+                    })
+                    .collect();
+                let path = dir().join("session_a440.wav");
+                let _ = fs::write(&path, wav(&x, 2, sr, false));
+                r.ext_set(
+                    "CP_Studio",
+                    "selftest_session_wav",
+                    &path.to_string_lossy(),
+                    false,
+                );
+                r.ext_set("CP_Studio", "selftest_session", "", false);
+                let n = r.session_tracks(false).len() as i32;
+                let synth = r.insert_track(n, "CPS test synth");
+                let audio = r.insert_track(n + 1, "CPS test audio");
+                let (Some(s), Some(_)) = (synth, audio) else {
+                    self.say(false, "Session : pistes de test non creees".into());
+                    return true;
+                };
+                if r.track_fx_add(&s, "ReaSynth").is_none() {
+                    self.say(false, "Session : ReaSynth introuvable".into());
+                }
+                if !act("_CPSTUDIO_SESSION_SELFTEST") {
+                    self.say(false, "Session : l'action de test n'existe pas".into());
+                    return true;
+                }
+                self.keys_step = 1;
+                self.ui_at = Some(Instant::now());
+            }
+            1 => {
+                if t < 2.5 {
+                    return false;
+                }
+                act("_CPSTUDIO_SESSION_SELFTEST");
+                self.keys_step = 2;
+                self.ui_at = Some(Instant::now());
+            }
+            2 => {
+                let st = r
+                    .ext_get("CP_Studio", "selftest_session")
+                    .unwrap_or_default();
+                if !st.starts_with("report") {
+                    if t > 5.0 {
+                        self.say(false, format!("Session : pas de rapport ({st})"));
+                        return true;
+                    }
+                    return false;
+                }
+                let field = |k: &str| -> f64 {
+                    st.split_whitespace()
+                        .find_map(|w| w.strip_prefix(&format!("{k}=")))
+                        .and_then(|v| v.parse().ok())
+                        .unwrap_or(-1.0)
+                };
+                self.say(
+                    field("lanes") == 1.0 && field("lane_state") == 2.0 && field("midi_sent") > 4.0,
+                    format!("Session : le clip MIDI joue par sa lane, ses notes envoyees a la piste ; {st}"),
+                );
+                self.say(
+                    field("synth_peak") > 0.001,
+                    format!(
+                        "Session : ReaSynth sonne sous la lane (crete {:.3})",
+                        field("synth_peak")
+                    ),
+                );
+                self.say(
+                    field("audio_peak") > 0.05,
+                    format!(
+                        "Session : la case audio sonne dans sa piste (crete {:.3})",
+                        field("audio_peak")
+                    ),
+                );
+                self.say(
+                    field("stopped") == 1.0,
+                    "Session : tout arrete a la fin (Panic)".to_string(),
+                );
+                return true;
+            }
+            _ => return true,
         }
         false
     }

@@ -140,6 +140,18 @@ fn db_of(vol: f64) -> f32 {
     }
 }
 
+/// La cle d'une case de la Session ouverte dans l'editeur (a la place du
+/// GUID d'un item).
+fn cell_key(guid: &str, scene: usize) -> String {
+    format!("cell:{guid}:{scene}")
+}
+
+fn parse_cell(item: &str) -> Option<(String, usize)> {
+    let rest = item.strip_prefix("cell:")?;
+    let (g, s) = rest.rsplit_once(':')?;
+    Some((g.to_string(), s.parse().ok()?))
+}
+
 fn vol_of(db: f32) -> f64 {
     if db <= -60.0 {
         0.0
@@ -173,9 +185,57 @@ impl App {
         self.queue(WinOp::EdOpen);
     }
 
+    /// Ouvre le clip MIDI d'une case de la Session (sans item : ses notes
+    /// vivent dans le projet). Ce qui s'y ecrit revient a la case, et
+    /// s'entend tout de suite si elle joue.
+    pub(crate) fn ed_open_cell(&mut self, guid: &str, scene: usize, clip: &cp_session::Clip) {
+        let r = self.r;
+        let qpb = self.ses.ses.qpb();
+        let len = clip.len_beats(qpb);
+        let roll = Roll::from_notes(clip.notes().iter().map(|n| {
+            (
+                n.start,
+                n.len.max(1e-3),
+                n.pitch as i32,
+                n.chan as i32,
+                n.vel as i32,
+                false,
+                false,
+            )
+        }));
+        let (_, sig, bpm) = r.measure_at(r.cursor_position());
+        self.ed.ed.sig = sig;
+        self.ed.ed.bpm = bpm;
+        let expr = Expr::new(&roll.notes, &[]);
+        let name = if clip.name.is_empty() {
+            format!("Clip {}", scene + 1)
+        } else {
+            clip.name.clone()
+        };
+        self.ed.ed.open_midi(
+            Midi {
+                roll,
+                name,
+                item: cell_key(guid, scene),
+                qn0: 0.0,
+                qn1: len,
+                expr,
+            },
+            true,
+        );
+        self.ed.info = None;
+        self.ed.hash = None;
+        self.ed.pending = None;
+        self.ed.last_sel = r.selected_item_guid();
+        self.ses.editing = Some((guid.to_string(), scene));
+        self.ed.ed.mark();
+        self.queue(WinOp::EdOpen);
+    }
+
     /// Lit un item dans la vue. `fresh` : un autre item (la vue se recadre).
     fn ed_load(&mut self, guid: &str, fresh: bool) -> bool {
         let r = self.r;
+        self.ses.editing = None;
         let Some(info) = r.item_info(guid) else {
             return false;
         };
@@ -278,6 +338,23 @@ impl App {
     fn ed_commit(&mut self, label: &str) {
         let r = self.r;
         let Some(m) = self.ed.ed.midi() else { return };
+        if let Some((g, scene)) = parse_cell(&m.item) {
+            let notes: Vec<cp_session::Note> = m
+                .roll
+                .notes
+                .iter()
+                .map(|n| cp_session::Note {
+                    start: n.qn0.max(0.0),
+                    len: (n.end() - n.qn0).max(1e-3),
+                    pitch: n.pitch.clamp(0, 127) as u8,
+                    vel: n.vel.clamp(1, 127) as u8,
+                    chan: n.chan.clamp(0, 15) as u8,
+                    prob: 100,
+                })
+                .collect();
+            self.ses_cell_notes(&g, scene, notes);
+            return;
+        }
         let notes: Vec<EdNote> = m
             .roll
             .notes
@@ -367,7 +444,13 @@ impl App {
 
     fn ed_audition(&mut self, pitch: i32, chan: i32, vel: i32, hold: bool) {
         let r = self.r;
-        let Some(track) = self.ed.info.as_ref().map(|i| i.track.clone()) else {
+        let Some(track) = self
+            .ed
+            .info
+            .as_ref()
+            .map(|i| i.track.clone())
+            .or_else(|| self.ses.editing.as_ref().map(|e| e.0.clone()))
+        else {
             return;
         };
         if self.ed.aud.is_none() {
@@ -402,7 +485,9 @@ impl App {
                 Act::Undo | Act::Redo => {
                     r.main_on_command(if a == Act::Undo { 40029 } else { 40030 });
                     if let Some(g) = self.ed.ed.item().map(str::to_string) {
-                        self.ed_load(&g, false);
+                        if parse_cell(&g).is_none() {
+                            self.ed_load(&g, false);
+                        }
                     }
                 }
                 Act::Audition {
@@ -581,8 +666,9 @@ impl App {
         }
         // L'item ouvert, modifie ailleurs (deplace, rogne, ses notes, efface) :
         // des que le compteur du projet bouge.
+        let cell = self.ed.ed.item().is_some_and(|g| parse_cell(g).is_some());
         let sc = r.state_count();
-        if sc != self.ed.state_seen && !self.ed.ed.busy() {
+        if sc != self.ed.state_seen && !self.ed.ed.busy() && !cell {
             self.ed.state_seen = sc;
             if let Some(g) = self.ed.ed.item().map(str::to_string) {
                 match r.item_info(&g) {
@@ -607,7 +693,7 @@ impl App {
         if self.ed.since_sync >= 10 && !self.ed.ed.busy() {
             self.ed.since_sync = 0;
             // L'item ouvert, modifie ailleurs (ou efface) : le filet.
-            if let Some(g) = self.ed.ed.item().map(str::to_string) {
+            if let Some(g) = self.ed.ed.item().filter(|_| !cell).map(str::to_string) {
                 match r.item_info(&g) {
                     None => self.ed.ed.close(),
                     Some(info) => {
@@ -680,10 +766,20 @@ impl App {
             self.ed.ed.set_peaks(q0, q1, pk);
         }
         // Le curseur d'edition (montre aussi pendant la lecture) et la tete.
-        let cur = r.time_to_qn(r.cursor_position());
-        self.ed.ed.edit_cursor = Some(cur);
-        if !playing {
-            self.ed.ed.set_playhead(Some(cur), false);
+        // Une case : la tete est celle de sa lane.
+        if let Some((g, scene)) = self.ses.editing.clone().filter(|_| cell) {
+            let pos = self.ses_cell_pos(&g, scene);
+            self.ed.ed.edit_cursor = None;
+            self.ed.ed.set_playhead(pos, pos.is_some());
+            if pos.is_some() {
+                self.ed_want_frames(true);
+            }
+        } else {
+            let cur = r.time_to_qn(r.cursor_position());
+            self.ed.ed.edit_cursor = Some(cur);
+            if !playing {
+                self.ed.ed.set_playhead(Some(cur), false);
+            }
         }
         self.ed_tip();
         let shown = self.ed.win.as_ref().is_some_and(|w| ui::is_shown(w.hwnd));
@@ -1121,14 +1217,26 @@ impl App {
             WM_CP_FRAME => {
                 let r = self.r;
                 let ps = r.play_state();
-                let playing = ps & (play::PLAYING | play::RECORDING) != 0;
-                let pos = if playing {
-                    r.play_position()
+                let mut playing = ps & (play::PLAYING | play::RECORDING) != 0;
+                let cell = self
+                    .ed
+                    .ed
+                    .item()
+                    .and_then(parse_cell)
+                    .filter(|c| self.ses.editing.as_ref() == Some(c));
+                if let Some((g, scene)) = cell {
+                    let pos = self.ses_cell_pos(&g, scene);
+                    playing = pos.is_some();
+                    self.ed.ed.set_playhead(pos, playing);
                 } else {
-                    r.cursor_position()
-                };
-                self.ed.ed.set_playhead(Some(r.time_to_qn(pos)), playing);
-                self.ed.ed.edit_cursor = Some(r.time_to_qn(r.cursor_position()));
+                    let pos = if playing {
+                        r.play_position()
+                    } else {
+                        r.cursor_position()
+                    };
+                    self.ed.ed.set_playhead(Some(r.time_to_qn(pos)), playing);
+                    self.ed.ed.edit_cursor = Some(r.time_to_qn(r.cursor_position()));
+                }
                 self.ed_render(false);
                 let idle = self.ed.win.as_ref().is_none_or(|w| w.frame.idle());
                 if !playing && idle && !self.ed.ed.dragging() {

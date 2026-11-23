@@ -22,13 +22,14 @@ pub struct ItemCfg {
 /// Les outils de CP Studio a poser dans la barre : (action, icone, icone de
 /// secours si le theme et `Data/toolbar_icons` n'ont pas la premiere). Les
 /// icones natives d'abord : elles ont la finesse et les couleurs du theme.
-pub const TOOLS: [(&str, &str, &str); 2] = [
+pub const TOOLS: [(&str, &str, &str); 3] = [
     (
         "_CPSTUDIO_GUITARTAB",
         "png:toolbar_misc_guitar.png",
         "lucide:Guitar",
     ),
     ("_CPSTUDIO_EDITOR", "lucide:Piano", "lucide:Piano"),
+    ("_CPSTUDIO_SESSION", "lucide:Grid", "lucide:Grid"),
 ];
 
 /// L'icone de secours d'un outil de CP Studio.
@@ -136,6 +137,7 @@ pub fn lucide(name: &str) -> Option<Icon> {
     Some(match name {
         "Guitar" => Icon::Guitar,
         "Piano" => Icon::Piano,
+        "Grid" => Icon::Grid,
         "Play" => Icon::Play,
         "Stop" => Icon::Stop,
         "Repeat" => Icon::Repeat,

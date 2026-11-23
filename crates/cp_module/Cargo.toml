@@ -12,6 +12,8 @@ name = "cp_module"
 crate-type = ["cdylib"]
 
 [dependencies]
+cp_session = { path = "../cp_session" }
+cp_sessionview = { path = "../cp_sessionview" }
 cp_abi = { path = "../cp_abi" }
 cp_browser = { path = "../cp_browser" }
 cp_editview = { path = "../cp_editview" }
