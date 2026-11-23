@@ -133,18 +133,87 @@ pub fn musicxml(notes: &[TabNote], spec: &ScoreSpec) -> (String, Stats) {
     write_musicxml(&tab, spec, dropped)
 }
 
+/// Le silence qui ferme une phrase d'un jeu libre, en secondes.
+pub const PHRASE_GAP_S: f64 = 0.6;
+
+/// Les phrases d'un jeu libre : (debut, fin) en noires, coupees aux silences
+/// de plus de [`PHRASE_GAP_S`] (a `bpm`).
+pub fn phrases(notes: &[TNote], bpm: f64) -> Vec<(f64, f64)> {
+    let gap = PHRASE_GAP_S * bpm.max(1.0) / 60.0;
+    let mut order: Vec<&TNote> = notes.iter().collect();
+    order.sort_by(|a, b| a.qn0.total_cmp(&b.qn0));
+    let mut v: Vec<(f64, f64)> = Vec::new();
+    for n in order {
+        match v.last_mut() {
+            Some(l) if n.qn0 <= l.1 + gap => l.1 = l.1.max(n.qn1),
+            _ => v.push((n.qn0, n.qn1)),
+        }
+    }
+    v
+}
+
+/// Les mesures d'un jeu libre, pour les logiciels qui en veulent : une par
+/// phrase, longue comme elle et le silence qui la suit, sur la grille (un
+/// chiffrage en doubles croches, cache a l'ecriture). Rend (debut, mesures).
+pub fn phrase_meter(notes: &[TNote], bpm: f64, grid: u32) -> Option<(f64, crate::meter::Meter)> {
+    let ph = phrases(notes, bpm);
+    let g = grid.max(1) as f64;
+    let den = 4 * grid.max(1) as i32;
+    let mut starts: Vec<f64> = Vec::new();
+    for p in &ph {
+        let a = (p.0 * g).floor() / g;
+        if starts.last().is_none_or(|&l| a > l + 1e-9) {
+            starts.push(a);
+        }
+    }
+    let first = *starts.first()?;
+    let end = (ph.last().map_or(first, |p| p.1) * g).ceil() / g;
+    let mut changes = Vec::new();
+    for (k, &a) in starts.iter().enumerate() {
+        let b = starts.get(k + 1).copied().unwrap_or(end.max(a + 1.0 / g));
+        let n = (((b - a) * g).round() as i32).max(1);
+        changes.push((a, (n, den)));
+    }
+    Some((first, crate::meter::Meter::new(changes)))
+}
+
 /// Ecrit une tablature (deja doigtee) en MusicXML.
 pub fn write_musicxml(notes: &[TNote], spec: &ScoreSpec, dropped: usize) -> (String, Stats) {
-    let eng = match &spec.meter {
-        Some(m) => crate::engrave::engrave_meter(
+    write_musicxml_in(notes, spec, dropped, false)
+}
+
+/// Ecrit un jeu libre (sans mesures) : une mesure par phrase, chiffrage
+/// cache, barres invisibles, « ad lib. » en tete.
+pub fn write_musicxml_free(notes: &[TNote], spec: &ScoreSpec, dropped: usize) -> (String, Stats) {
+    write_musicxml_in(notes, spec, dropped, true)
+}
+
+fn write_musicxml_in(
+    notes: &[TNote],
+    spec: &ScoreSpec,
+    dropped: usize,
+    free: bool,
+) -> (String, Stats) {
+    let free_meter = if free {
+        phrase_meter(notes, spec.bpm, spec.grid)
+    } else {
+        None
+    };
+    let free = free_meter.is_some();
+    let eng = match (&free_meter, &spec.meter) {
+        (Some((o, m)), _) => {
+            crate::engrave::engrave_meter(notes, *o, m, spec.grid, crate::key::detect(notes))
+        }
+        (None, Some(m)) => crate::engrave::engrave_meter(
             notes,
             spec.origin_qn,
             m,
             spec.grid,
             crate::key::detect(notes),
         ),
-        None => engrave(notes, spec.origin_qn, spec.sig, spec.grid),
+        (None, None) => engrave(notes, spec.origin_qn, spec.sig, spec.grid),
     };
+    let hide = if free { " print-object=\"no\"" } else { "" };
     let tuning = &spec.tuning;
     let stats = Stats {
         notes: eng.notes,
@@ -173,14 +242,14 @@ pub fn write_musicxml(notes: &[TNote], spec: &ScoreSpec, dropped: usize) -> (Str
     for m in 0..eng.measures {
         let _ = writeln!(x, "    <measure number=\"{}\">", m + 1);
         // Une reprise qui s'ouvre : le premier element de la mesure.
-        if spec.repeats.iter().any(|r| r.m0 == m) {
+        if !free && spec.repeats.iter().any(|r| r.m0 == m) {
             x += "      <barline location=\"left\"><bar-style>heavy-light</bar-style><repeat direction=\"forward\"/></barline>\n";
         }
         if m > 0 && eng.sig_of(m) != eng.sig_of(m - 1) {
             let sg = eng.sig_of(m);
             let _ = writeln!(
                 x,
-                "      <attributes><time><beats>{}</beats><beat-type>{}</beat-type></time></attributes>",
+                "      <attributes><time{hide}><beats>{}</beats><beat-type>{}</beat-type></time></attributes>",
                 sg.0, sg.1
             );
         }
@@ -196,7 +265,7 @@ pub fn write_musicxml(notes: &[TNote], spec: &ScoreSpec, dropped: usize) -> (Str
             let sg0 = eng.sig_of(0);
             let _ = writeln!(
                 x,
-                "        <time><beats>{}</beats><beat-type>{}</beat-type></time>",
+                "        <time{hide}><beats>{}</beats><beat-type>{}</beat-type></time>",
                 sg0.0, sg0.1
             );
             x += "        <staves>2</staves>\n";
@@ -222,15 +291,23 @@ pub fn write_musicxml(notes: &[TNote], spec: &ScoreSpec, dropped: usize) -> (Str
             }
             x += "        </staff-details>\n";
             x += "      </attributes>\n";
-            let _ = writeln!(
-                x,
-                "      <direction placement=\"above\"><direction-type><metronome><beat-unit>quarter</beat-unit><per-minute>{}</per-minute></metronome></direction-type><sound tempo=\"{}\"/></direction>",
-                spec.bpm.round(),
-                spec.bpm
-            );
+            if free {
+                let _ = writeln!(
+                    x,
+                    "      <direction placement=\"above\"><direction-type><words font-style=\"italic\">ad lib.</words></direction-type><sound tempo=\"{}\"/></direction>",
+                    spec.bpm
+                );
+            } else {
+                let _ = writeln!(
+                    x,
+                    "      <direction placement=\"above\"><direction-type><metronome><beat-unit>quarter</beat-unit><per-minute>{}</per-minute></metronome></direction-type><sound tempo=\"{}\"/></direction>",
+                    spec.bpm.round(),
+                    spec.bpm
+                );
+            }
         }
         // Les changements de tempo de la mesure (celui du debut est en tete).
-        if let Some(mt) = &spec.meter {
+        if let Some(mt) = spec.meter.as_ref().filter(|_| !free) {
             let (q0, q1) = (eng.qn(eng.bar_start(m)), eng.qn(eng.bar_start(m + 1)));
             for &(q, bpm) in mt
                 .tempos
@@ -424,8 +501,12 @@ pub fn write_musicxml(notes: &[TNote], spec: &ScoreSpec, dropped: usize) -> (Str
                 }
             }
         }
+        // Le jeu libre : aucune barre.
+        if free {
+            x += "      <barline location=\"right\"><bar-style>none</bar-style></barline>\n";
+        }
         // Une reprise qui se ferme : combien de fois.
-        if let Some(r) = spec.repeats.iter().find(|r| r.m0 + r.len - 1 == m) {
+        if let Some(r) = spec.repeats.iter().find(|r| !free && r.m0 + r.len - 1 == m) {
             let _ = writeln!(
                 x,
                 "      <barline location=\"right\"><bar-style>light-heavy</bar-style><repeat direction=\"backward\" times=\"{}\"/></barline>",

@@ -50,11 +50,55 @@ impl Item {
         &self.eng
     }
 
-    /// Une position calee sur la grille de l'item.
+    /// Une position calee sur la grille de l'item ; en jeu libre, sur une
+    /// attaque de l'audio a 50 ms au plus (sinon telle quelle).
     pub fn snap(&self, qn: f64) -> f64 {
+        if self.free {
+            let tol = 0.05 * self.bpm.max(1.0) / 60.0;
+            return self.attack_near(qn, tol).unwrap_or(qn);
+        }
         let g = self.detect.grid.max(1) as f64;
         let o = self.origin_qn;
         o + ((qn - o) * g).round() / g
+    }
+
+    /// L'attaque la plus proche de `q`, a `tol` noires au plus.
+    pub fn attack_near(&self, q: f64, tol: f64) -> Option<f64> {
+        let k = self.attacks.partition_point(|&a| a < q);
+        [k.checked_sub(1), Some(k)]
+            .into_iter()
+            .flatten()
+            .filter_map(|j| self.attacks.get(j).copied())
+            .filter(|a| (a - q).abs() <= tol)
+            .min_by(|a, b| (a - q).abs().total_cmp(&(b - q).abs()))
+    }
+
+    /// Les attaques de l'audio, lues dans la courbe d'attaque de l'analyse :
+    /// ses sommets au-dessus du seuil des fantomes, 40 ms au moins entre
+    /// deux.
+    pub fn refresh_attacks(&mut self) {
+        let n = self.onset.len().min(self.frame_qn.len());
+        let thr = self.detect.ghost_onset();
+        let min_gap = 0.04 * self.bpm.max(1.0) / 60.0;
+        let mut out: Vec<(f64, f32)> = Vec::new();
+        for f in 0..n {
+            let v = self.onset[f];
+            let left = if f > 0 { self.onset[f - 1] } else { 0.0 };
+            let right = if f + 1 < n { self.onset[f + 1] } else { 0.0 };
+            if v < thr || v < left || v <= right {
+                continue;
+            }
+            let q = self.frame_qn[f];
+            match out.last_mut() {
+                Some(l) if q - l.0 < min_gap => {
+                    if v > l.1 {
+                        *l = (q, v);
+                    }
+                }
+                _ => out.push((q, v)),
+            }
+        }
+        self.attacks = out.into_iter().map(|x| x.0).collect();
     }
 
     /// Change la case d'une note (meme corde, autre hauteur).
@@ -139,9 +183,15 @@ impl Item {
         let t = self.detect.tuning();
         let open = *t.strings.get(string)?;
         let q0 = self.snap(qn);
+        // En jeu libre : un quart de seconde.
+        let len = if self.free {
+            0.25 * self.bpm.max(1.0) / 60.0
+        } else {
+            2.0 / self.detect.grid.max(1) as f64
+        };
         let n = TNote {
             qn0: q0,
-            qn1: q0 + 2.0 / self.detect.grid.max(1) as f64,
+            qn1: q0 + len,
             pitch: open + fret,
             string,
             fret,

@@ -1154,3 +1154,82 @@ fn ce_que_la_relecture_a_trouve_dans_la_partition() {
             .index
     );
 }
+
+#[test]
+fn le_mode_libre_reconnait_un_accord_a_30_ms() {
+    // 120 BPM : 30 ms = 0,06 noire. Un accord gratte (0, 12, 25 ms), puis
+    // une note 50 ms apres la premiere : elle est seule.
+    let t = Tuning::standard();
+    let q = |ms: f64| ms / 1000.0 * 2.0;
+    let notes = vec![
+        tn(1.0 + q(0.0), 1.0, 52, false),
+        tn(1.0 + q(12.0), 1.0, 55, false),
+        tn(1.0 + q(25.0), 1.0, 59, false),
+        tn(1.0 + q(80.0), 0.5, 64, false),
+    ];
+    let (tab, dropped) = doc::finger_by(&notes, doc::Chords::Within(0.03), 120.0, &t);
+    assert_eq!(dropped, 0);
+    assert_eq!(tab.len(), 4);
+    // Trois cordes differentes pour l'accord : jouees ensemble.
+    let mut strings: Vec<usize> = tab[..3].iter().map(|n| n.string).collect();
+    strings.sort_unstable();
+    strings.dedup();
+    assert_eq!(strings.len(), 3);
+    // Chaque note garde son temps joue.
+    assert!((tab[1].qn0 - (1.0 + q(12.0))).abs() < 1e-9);
+    // Sur la grille du mode mesures, 12 ms tombe sur la meme case aussi ;
+    // mais a 30 ms de tolerance, 80 ms n'est plus l'accord.
+    let (tab2, _) = doc::finger_by(&notes, doc::Chords::Within(0.1), 120.0, &t);
+    let mut s2: Vec<usize> = tab2.iter().map(|n| n.string).collect();
+    s2.sort_unstable();
+    s2.dedup();
+    assert_eq!(s2.len(), 4, "a 100 ms, les quatre font un accord");
+}
+
+#[test]
+fn le_mode_libre_s_exporte_sans_barre() {
+    let t = Tuning::standard();
+    // Deux phrases separees d'une seconde de silence (120 BPM : 2 noires).
+    let notes = vec![
+        tn(0.3, 0.4, 52, false),
+        tn(0.9, 0.5, 55, false),
+        tn(1.6, 0.3, 57, false),
+        tn(4.2, 0.6, 59, false),
+        tn(5.1, 0.8, 57, false),
+    ];
+    let (tab, dropped) = doc::finger_by(&notes, doc::Chords::Within(0.03), 120.0, &t);
+    let ph = crate::score::phrases(&tab, 120.0);
+    assert_eq!(ph.len(), 2);
+    let (o, m) = crate::score::phrase_meter(&tab, 120.0, 4).expect("des phrases");
+    assert!(
+        (o - 0.25).abs() < 1e-9,
+        "la premiere phrase part sur la grille : {o}"
+    );
+    // Une mesure par phrase : la seconde commence a la sienne.
+    assert_eq!(m.changes.len(), 2);
+    assert!((m.changes[1].0 - 4.0).abs() < 1e-9);
+    let spec = ScoreSpec {
+        meter: None,
+        repeats: Vec::new(),
+        title: "Ad lib".into(),
+        origin_qn: 0.0,
+        sig: (4, 4),
+        bpm: 120.0,
+        grid: 4,
+        tuning: t,
+    };
+    let (xml, st) = crate::score::write_musicxml_free(&tab, &spec, dropped);
+    assert_eq!(st.notes, 5);
+    // Le chiffrage est cache (les logiciels veulent des mesures).
+    assert!(xml.contains("<time print-object=\"no\">"));
+    assert!(xml.contains("ad lib."));
+    assert!(!xml.contains("<metronome>"));
+    // Chaque mesure se ferme sans barre visible.
+    let measures = xml.matches("<measure ").count();
+    assert_eq!(xml.matches("<bar-style>none</bar-style>").count(), measures);
+    assert!(!xml.contains("light-heavy"));
+    // Le mode mesures garde son tempo et ses barres.
+    let (xml2, _) = crate::score::write_musicxml(&tab, &spec, dropped);
+    assert!(xml2.contains("<metronome>"));
+    assert!(!xml2.contains("<bar-style>none</bar-style>"));
+}

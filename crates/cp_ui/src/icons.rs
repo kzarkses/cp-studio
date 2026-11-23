@@ -57,6 +57,8 @@ pub enum Icon {
     Reverse,
     Normalize,
     Bars,
+    /// Le jeu libre (sans mesure) : une onde.
+    Free,
 }
 
 impl Icon {
@@ -173,6 +175,7 @@ impl Icon {
                 r#"<path d="M12 2v20" /><path d="m8 18 4 4 4-4" /><path d="m8 6 4-4 4 4" />"#
             }
             Icon::Bars => r#"<path d="M5 21v-6" /><path d="M12 21V3" /><path d="M19 21V9" />"#,
+            Icon::Free => r#"<path d="M2 12c2.5-6 5-6 7.5 0s5 6 7.5 0c1.2-3 2.5-4.5 5-4.5" />"#,
         }
     }
 }
@@ -295,6 +298,7 @@ mod tests {
             Icon::Reverse,
             Icon::Normalize,
             Icon::Bars,
+            Icon::Free,
         ];
         for i in all {
             let (n, m) = c.mask(i, 24, false);

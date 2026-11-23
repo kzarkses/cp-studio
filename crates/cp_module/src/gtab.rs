@@ -60,13 +60,14 @@ const TITLE: &str = "Guitar Tab";
 const IDENT: &str = "cp_studio_guitartab";
 
 /// Les donnees privees lues sur chaque piste.
-const TKEYS: [&str; 6] = [
+const TKEYS: [&str; 7] = [
     "CPGT_role",
     "CPGT_tab",
     "CPGT_bus",
     "CPGT_lanes",
     "CPGT_tuning",
     "CPGT_pan",
+    "CPGT_free",
 ];
 const K_ROLE: usize = 0;
 const K_TAB: usize = 1;
@@ -74,6 +75,7 @@ const K_BUS: usize = 2;
 const K_LANES: usize = 3;
 const K_TUNING: usize = 4;
 const K_PAN: usize = 5;
+const K_FREE: usize = 6;
 /// ... et sur chaque item.
 const IKEYS: [&str; 4] = ["CPGT_midi", "CPGT_src", "CPGT_take", "CPGT_aoffs"];
 const I_MIDI: usize = 0;
@@ -670,7 +672,14 @@ impl App {
         let tuning = it.detect.tuning();
         let grid = it.detect.grid;
         let notes = self.gtab_notes(it, false);
-        let (mut fresh, dropped) = doc::finger(&notes, grid, it.bpm, &tuning);
+        // En jeu libre, pas de grille : un accord, ce sont des notes a moins
+        // de 30 ms l'une de l'autre.
+        let by = if it.free {
+            doc::Chords::Within(cp_tabview::FREE_CHORD_S)
+        } else {
+            doc::Chords::Grid(grid)
+        };
+        let (mut fresh, dropped) = doc::finger_by(&notes, by, it.bpm, &tuning);
         if let Some((a, b)) = range {
             for f in &mut fresh {
                 if f.qn0 >= a && f.qn0 < b {
@@ -1198,6 +1207,7 @@ impl App {
                     .as_deref()
                     .map(Lanes::from_text)
                     .unwrap_or_default(),
+                free: a.ext[K_FREE].as_deref() == Some("1"),
             };
             // Les items MIDI de la piste tab, par GUID.
             let tab_items: HashMap<&str, &ItemSnap> = tab
@@ -1441,6 +1451,10 @@ impl App {
         if let Some(mut o) = old {
             o.fade_in = fade_in;
             o.fade_out = fade_out;
+            if o.free != head.free {
+                o.free = head.free;
+                o.touch();
+            }
             // Le chiffrage du projet a change : la partition se refait.
             if o.meter.as_ref() != Some(&meter) || (o.origin_qn - o_qn).abs() > 1e-9 {
                 o.meter = Some(meter.clone());
@@ -1516,6 +1530,7 @@ impl App {
         it.active = is.active;
         it.midi = midi.is_some();
         it.detect.tuning = head.tuning;
+        it.free = head.free;
         let src = Src {
             path: tk.path.clone(),
             offs: tk.offs,
@@ -1564,6 +1579,7 @@ impl App {
                 .collect();
             it.env = ana.env.clone();
             it.onset = ana.onset.clone();
+            it.refresh_attacks();
         }
         // La tablature : le MIDI s'il est celui de cette prise, sinon celle
         // gardee pour la prise, sinon un decodage neuf.
@@ -1901,7 +1917,8 @@ impl App {
     /// La prise telle qu'elle s'exporte : compactee en reprises si elles
     /// sont demandees.
     fn gtab_for_export(&self, it: &Item) -> Item {
-        if self.gtab_repeats_on() {
+        // Un jeu libre n'a pas de mesure a reprendre.
+        if self.gtab_repeats_on() && !it.free {
             cp_tabview::print::with_repeats(it)
         } else {
             it.clone()
@@ -1920,7 +1937,11 @@ impl App {
             grid: it.detect.grid,
             tuning: it.detect.tuning(),
         };
-        let (xml, st) = write_musicxml(&it.doc, &spec, it.dropped);
+        let (xml, st) = if it.free {
+            cp_tab::score::write_musicxml_free(&it.doc, &spec, it.dropped)
+        } else {
+            write_musicxml(&it.doc, &spec, it.dropped)
+        };
         let dir = self.gtab_dir();
         let _ = std::fs::create_dir_all(&dir);
         let path = free_path(&dir, &clean_name(&it.name), "musicxml");
@@ -2451,6 +2472,17 @@ impl App {
                     r.set_track_ext(&h.guid, "CPGT_lanes", &h.lanes.to_text());
                 }
             }
+            GAct::Free { t } => {
+                if let Some(h) = head(self, t) {
+                    let v = if h.free { "1" } else { "0" };
+                    r.set_track_ext(&h.guid, "CPGT_free", v);
+                    self.host.info(&format!(
+                        "Guitar Tab : « {} » {}",
+                        h.name,
+                        if h.free { "en jeu libre" } else { "en mesures" }
+                    ));
+                }
+            }
             GAct::Listen => self.gtab_apply_listen(),
             GAct::AddTrack => self.gtab_add_menu(),
             GAct::TrackMenu { t, x, y } => self.gtab_track_menu(t, x, y),
@@ -2849,6 +2881,12 @@ impl App {
                 id: 6,
                 text: "Repeats in exports",
                 checked: self.gtab_repeats_on(),
+                enabled: !h.free,
+            }),
+            Some(MenuItem {
+                id: 7,
+                text: "Free time (no bars)",
+                checked: h.free,
                 enabled: true,
             }),
             None,
@@ -2871,6 +2909,11 @@ impl App {
             6 => {
                 let v = if self.gtab_repeats_on() { "0" } else { "1" };
                 r.ext_set(SECTION, "gt_repeats", v, true);
+            }
+            7 => {
+                if let Some(a) = self.gt.arr.toggle_free(t) {
+                    self.gtab_act(a);
+                }
             }
             1 => {
                 if let Some(n) = r.user_inputs("Rename guitar track", 1, "Name", &h.name) {

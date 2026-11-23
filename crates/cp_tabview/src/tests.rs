@@ -2384,3 +2384,155 @@ fn quatre_reprises_dans_un_systeme() {
         "chaque quart de la ligne a ses notes : {ink_cols:?}"
     );
 }
+
+/// Le jeu libre : chaque chiffre a la date de sa note (pas sur une grille),
+/// et aucune barre de mesure dans la tablature.
+#[test]
+fn jeu_libre_chaque_note_a_sa_date_sans_barre() {
+    use cp_tab::doc::TNote;
+    let mut b = Bench::new(1600, 900);
+    let mut v = arranger();
+    v.rec.clear();
+    let q0 = v.tracks[0].items[0].qn0;
+    let note = |q: f64, string: usize, fret: i32| {
+        let open = [40, 45, 50, 55, 59, 64][string];
+        TNote {
+            qn0: q0 + q,
+            qn1: q0 + q + 0.4,
+            pitch: open + fret,
+            string,
+            fret,
+            vel: 96,
+            ..Default::default()
+        }
+    };
+    // Des dates hors de toute grille.
+    let d = vec![note(0.13, 3, 5), note(0.71, 3, 7), note(1.93, 4, 3)];
+    v.tracks[0].items[0].set_doc(d.clone());
+    v.tracks[0].items[0].ghosts.clear();
+    let tab_box = |v: &Arr, n: usize| {
+        v.boxes
+            .iter()
+            .filter(|x| x.4 == Hit::Note { t: 0, i: 0, n })
+            .max_by(|a, b| a.1.partial_cmp(&b.1).unwrap())
+            .map(|x| (x.0 + x.2 * 0.5, x.1 + x.3 * 0.5))
+            .expect("la note dans la tab")
+    };
+    // Avec mesures : la premiere tombe sur sa double croche.
+    b.draw(&mut v);
+    let grid_x = tab_box(&v, 0).0;
+    let (_, y_line) = tab_box(&v, 0);
+    let w = b.s.w as usize;
+    let bar_x = v.x_of(q0 + 4.0).round() as usize;
+    let probe_y = (y_line + 5.5).round() as usize;
+    let with_bar = b.s.px[probe_y * w + bar_x];
+    assert!(v.toggle_free(0).is_some());
+    b.shot(&mut v, "17_jeu_libre");
+    for (n, nt) in d.iter().enumerate() {
+        let x = tab_box(&v, n).0;
+        let want = v.x_of(nt.qn0) + 5.0;
+        assert!((x - want).abs() < 2.5, "note {n} : {x} au lieu de {want}");
+    }
+    assert!(
+        (grid_x - tab_box(&v, 0).0).abs() > 3.0,
+        "le mode mesures calait la note sur la grille"
+    );
+    // La barre de la mesure 2 a disparu : le fond, comme a cote.
+    let free_px = b.s.px[probe_y * w + bar_x];
+    let beside = b.s.px[probe_y * w + bar_x + 4];
+    assert_ne!(with_bar, free_px, "la barre etait la avec mesures");
+    assert_eq!(free_px, beside, "plus de barre en jeu libre");
+    // La regle compte en secondes : toutes les guitares jouent libre.
+    assert!(!v.all_free());
+    assert!(v.toggle_free(1).is_some());
+    assert!(v.all_free());
+}
+
+/// Le magnetisme du jeu libre : les attaques de l'audio, a 50 ms au plus.
+#[test]
+fn jeu_libre_le_magnetisme_vise_les_attaques() {
+    let mut it = Item {
+        bpm: 120.0,
+        free: true,
+        ..Item::default()
+    };
+    // 600 trames de 0,01 noire (5 ms a 120 BPM).
+    it.frame_qn = (0..600).map(|f| f as f64 * 0.01).collect();
+    it.onset = vec![0.0; 600];
+    it.onset[100] = 0.9;
+    // 10 ms apres : la meme attaque (la plus forte reste).
+    it.onset[102] = 0.5;
+    it.onset[300] = 0.4;
+    // Sous le seuil des fantomes : rien.
+    it.onset[400] = 0.2;
+    it.refresh_attacks();
+    assert_eq!(it.attacks.len(), 2, "{:?}", it.attacks);
+    assert!((it.attacks[0] - 1.0).abs() < 1e-9);
+    assert!((it.attacks[1] - 3.0).abs() < 1e-9);
+    // 0,05 noire = 25 ms : calee ; 0,2 noire = 100 ms : laissee.
+    assert!((it.snap(1.05) - 1.0).abs() < 1e-9);
+    assert!((it.snap(2.0) - 2.0).abs() < 1e-9);
+    // Avec mesures, la grille.
+    it.free = false;
+    assert!((it.snap(1.05) - 1.0).abs() < 1e-9);
+    assert!((it.snap(1.2) - 1.25).abs() < 1e-9);
+}
+
+/// Le PDF d'un jeu libre : une ligne pleine passe a la ligne dans son
+/// dernier silence ; les pages se font sans mesure.
+#[test]
+fn jeu_libre_le_pdf_va_a_la_ligne_dans_un_silence() {
+    use cp_tab::doc::TNote;
+    // 120 BPM : deux phrases de 12 notes (une tous les quarts de seconde),
+    // 1,5 s de silence entre elles.
+    let mut cols: Vec<(f64, Vec<usize>)> = Vec::new();
+    let mut ends = Vec::new();
+    for k in 0..24 {
+        let q = if k < 12 {
+            k as f64 * 0.5
+        } else {
+            5.5 + 0.4 + 3.0 + (k - 12) as f64 * 0.5
+        };
+        cols.push((q, vec![k]));
+        ends.push(q + 0.4);
+    }
+    let lines = print::free_lines(&cols, &ends, 120.0, 2000.0);
+    assert_eq!((lines[0].0, lines[0].1), (0, 12), "{lines:?}");
+    assert_eq!(lines[1].0, 12);
+    // Une prise libre entiere, en pages.
+    let mut b = Bench::new(64, 64);
+    let mut it = Item {
+        name: "Ad lib.wav".into(),
+        bpm: 120.0,
+        free: true,
+        ..Item::default()
+    };
+    let doc: Vec<TNote> = cols
+        .iter()
+        .map(|(q, _)| TNote {
+            qn0: *q,
+            qn1: q + 0.4,
+            pitch: 64,
+            string: 5,
+            fret: 0,
+            vel: 90,
+            ..Default::default()
+        })
+        .collect();
+    it.set_doc(doc);
+    let mut pages = 0;
+    let (measures, systems) =
+        print::render(&it, Lanes([true, false, true, true]), &mut b.t, &mut |s| {
+            pages += 1;
+            if pages == 1 {
+                std::fs::write(
+                    std::env::temp_dir().join("cp_tabview_18_pdf_libre.png"),
+                    png::encode(s),
+                )
+                .unwrap();
+            }
+        });
+    assert_eq!(measures, 0);
+    assert_eq!(systems, 2);
+    assert_eq!(pages, 1);
+}

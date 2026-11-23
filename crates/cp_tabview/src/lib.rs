@@ -51,6 +51,10 @@ pub const TUNINGS: [(&str, [i32; 6]); 5] = [
     ("Open G", [38, 43, 50, 55, 59, 62]),
 ];
 
+/// Le jeu libre : des notes qui commencent a moins de 30 ms l'une de
+/// l'autre sonnent ensemble (un accord gratte s'etale sur quelques ms).
+pub const FREE_CHORD_S: f64 = 0.03;
+
 pub fn tuning_of(k: usize) -> Tuning {
     Tuning {
         strings: TUNINGS[k.min(TUNINGS.len() - 1)].1.to_vec(),
@@ -264,6 +268,9 @@ pub struct Head {
     pub synth: Option<Synth>,
     pub tuning: usize,
     pub lanes: Lanes,
+    /// Le jeu libre : ni mesure ni rythme, chaque note la ou elle sonne, la
+    /// regle en secondes (une prise ad lib, sans tempo).
+    pub free: bool,
 }
 
 impl Default for Head {
@@ -284,6 +291,7 @@ impl Default for Head {
             synth: None,
             tuning: 0,
             lanes: Lanes::default(),
+            free: false,
         }
     }
 }
@@ -363,6 +371,11 @@ pub struct Item {
     pub(crate) eng_ok: bool,
     /// La tonalite de toute la guitare (rien : celle de l'item seul).
     pub key: Option<cp_tab::key::Key>,
+    /// Le jeu libre de sa guitare (voir [`Head::free`]).
+    pub free: bool,
+    /// Les attaques entendues dans l'audio (noires du projet, triees) : le
+    /// magnetisme du jeu libre.
+    pub attacks: Vec<f64>,
 }
 
 impl Track {
@@ -378,13 +391,39 @@ impl Arr {
     pub(crate) fn sync_keys(&mut self) {
         for tr in &mut self.tracks {
             let k = tr.key();
+            let free = tr.head.free;
             for it in &mut tr.items {
                 if it.key != Some(k) {
                     it.key = Some(k);
                     it.touch();
                 }
+                if it.free != free {
+                    it.free = free;
+                    it.touch();
+                }
             }
         }
+    }
+
+    /// Toutes les guitares jouent libre (la regle compte alors en secondes).
+    pub fn all_free(&self) -> bool {
+        !self.tracks.is_empty() && self.tracks.iter().all(|t| t.head.free)
+    }
+
+    /// L'attaque la plus proche de `q` (a `tol` noires au plus) dans les
+    /// prises des guitares qui jouent libre.
+    pub fn attack_near(&self, q: f64, tol: f64) -> Option<f64> {
+        let mut best: Option<f64> = None;
+        for tr in self.tracks.iter().filter(|t| t.head.free) {
+            for it in &tr.items {
+                if let Some(a) = it.attack_near(q, tol) {
+                    if best.is_none_or(|b| (a - q).abs() < (b - q).abs()) {
+                        best = Some(a);
+                    }
+                }
+            }
+        }
+        best
     }
 }
 
@@ -473,6 +512,8 @@ pub enum Hit {
         t: usize,
         lane: Lane,
     },
+    /// Le jeu libre d'une guitare (le bouton de l'en-tete).
+    FreeToggle(usize),
     /// Le bord d'une prise (le rognage, comme dans l'arrangement).
     ItemEdge {
         t: usize,
@@ -611,6 +652,10 @@ pub enum Act {
     },
     /// Les couches montrees d'une piste ont change (a retenir).
     Lanes {
+        t: usize,
+    },
+    /// Le jeu libre d'une guitare a change : le retenir.
+    Free {
         t: usize,
     },
     /// Ce qu'on entend a change ([`Arr::listen`], [`Arr::split`]).
@@ -2434,6 +2479,11 @@ impl Arr {
 
     /// Le debut d'une prise glissee, cale par le magnetisme de REAPER.
     fn snap_item(&self, q: f64) -> f64 {
+        // Le jeu libre : pas de grille ; les attaques de l'audio, a 8 px.
+        if self.all_free() {
+            let tol = (8.0 * self.scale / self.lay.ppq.max(1e-3)) as f64;
+            return self.attack_near(q, tol).unwrap_or(q);
+        }
         // Le magnetisme de REAPER lui-meme (tous ses reglages) : la vue a le
         // zoom de l'arrangement, il cale comme lui.
         if let Some(f) = &self.snapper {
@@ -2646,6 +2696,7 @@ impl Arr {
                 None
             }
             Hit::LaneToggle { t, lane } => self.toggle_lane(t, lane),
+            Hit::FreeToggle(t) => self.toggle_free(t),
             Hit::Arm(t) => Some(Act::Arm { t }),
             Hit::Input(t) => Some(Act::InputMenu { t, x, y }),
             Hit::Monitor(t) => Some(Act::Monitor { t }),
@@ -2860,6 +2911,15 @@ impl Arr {
 
     /// Montre ou cache une couche d'une piste (le menu de la piste). Une
     /// piste garde au moins une couche.
+    /// Le jeu libre d'une guitare, ou ses mesures.
+    pub fn toggle_free(&mut self, t: usize) -> Option<Act> {
+        let h = &mut self.tracks.get_mut(t)?.head;
+        h.free = !h.free;
+        self.sync_keys();
+        self.dirty = true;
+        Some(Act::Free { t })
+    }
+
     pub fn toggle_lane(&mut self, t: usize, lane: Lane) -> Option<Act> {
         let l = &mut self.tracks.get_mut(t)?.head.lanes;
         l.0[lane as usize] = !l.0[lane as usize];
@@ -3024,6 +3084,13 @@ impl Arr {
             Hit::Tuning(_) => "Tuning (click: next)".into(),
             Hit::Header(_) => {
                 "Drag: move the guitar \u{00b7} right-click: lanes, rename, delete".into()
+            }
+            Hit::FreeToggle(t) => {
+                if self.tracks.get(t).is_some_and(|x| x.head.free) {
+                    "Free time: no bars, ruler in seconds (click: bars)".into()
+                } else {
+                    "Bars (click: free time, no bars)".into()
+                }
             }
             Hit::LaneToggle { lane, .. } => format!(
                 "{} lane",

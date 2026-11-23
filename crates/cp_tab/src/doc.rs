@@ -212,17 +212,66 @@ struct Member {
     vibrato: bool,
 }
 
+/// Comment les notes d'un accord se reconnaissent.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Chords {
+    /// Elles commencent sur la meme case de la grille (`grid` par noire).
+    Grid(u32),
+    /// Elles commencent a moins de tant de secondes de la premiere (le mode
+    /// libre, sans grille : un accord gratte s'etale sur quelques ms).
+    Within(f64),
+}
+
+/// Les cases par noire du mode libre : assez fines pour garder le temps
+/// joue (une demi-milliseconde a 120 BPM).
+pub const FREE_CELLS: u32 = 960;
+
 /// Des notes detectees a la tablature. Les notes qui commencent sur la meme
 /// case de la grille (`grid` par noire) forment un accord ; le doigte se
 /// choisit sur toute la phrase ([`fret::assign`]) ; une note sans attaque
 /// collee a la precedente sur la meme corde est un marteau ou un tire. Rend
 /// (tablature, notes injouables laissees de cote).
 pub fn finger(notes: &[TabNote], grid: u32, bpm: f64, tuning: &Tuning) -> (Vec<TNote>, usize) {
-    let g = grid.max(1) as f64;
+    finger_by(notes, Chords::Grid(grid), bpm, tuning)
+}
+
+/// [`finger`], les accords reconnus selon `by`.
+pub fn finger_by(notes: &[TabNote], by: Chords, bpm: f64, tuning: &Tuning) -> (Vec<TNote>, usize) {
+    let (g, tol_cells) = match by {
+        Chords::Grid(grid) => (grid.max(1) as f64, 0i64),
+        Chords::Within(sec) => {
+            let g = FREE_CELLS as f64;
+            (g, (sec.max(0.0) * bpm.max(1.0) / 60.0 * g).round() as i64)
+        }
+    };
+    // La case de chaque note : la sienne sur la grille, ou celle de la
+    // premiere note de son accord (mode libre).
+    let mut cell = vec![0i64; notes.len()];
+    match by {
+        Chords::Grid(_) => {
+            for (k, n) in notes.iter().enumerate() {
+                cell[k] = (n.qn0 * g).round() as i64;
+            }
+        }
+        Chords::Within(_) => {
+            let mut order: Vec<usize> = (0..notes.len()).collect();
+            order.sort_by(|&a, &b| notes[a].qn0.total_cmp(&notes[b].qn0));
+            let mut start: Option<i64> = None;
+            for k in order {
+                let c = (notes[k].qn0 * g).round() as i64;
+                let s = match start {
+                    Some(s) if c - s <= tol_cells => s,
+                    _ => c,
+                };
+                start = Some(s);
+                cell[k] = s;
+            }
+        }
+    }
     // Les accords.
     let mut groups: BTreeMap<i64, Vec<Member>> = BTreeMap::new();
-    for n in notes {
-        let s = (n.qn0 * g).round() as i64;
+    for (k, n) in notes.iter().enumerate() {
+        let s = cell[k];
         let p = fret::fold(n.pitch, tuning);
         let gr = groups.entry(s).or_default();
         if let Some(x) = gr.iter_mut().find(|x| x.p == p) {
@@ -302,7 +351,7 @@ pub fn finger(notes: &[TabNote], grid: u32, bpm: f64, tuning: &Tuning) -> (Vec<T
             if let Some((a, a_end)) = prev_single {
                 let (legato, slid) = (gr[0].legato, gr[0].slid);
                 if (legato || slid)
-                    && a_end == s
+                    && a_end >= s - tol_cells
                     && out[a].string == out[b].string
                     && out[a].pitch != out[b].pitch
                 {

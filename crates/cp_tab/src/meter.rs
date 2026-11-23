@@ -181,11 +181,72 @@ impl Meter {
         n.index = b.index + 1;
         n
     }
+
+    /// Les paliers de tempo depuis la noire 0 : (noire, BPM), le premier a
+    /// 0 (`bpm0` sans tempo connu, ou avant le premier).
+    fn steps(&self, bpm0: f64) -> Vec<(f64, f64)> {
+        let mut v: Vec<(f64, f64)> = vec![(0.0, bpm0.max(1.0))];
+        for &(q, b) in &self.tempos {
+            if q <= EPS {
+                v[0].1 = b.max(1.0);
+            } else {
+                v.push((q, b.max(1.0)));
+            }
+        }
+        v
+    }
+
+    /// Les secondes du projet a la noire `qn` (le tempo par paliers ; une
+    /// rampe de REAPER se lit comme son palier de depart).
+    pub fn seconds(&self, qn: f64, bpm0: f64) -> f64 {
+        let st = self.steps(bpm0);
+        let mut t = 0.0;
+        for (k, &(q, b)) in st.iter().enumerate() {
+            let end = st.get(k + 1).map_or(f64::INFINITY, |x| x.0);
+            if qn <= end || k + 1 == st.len() {
+                return t + (qn - q) * 60.0 / b;
+            }
+            t += (end - q) * 60.0 / b;
+        }
+        t
+    }
+
+    /// La noire a `sec` secondes du projet (l'inverse de [`Meter::seconds`]).
+    pub fn qn_at(&self, sec: f64, bpm0: f64) -> f64 {
+        let st = self.steps(bpm0);
+        let mut t = 0.0;
+        for (k, &(q, b)) in st.iter().enumerate() {
+            let end = st.get(k + 1).map_or(f64::INFINITY, |x| x.0);
+            let dt = (end - q) * 60.0 / b;
+            if sec <= t + dt || k + 1 == st.len() {
+                return q + (sec - t) * b / 60.0;
+            }
+            t += dt;
+        }
+        0.0
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn secondes_par_paliers() {
+        // 120 BPM jusqu'a la noire 8 (4 s), puis 60 BPM.
+        let m = Meter::uniform((4, 4)).with_tempos(vec![(0.0, 120.0), (8.0, 60.0)]);
+        assert!((m.seconds(4.0, 100.0) - 2.0).abs() < 1e-9);
+        assert!((m.seconds(8.0, 100.0) - 4.0).abs() < 1e-9);
+        assert!((m.seconds(10.0, 100.0) - 6.0).abs() < 1e-9);
+        for q in [0.0, 3.3, 8.0, 9.25, 40.0] {
+            let t = m.seconds(q, 100.0);
+            assert!((m.qn_at(t, 100.0) - q).abs() < 1e-9, "{q}");
+        }
+        // Sans tempo : celui qu'on donne.
+        let u = Meter::uniform((4, 4));
+        assert!((u.seconds(3.0, 90.0) - 2.0).abs() < 1e-9);
+        assert!((u.qn_at(2.0, 90.0) - 3.0).abs() < 1e-9);
+    }
 
     #[test]
     fn un_seul_chiffrage() {

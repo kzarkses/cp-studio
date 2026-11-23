@@ -1074,6 +1074,64 @@ impl Arr {
     // Les pistes
     // -----------------------------------------------------------------------
 
+    /// La regle du jeu libre : les secondes du projet (m:ss), sans mesure.
+    fn draw_seconds(
+        &self,
+        cv: &mut Canvas<'_>,
+        text: &mut TextCache,
+        th: &Theme,
+        geo: &Geo,
+        ry: f32,
+    ) {
+        let l = self.lay;
+        let s = |v: f32| th.s(v);
+        let bpm0 = self.bpm.max(1.0);
+        let m = &self.meter;
+        let q0 = self.scroll.max(0.0);
+        let q1 = (self.scroll + self.view_qn()).max(q0);
+        let (t0, t1) = (m.seconds(q0, bpm0), m.seconds(q1, bpm0));
+        // La place d'une seconde ici, et le pas des etiquettes (56 px au
+        // moins entre deux).
+        let pps = (geo.x(m.qn_at(t0 + 1.0, bpm0)) - geo.x(m.qn_at(t0, bpm0))).max(1e-3);
+        let step = [
+            0.1, 0.25, 0.5, 1.0, 2.0, 5.0, 10.0, 15.0, 30.0, 60.0, 120.0, 300.0,
+        ]
+        .into_iter()
+        .find(|&st| pps * st as f32 >= s(56.0))
+        .unwrap_or(600.0);
+        let sub = if pps * (step / 5.0) as f32 >= s(7.0) {
+            5
+        } else if pps * (step / 2.0) as f32 >= s(7.0) {
+            2
+        } else {
+            1
+        };
+        let fb = Font::new(0, s(10.5) as u16, 600);
+        let (k0, k1) = ((t0 / step).floor() as i64, (t1 / step).ceil() as i64);
+        for k in k0.max(0)..=k1 {
+            let t = k as f64 * step;
+            let x = geo.x(m.qn_at(t, bpm0)).round();
+            cv.fill_rect(x, ry + s(3.0), 1.0, l.ruler_h - s(3.0), th.text_faint);
+            let lab = if step < 1.0 {
+                format!("{}:{:04.1}", (t / 60.0) as i64, t % 60.0)
+            } else {
+                format!("{}:{:02}", (t / 60.0) as i64, (t % 60.0).round() as i64)
+            };
+            text.draw(cv, fb, x + s(4.0), ry + s(14.0), &lab, th.text);
+            for j in 1..sub {
+                let tt = t + step * j as f64 / sub as f64;
+                let xx = geo.x(m.qn_at(tt, bpm0)).round();
+                cv.fill_rect(
+                    xx,
+                    ry + l.ruler_h - s(6.0),
+                    1.0,
+                    s(6.0),
+                    th.text_faint.fade(0.6),
+                );
+            }
+        }
+    }
+
     fn draw_tracks(
         &mut self,
         cv: &mut Canvas<'_>,
@@ -1115,6 +1173,10 @@ impl Arr {
                 cv.fill_rect(xa, ry, xb - xa, l.ruler_h, th.accent.with_alpha(40));
                 cv.fill_rect(xa, ry + l.ruler_h - s(3.0), xb - xa, s(3.0), th.accent);
             }
+            if self.all_free() {
+                self.draw_seconds(cv, text, th, &geo, ry);
+            }
+            let vbars = if self.all_free() { Vec::new() } else { vbars };
             for bar in &vbars {
                 let (m, q) = (bar.index, bar.qn);
                 let x = geo.x(q).round();
@@ -1621,6 +1683,36 @@ impl Arr {
             push(bx, vis, bxx, by, bw, bh, hit);
             bxx += bw + s(4.0);
         }
+        // Le jeu libre (ni mesure ni rythme), a part des couches.
+        bxx += s(6.0);
+        let hit = Hit::FreeToggle(t);
+        let hov = self.hover == hit;
+        let on = hd.free;
+        cv.fill_round_rect(
+            bxx,
+            by,
+            bw,
+            bh,
+            s(3.0),
+            if on {
+                th.accent.with_alpha(if hov { 70 } else { 45 })
+            } else if hov {
+                th.hover
+            } else {
+                th.field
+            },
+        );
+        let isz = s(13.0) as u16;
+        icons.draw(
+            cv,
+            Icon::Free,
+            (bxx + (bw - isz as f32) * 0.5).round(),
+            (by + (bh - isz as f32) * 0.5).round(),
+            isz,
+            if on { th.accent } else { th.text_faint },
+            false,
+        );
+        push(bx, vis, bxx, by, bw, bh, hit);
     }
 
     fn draw_lanes(
@@ -1646,6 +1738,8 @@ impl Arr {
         let sel = self.sel;
         let hover = self.hover;
         let vbars = self.view_bars();
+        // Le jeu libre : aucune ligne verticale (ni grille, ni barre).
+        let free = self.tracks[t].head.free;
         let content_clip = (l.sx, vis.1, l.sw, vis.3);
         // Le fond sous les couches (si l'en-tete est plus haut qu'elles).
         cv.fill_rect(l.label_x, y0, right - l.label_x + s(10.0), h, th.bg);
@@ -1677,7 +1771,7 @@ impl Arr {
             // celui de la zone a redessiner, et la suite de l'image se
             // dessinait par-dessus toute la fenetre (la selection de temps
             // voilee une fois de plus a chaque survol, 2026-11-22).
-            if matches!(lane, Lane::Audio | Lane::Midi) {
+            if matches!(lane, Lane::Audio | Lane::Midi) && !free {
                 if cv.push_clip(l.sx, ly, l.sw, lh) {
                     // La grille de REAPER (sa division, elargie sous 8 px comme
                     // lui) : mesures, temps, et ses lignes entre les temps.
@@ -1785,13 +1879,15 @@ impl Arr {
                         fifths,
                         th.text,
                     );
-                    if cv.push_clip(l.sx, ly, l.sw, lh) {
-                        for bar in &vbars {
-                            let x = geo.x(bar.qn).round();
-                            cv.fill_rect(x, sy, 1.2, 4.0 * gap, staff_c);
+                    if !free {
+                        if cv.push_clip(l.sx, ly, l.sw, lh) {
+                            for bar in &vbars {
+                                let x = geo.x(bar.qn).round();
+                                cv.fill_rect(x, sy, 1.2, 4.0 * gap, staff_c);
+                            }
                         }
+                        cv.pop_clip();
                     }
-                    cv.pop_clip();
                 }
                 Lane::Tab => {
                     let tg = s(11.0);
@@ -1822,13 +1918,15 @@ impl Arr {
                             Align::Right,
                         );
                     }
-                    if cv.push_clip(l.sx, ly, l.sw, lh) {
-                        for bar in &vbars {
-                            let x = geo.x(bar.qn).round();
-                            cv.fill_rect(x, ty, 1.2, (nstr - 1) as f32 * tg, staff_c);
+                    if !free {
+                        if cv.push_clip(l.sx, ly, l.sw, lh) {
+                            for bar in &vbars {
+                                let x = geo.x(bar.qn).round();
+                                cv.fill_rect(x, ty, 1.2, (nstr - 1) as f32 * tg, staff_c);
+                            }
                         }
+                        cv.pop_clip();
                     }
-                    cv.pop_clip();
                 }
                 _ => {}
             }
@@ -2636,6 +2734,7 @@ fn draw_item(
                         bx,
                         content_clip,
                         !lay.shown.on(Lane::Score),
+                        true,
                     );
                 } else if !lay.shown.on(Lane::Score) {
                     draw_pending(
@@ -2949,6 +3048,10 @@ pub(crate) fn draw_score(
     bx: &mut Vec<HBox>,
     clip: (f32, f32, f32, f32),
 ) {
+    if it.free {
+        draw_score_free(cv, text, th, it, t, i, geo, score_y, sel_n, hover, bx, clip);
+        return;
+    }
     let s = |v: f32| v * geo.s;
     it.engraved();
     let eng: Engraved = std::mem::take(&mut it.eng);
@@ -3379,7 +3482,244 @@ pub(crate) fn draw_score(
     it.eng = eng;
 }
 
+/// Une colonne de la tablature : sa place, ses notes (de la plus grave a la
+/// plus aigue), et la liaison qui y arrive depuis la note d'avant (sa place,
+/// son rang).
+struct Col {
+    x: f32,
+    notes: Vec<usize>,
+    lig: Tech,
+    prev: Option<(f32, usize)>,
+}
+
+/// Les colonnes d'un jeu libre : les notes qui commencent a moins de
+/// [`crate::FREE_CHORD_S`] de la premiere sonnent ensemble. (noire de la
+/// premiere, rangs de la plus grave a la plus aigue), dans l'ordre du temps.
+pub(crate) fn free_columns(doc: &[TNote], bpm: f64) -> Vec<(f64, Vec<usize>)> {
+    let tol = crate::FREE_CHORD_S * bpm.max(1.0) / 60.0;
+    let mut order: Vec<usize> = (0..doc.len()).collect();
+    order.sort_by(|&a, &b| doc[a].qn0.total_cmp(&doc[b].qn0));
+    let mut out: Vec<(f64, Vec<usize>)> = Vec::new();
+    for k in order {
+        match out.last_mut() {
+            Some(c) if doc[k].qn0 - c.0 <= tol + 1e-9 => c.1.push(k),
+            _ => out.push((doc[k].qn0, vec![k])),
+        }
+    }
+    for c in &mut out {
+        c.1.sort_by_key(|&n| doc[n].pitch);
+    }
+    out
+}
+
+/// Ou se pose une note d'un jeu libre apres son attaque : son chiffre (ou sa
+/// tete) commence la ou elle sonne.
+pub(crate) fn free_pad(geo: &Geo) -> f32 {
+    geo.pad.min(5.0 * geo.s)
+}
+
+/// Les liaisons d'un jeu libre : une note seule, liee (marteau, tire,
+/// glisse), qui suit la note seule d'avant sur la meme corde sans silence.
+fn free_cols(it: &Item, geo: &Geo, pad: f32) -> Vec<Col> {
+    let fc = free_columns(&it.doc, it.bpm);
+    let tol = crate::FREE_CHORD_S * it.bpm.max(1.0) / 60.0;
+    let mut cols = Vec::with_capacity(fc.len());
+    for (k, (q, notes)) in fc.iter().enumerate() {
+        let mut lig = Tech::Plain;
+        let mut prev = None;
+        if k > 0 && notes.len() == 1 && fc[k - 1].1.len() == 1 {
+            let (pa, pb) = (fc[k - 1].1[0], notes[0]);
+            let (a, b) = (&it.doc[pa], &it.doc[pb]);
+            if b.tech != Tech::Plain
+                && a.string == b.string
+                && a.pitch != b.pitch
+                && a.qn1 >= b.qn0 - tol
+            {
+                lig = b.tech;
+                prev = Some((geo.x(fc[k - 1].0) + pad, pa));
+            }
+        }
+        cols.push(Col {
+            x: geo.x(*q) + pad,
+            notes: notes.clone(),
+            lig,
+            prev,
+        });
+    }
+    cols
+}
+
+/// La partition d'un jeu libre : les tetes a leur date, sans hampe, sans
+/// silence, sans barre ; chaque alteration ecrite sur sa note.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn draw_score_free(
+    cv: &mut Canvas<'_>,
+    text: &mut TextCache,
+    th: &Theme,
+    it: &mut Item,
+    t: usize,
+    i: usize,
+    geo: Geo,
+    score_y: f32,
+    sel_n: Option<usize>,
+    hover: Hit,
+    bx: &mut Vec<HBox>,
+    clip: (f32, f32, f32, f32),
+) {
+    let s = |v: f32| v * geo.s;
+    let ink = th.text;
+    let staff_c = th.text_dim.fade(0.75);
+    let gap = s(8.0);
+    let pad = free_pad(&geo);
+    let lw = geo.lw;
+    let (rx, ry) = (gap * 0.62, gap * 0.46);
+    let y_of = |pos: i32| score_y + 4.0 * gap - pos as f32 * gap * 0.5;
+    let fifths = it.key.unwrap_or_else(|| key::detect(&it.doc)).fifths;
+    let spos = |p: i32| key::spell(p + 12, fifths).staff_pos();
+    let fsharp = Font::new(3, (gap * 2.6) as u16, 400);
+    let cols = free_cols(it, &geo, pad);
+    for col in &cols {
+        let x = col.x;
+        if !geo.visible(x) {
+            continue;
+        }
+        // Sans barre, une alteration ne vaut que pour sa note.
+        let mut acc = key::Accidentals::new(fifths);
+        let ps: Vec<(i32, Option<i32>, usize)> = col
+            .notes
+            .iter()
+            .map(|&n| {
+                let sp = key::spell(it.doc[n].pitch + 12, fifths);
+                (sp.staff_pos(), acc.take(sp), n)
+            })
+            .collect();
+        let lo = ps.iter().map(|p| p.0).min().unwrap_or(0);
+        let hi = ps.iter().map(|p| p.0).max().unwrap_or(0);
+        let mut p = -2;
+        while p >= lo {
+            cv.fill_rect(x - rx * 1.7, y_of(p), rx * 3.4, lw, staff_c);
+            p -= 2;
+        }
+        let mut p = 10;
+        while p <= hi {
+            cv.fill_rect(x - rx * 1.7, y_of(p), rx * 3.4, lw, staff_c);
+            p += 2;
+        }
+        let mut prev: Option<i32> = None;
+        for &(pos, accd, n) in &ps {
+            // Une seconde dans l'accord : la tete d'au-dessus passe a droite.
+            let dx = if prev.is_some_and(|q| pos - q == 1) {
+                2.0 * rx
+            } else {
+                0.0
+            };
+            prev = Some(pos);
+            let y = y_of(pos);
+            let c = if sel_n == Some(n) { th.accent } else { ink };
+            let nt = &it.doc[n];
+            if nt.has(TNote::DEAD) {
+                let (a, b) = (rx * 0.85, ry * 1.1);
+                cv.line(x + dx - a, y - b, x + dx + a, y + b, s(1.4), c);
+                cv.line(x + dx - a, y + b, x + dx + a, y - b, s(1.4), c);
+            } else if nt.has(TNote::HARMONIC) {
+                let mut p = Path::new();
+                p.move_to(x + dx - rx, y)
+                    .line_to(x + dx, y - ry * 1.3)
+                    .line_to(x + dx + rx, y)
+                    .line_to(x + dx, y + ry * 1.3)
+                    .close();
+                cv.fill_path(&p, c);
+            } else {
+                head_at(cv, x + dx, y, rx, ry, c);
+            }
+            if nt.has(TNote::VIBRATO) {
+                let xe = (geo.x(nt.qn1) + pad - s(2.0)).max(x + s(12.0));
+                let yv = y_of(12).min(y - gap * 2.0);
+                wavy(cv, x - rx, xe, yv, s(1.6), s(6.0), lw, ink);
+            }
+            let k = nt.slide_in();
+            if k != 0 {
+                let sw = match accd {
+                    Some(a) => text.measure(fsharp, &acc_char(a).to_string()) + s(2.0),
+                    None => 0.0,
+                };
+                let x1 = x + dx - rx - s(3.0) - sw;
+                let d = if k < 0 { gap } else { -gap };
+                cv.line(x1 - s(10.0), y + d, x1, y, s(1.1), th.text_dim);
+            }
+            if let Some(a) = accd {
+                let c = acc_char(a).to_string();
+                let sw = text.measure(fsharp, &c);
+                text.draw(
+                    cv,
+                    fsharp,
+                    x + dx - rx - s(3.0) - sw,
+                    y + gap * 0.9,
+                    &c,
+                    ink,
+                );
+            }
+            push(
+                bx,
+                clip,
+                x + dx - rx - 2.0,
+                y - ry - 2.0,
+                2.0 * rx + 4.0,
+                2.0 * ry + 4.0,
+                Hit::Note { t, i, n },
+            );
+        }
+        if col.lig != Tech::Plain {
+            if let (Some((px, pn)), Some(&cn)) = (col.prev, col.notes.first()) {
+                if col.lig == Tech::Slide {
+                    let ya = y_of(spos(it.doc[pn].pitch));
+                    let yb = y_of(spos(it.doc[cn].pitch));
+                    cv.line(
+                        px + rx + s(2.0),
+                        ya,
+                        x - rx - s(2.0),
+                        yb,
+                        s(1.1),
+                        th.text_dim,
+                    );
+                } else {
+                    let y = y_of(hi.max(spos(it.doc[pn].pitch))) - gap * 1.2;
+                    arc(cv, px, y, x, y, -gap * 0.7, lw * 1.1, th.text_dim);
+                }
+            }
+        }
+    }
+    // Les fantomes : une tete creuse en pointilles, a leur date.
+    if it.detect.ghosts {
+        for (gi, gn) in it.ghosts.iter().enumerate() {
+            let x = geo.x(gn.qn0) + pad;
+            if !geo.visible(x) {
+                continue;
+            }
+            let c = if hover == (Hit::Ghost { t, i, g: gi }) {
+                th.accent
+            } else {
+                th.text_faint
+            };
+            let y = y_of(spos(gn.pitch));
+            ghost_head_at(cv, x, y, rx, ry, c);
+            push(
+                bx,
+                clip,
+                x - rx - 2.0,
+                y - ry - 2.0,
+                2.0 * rx + 4.0,
+                2.0 * ry + 4.0,
+                Hit::Ghost { t, i, g: gi },
+            );
+        }
+    }
+}
+
 /// La tablature d'un item (ses lignes sont deja tracees par la couche).
+/// `rhythm` : le rythme dessous (la tab seule, avec mesures) ; `ring` : en
+/// jeu libre, la corde s'allume tant que la note sonne (a l'ecran).
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn draw_tab(
     cv: &mut Canvas<'_>,
     text: &mut TextCache,
@@ -3395,33 +3735,81 @@ pub(crate) fn draw_tab(
     bx: &mut Vec<HBox>,
     clip: (f32, f32, f32, f32),
     rhythm: bool,
+    ring: bool,
 ) {
-    if rhythm {
+    let free = it.free;
+    if rhythm && !free {
         let nstr = it.detect.tuning().strings.len();
         let bottom = tab_y + (nstr.max(1) - 1) as f32 * tab_gap;
         draw_rhythm(cv, text, th, it, geo, bottom);
     }
     let s = |v: f32| v * geo.s;
-    it.engraved();
-    let eng: Engraved = std::mem::take(&mut it.eng);
     let nstr = it.detect.tuning().strings.len();
     let paper = th.bg;
-    let pad = geo.pad;
+    let pad = if free { free_pad(&geo) } else { geo.pad };
     let lw = geo.lw;
-    let hx = |cell: i64| geo.x(eng.qn(cell)) + pad;
     let fd = Font::new(0, s(11.0) as u16, 600);
     let fl = Font::new(0, s(8.5) as u16, 700);
     let line_y = |string: usize| tab_y + (nstr - 1 - string.min(nstr - 1)) as f32 * tab_gap;
-    for (si, sg) in eng.signs.iter().enumerate() {
-        if !sg.first {
-            continue;
+    // Les colonnes : celles de la partition (sur sa grille), ou le jeu tel
+    // qu'il sonne.
+    let eng: Option<Engraved> = if free {
+        None
+    } else {
+        it.engraved();
+        Some(std::mem::take(&mut it.eng))
+    };
+    let cols: Vec<Col> = match &eng {
+        Some(eng) => {
+            let hx = |cell: i64| geo.x(eng.qn(cell)) + pad;
+            let mut v = Vec::new();
+            for (si, sg) in eng.signs.iter().enumerate() {
+                if !sg.first {
+                    continue;
+                }
+                let ev = &eng.events[sg.ev];
+                let prev = if ev.lig_in != Tech::Plain && ev.notes.len() == 1 {
+                    eng.signs[..si]
+                        .iter()
+                        .rev()
+                        .find(|p| p.ev + 1 == sg.ev)
+                        .and_then(|p| Some((hx(p.start), *eng.events[p.ev].notes.first()?)))
+                } else {
+                    None
+                };
+                v.push(Col {
+                    x: hx(sg.start),
+                    notes: ev.notes.clone(),
+                    lig: ev.lig_in,
+                    prev,
+                });
+            }
+            v
         }
-        let x = hx(sg.start);
+        None => free_cols(it, &geo, pad),
+    };
+    // La corde allumee le temps de la note (jeu libre, a l'ecran).
+    if free && ring {
+        let rc = th.accent.with_alpha(70);
+        let (c0, c1) = (
+            geo.clip.0 - geo.margin,
+            geo.clip.0 + geo.clip.2 + geo.margin,
+        );
+        for note in &it.doc {
+            let (xa, xb) = (geo.x(note.qn0), geo.x(note.qn1));
+            if xb < c0 || xa > c1 {
+                continue;
+            }
+            let y = line_y(note.string);
+            cv.fill_rect(xa, y - s(1.5), (xb - xa).max(1.0), s(3.0), rc);
+        }
+    }
+    for col in &cols {
+        let x = col.x;
         if !geo.visible(x) {
             continue;
         }
-        let ev = &eng.events[sg.ev];
-        for &n in &ev.notes {
+        for &n in &col.notes {
             let note = &it.doc[n];
             let y = line_y(note.string);
             let tx = if note.has(TNote::DEAD) {
@@ -3519,14 +3907,12 @@ pub(crate) fn draw_tab(
                 }
             }
         }
-        if ev.lig_in != Tech::Plain && ev.notes.len() == 1 {
-            if let Some(prev_sign) = eng.signs[..si].iter().rev().find(|t| t.ev + 1 == sg.ev) {
-                let px = hx(prev_sign.start);
-                let cur = &it.doc[ev.notes[0]];
-                let prev_n = eng.events[prev_sign.ev].notes.first().copied();
-                match (ev.lig_in, prev_n) {
+        if col.lig != Tech::Plain && col.notes.len() == 1 {
+            if let Some((px, pn)) = col.prev {
+                let cur = &it.doc[col.notes[0]];
+                match col.lig {
                     // Une glisse : un trait d'une case a l'autre, sur la corde.
-                    (Tech::Slide, Some(pn)) => {
+                    Tech::Slide => {
                         let pv = &it.doc[pn];
                         let pw = text.measure(fd, &pv.fret.to_string()).ceil() + s(4.0);
                         let cw = text.measure(fd, &cur.fret.to_string()).ceil() + s(4.0);
@@ -3546,7 +3932,7 @@ pub(crate) fn draw_tab(
                     _ => {
                         let y = line_y(cur.string) - s(8.0);
                         arc(cv, px, y, x, y, -s(4.0), lw * 1.1, th.text_dim);
-                        let lab = if ev.lig_in == Tech::Hammer { "H" } else { "P" };
+                        let lab = if col.lig == Tech::Hammer { "H" } else { "P" };
                         text.draw_in(
                             cv,
                             fl,
@@ -3587,10 +3973,15 @@ pub(crate) fn draw_tab(
         }
     }
     if it.detect.ghosts {
-        let g = eng.grid.max(1) as f64;
         for (gi, gn) in it.ghosts.iter().enumerate() {
-            let cell = ((gn.qn0 - eng.origin_qn) * g).round();
-            let x = geo.x(eng.origin_qn + cell / g) + pad;
+            let x = match &eng {
+                Some(eng) => {
+                    let g = eng.grid.max(1) as f64;
+                    let cell = ((gn.qn0 - eng.origin_qn) * g).round();
+                    geo.x(eng.origin_qn + cell / g) + pad
+                }
+                None => geo.x(gn.qn0) + pad,
+            };
             if !geo.visible(x) {
                 continue;
             }
@@ -3636,5 +4027,7 @@ pub(crate) fn draw_tab(
             );
         }
     }
-    it.eng = eng;
+    if let Some(e) = eng {
+        it.eng = e;
+    }
 }

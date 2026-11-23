@@ -262,7 +262,7 @@ struct Rows {
     h: f32,
 }
 
-fn rows(score: bool, tab: bool, nstr: usize) -> Rows {
+fn rows(score: bool, tab: bool, nstr: usize, rhythm: bool) -> Rows {
     let mut y = s(30.0);
     let staff = score.then_some(y);
     if score {
@@ -277,7 +277,7 @@ fn rows(score: bool, tab: bool, nstr: usize) -> Rows {
     if tab {
         y += (nstr.max(1) - 1) as f32 * s(TAB_GAP) + s(14.0);
         // La tablature seule porte son rythme dessous.
-        if !score {
+        if !score && rhythm {
             y += s(draw::RHYTHM_H);
         }
     }
@@ -349,6 +349,9 @@ pub(crate) fn render(
     text: &mut TextCache,
     page: &mut dyn FnMut(&Surface),
 ) -> (i64, usize) {
+    if item.free {
+        return render_free(item, lanes, text, page);
+    }
     let th = paper_theme();
     let mut it = item.clone();
     // Les fantomes sont des propositions : pas sur papier.
@@ -360,7 +363,7 @@ pub(crate) fn render(
     if !score && !tab {
         (score, tab) = (true, true);
     }
-    let r = rows(score, tab, nstr);
+    let r = rows(score, tab, nstr, true);
     let bq: Vec<f64> = (0..eng.measures)
         .map(|m| eng.bar_len(m) as f64 / eng.grid.max(1) as f64)
         .collect();
@@ -434,6 +437,342 @@ pub(crate) fn render(
         page(&surf);
     }
     (eng.measures, sys.len())
+}
+
+/// Un jeu libre sur la page : la place d'une seconde (a 96 DPI), le plus
+/// long silence ecrit (au-dela, il ne prend pas plus de place), et la
+/// longueur d'une ligne en colonnes au plus (les points de son axe).
+const FREE_PPS: f32 = 110.0;
+const FREE_MAX_GAP_S: f64 = 1.0;
+const FREE_MAX_COLS: usize = draw::WARP_N - 2;
+
+/// Les lignes d'un jeu libre : les colonnes `a..b` de chacune, et leur
+/// place depuis le debut de la ligne. Une ligne prend ce qu'elle tient ;
+/// pleine, elle se coupe plutot dans son dernier silence (passe son premier
+/// tiers).
+pub(crate) fn free_lines(
+    cols: &[(f64, Vec<usize>)],
+    ends: &[f64],
+    bpm: f64,
+    avail: f32,
+) -> Vec<(usize, usize, Vec<f32>)> {
+    let sec = |q: f64| q * 60.0 / bpm.max(1.0);
+    let pps = s(FREE_PPS);
+    let step = |k: usize| {
+        let dt = (sec(cols[k].0) - sec(cols[k - 1].0)).min(FREE_MAX_GAP_S);
+        (dt as f32 * pps).max(s(NOTE_GAP))
+    };
+    let mut out = Vec::new();
+    let mut a = 0usize;
+    while a < cols.len() {
+        let mut xs = vec![0.0f32];
+        let mut end = ends[a];
+        let mut silence: Option<usize> = None;
+        let mut b = a + 1;
+        while b < cols.len() && b - a < FREE_MAX_COLS {
+            let x = xs[xs.len() - 1] + step(b);
+            if x > avail {
+                break;
+            }
+            if sec(cols[b].0) - sec(end) > cp_tab::score::PHRASE_GAP_S {
+                silence = Some(b);
+            }
+            end = end.max(ends[b]);
+            xs.push(x);
+            b += 1;
+        }
+        if b < cols.len() {
+            if let Some(c) = silence.filter(|&c| c > a + (b - a) / 3) {
+                b = c;
+                xs.truncate(b - a);
+            }
+        }
+        out.push((a, b, xs));
+        a = b;
+    }
+    out
+}
+
+/// Un jeu libre en pages : ni mesure, ni chiffrage, ni barre. Les notes
+/// a leur place dans le temps (un long silence ne prend qu'une seconde),
+/// a la meme echelle d'une ligne a l'autre.
+fn render_free(
+    item: &Item,
+    lanes: Lanes,
+    text: &mut TextCache,
+    page: &mut dyn FnMut(&Surface),
+) -> (i64, usize) {
+    let th = paper_theme();
+    let mut it = item.clone();
+    it.detect.ghosts = false;
+    let tun = it.detect.tuning();
+    let nstr = tun.strings.len();
+    let (mut score, mut tab) = (lanes.on(Lane::Score), lanes.on(Lane::Tab));
+    if !score && !tab {
+        (score, tab) = (true, true);
+    }
+    let r = rows(score, tab, nstr, false);
+    let fifths = it
+        .key
+        .unwrap_or_else(|| cp_tab::key::detect(&it.doc))
+        .fifths;
+    let kw = key_w(fifths, r.staff.is_some());
+    let x0 = mm(MARGIN_X);
+    let cw = PAGE_W as f32 - 2.0 * x0;
+    let head = s(HEAD) + kw;
+    let pad = s(6.0);
+    let avail = cw - head - pad - s(NOTE_GAP);
+    let cols = draw::free_columns(&it.doc, it.bpm);
+    let ends: Vec<f64> = cols
+        .iter()
+        .map(|c| c.1.iter().map(|&n| it.doc[n].qn1).fold(f64::MIN, f64::max))
+        .collect();
+    let lines = free_lines(&cols, &ends, it.bpm, avail);
+    let bottom = PAGE_H as f32 - mm(MARGIN_BOTTOM);
+    let head_h = s(64.0);
+    let sys_gap = s(14.0);
+    let mut breaks: Vec<usize> = vec![0];
+    let mut y = mm(MARGIN_TOP) + head_h;
+    for k in 0..lines.len() {
+        if y + r.h > bottom && k > *breaks.last().unwrap_or(&0) {
+            breaks.push(k);
+            y = mm(MARGIN_TOP);
+        }
+        y += r.h + sys_gap;
+    }
+    let npages = breaks.len().max(1);
+    let mut surf = Surface::new(PAGE_W, PAGE_H);
+    let mut scratch = Scratch::default();
+    let ink = th.text;
+    let line = s(0.5);
+    let gap = s(GAP);
+    let tg = s(TAB_GAP);
+    for p in 0..npages {
+        let k0 = breaks.get(p).copied().unwrap_or(0);
+        let k1 = breaks.get(p + 1).copied().unwrap_or(lines.len());
+        let mut cv = Canvas::new(&mut surf, &mut scratch);
+        cv.clear(th.bg);
+        let mut y = mm(MARGIN_TOP);
+        if p == 0 {
+            draw_free_header(&mut cv, text, &th, &it, x0, y, cw);
+            y += head_h;
+        }
+        for (k, (a, b, xs)) in lines.iter().enumerate().take(k1).skip(k0) {
+            let last = k + 1 == lines.len();
+            let nat = xs.last().copied().unwrap_or(0.0);
+            // Le temps garde la meme echelle d'une ligne a l'autre : seule
+            // une ligne presque pleine s'etire jusqu'au bord.
+            let f = if !last && nat > avail * 0.85 {
+                avail / nat.max(1e-3)
+            } else {
+                1.0
+            };
+            let sx = x0 + head;
+            let xr = x0 + cw;
+            let mut pts: Vec<(f64, f32)> = (*a..*b)
+                .zip(xs.iter())
+                .map(|(c, &x)| (cols[c].0, sx + x * f))
+                .collect();
+            // Apres la derniere colonne : la fin de ses notes, a sa place.
+            let q_last = cols[b - 1].0;
+            let q_end = ends[*a..*b].iter().copied().fold(q_last, f64::max);
+            let dt = ((q_end - q_last) * 60.0 / it.bpm.max(1.0)).min(FREE_MAX_GAP_S);
+            pts.push((
+                q_end.max(q_last + 1e-3),
+                pts.last().map_or(sx, |l| l.1) + (dt as f32 * s(FREE_PPS) * f).max(s(4.0)),
+            ));
+            if pts.len() < 2 {
+                pts.insert(0, (q_last - 1.0, sx - s(FREE_PPS)));
+            }
+            let geo = Geo {
+                sx,
+                scroll: 0.0,
+                ppq: 1.0,
+                s: S,
+                clip: (sx - 1.0, 0.0, xr - sx + 2.0, PAGE_H as f32),
+                pad,
+                lw: s(0.65),
+                margin: 0.0,
+                warp: Warp::new(&pts),
+            };
+            // Les notes de la ligne seules (une liaison qui passe a la
+            // ligne n'est pas ecrite).
+            let mut sub = it.clone();
+            let keep: Vec<usize> = (*a..*b).flat_map(|c| cols[c].1.iter().copied()).collect();
+            let mut doc: Vec<cp_tab::doc::TNote> =
+                keep.iter().map(|&n| it.doc[n].clone()).collect();
+            cp_tab::doc::sort(&mut doc);
+            sub.set_doc(doc);
+            let staff = r.staff.map(|o| (y + o, y + o + 4.0 * gap));
+            let tabs = r
+                .tab
+                .map(|o| (y + o, y + o + (nstr.max(1) - 1) as f32 * tg));
+            if let Some((top, _)) = staff {
+                for k in 0..5 {
+                    cv.fill_rect(x0, top + k as f32 * gap - line * 0.5, xr - x0, line, ink);
+                }
+                text.draw(
+                    &mut cv,
+                    Font::new(3, s(40.0) as u16, 400),
+                    x0 + s(3.0),
+                    top + 4.0 * gap + s(8.0),
+                    &draw::CLEF.to_string(),
+                    ink,
+                );
+                text.draw(
+                    &mut cv,
+                    Font::new(0, s(8.0) as u16, 700),
+                    x0 + s(12.0),
+                    top + 4.0 * gap + s(19.0),
+                    "8",
+                    ink,
+                );
+                draw::key_sig(
+                    &mut cv,
+                    text,
+                    x0 + s(HEAD) - s(6.0),
+                    top,
+                    gap,
+                    s(KEY_STEP),
+                    fifths,
+                    ink,
+                );
+            }
+            if let Some((top, _)) = tabs {
+                for k in 0..nstr {
+                    cv.fill_rect(x0, top + k as f32 * tg - line * 0.5, xr - x0, line, ink);
+                }
+                let ft = Font::new(0, s(11.0) as u16, 700);
+                let h = (nstr.max(2) - 1) as f32 * tg;
+                for (k, c) in ["T", "A", "B"].iter().enumerate() {
+                    let cy = top + h * (0.2 + 0.3 * k as f32);
+                    cv.fill_rect(x0 + s(5.0), cy - s(5.5), s(12.0), s(11.0), th.bg);
+                    text.draw_in(
+                        &mut cv,
+                        ft,
+                        x0 + s(3.0),
+                        cy - s(7.0),
+                        s(16.0),
+                        s(14.0),
+                        c,
+                        ink,
+                        Align::Center,
+                    );
+                }
+            }
+            let mut none: Vec<HBox> = Vec::new();
+            let clip = (sx - s(14.0), 0.0, xr - sx + s(14.5), PAGE_H as f32);
+            if cv.push_clip(clip.0, clip.1, clip.2, clip.3) {
+                if let Some((top, _)) = staff {
+                    draw::draw_score(
+                        &mut cv,
+                        text,
+                        &th,
+                        &mut sub,
+                        0,
+                        0,
+                        geo,
+                        top,
+                        None,
+                        Hit::None,
+                        &mut none,
+                        clip,
+                    );
+                }
+                if let Some((top, _)) = tabs {
+                    draw::draw_tab(
+                        &mut cv,
+                        text,
+                        &th,
+                        &mut sub,
+                        0,
+                        0,
+                        geo,
+                        top,
+                        tg,
+                        None,
+                        Hit::None,
+                        &mut none,
+                        clip,
+                        false,
+                        false,
+                    );
+                }
+            }
+            cv.pop_clip();
+            y += r.h + sys_gap;
+        }
+        if npages > 1 {
+            text.draw_in(
+                &mut cv,
+                Font::new(0, s(8.5) as u16, 400),
+                0.0,
+                PAGE_H as f32 - mm(10.0),
+                PAGE_W as f32,
+                s(12.0),
+                &format!("{} / {npages}", p + 1),
+                th.text_faint,
+                Align::Center,
+            );
+        }
+        drop(cv);
+        page(&surf);
+    }
+    (0, lines.len())
+}
+
+/// Le titre, « ad lib. » (pas de tempo), l'accord.
+fn draw_free_header(
+    cv: &mut Canvas<'_>,
+    text: &mut TextCache,
+    th: &Theme,
+    it: &Item,
+    x0: f32,
+    y: f32,
+    cw: f32,
+) {
+    let ink = th.text;
+    text.draw_in(
+        cv,
+        Font::new(0, s(21.0) as u16, 700),
+        x0,
+        y,
+        cw,
+        s(30.0),
+        &title_of(&it.name),
+        ink,
+        Align::Center,
+    );
+    let yi = y + s(38.0);
+    let fi = Font::new(0, s(10.0) as u16, 400);
+    text.draw_in(
+        cv,
+        Font::new(0, s(11.0) as u16, 400),
+        x0,
+        yi - s(1.0),
+        s(120.0),
+        s(15.0),
+        "ad lib.",
+        ink,
+        Align::Left,
+    );
+    let tun = it.detect.tuning();
+    let names: Vec<&str> = tun
+        .strings
+        .iter()
+        .map(|&p| NAMES[p.rem_euclid(12) as usize])
+        .collect();
+    text.draw_in(
+        cv,
+        fi,
+        x0,
+        yi,
+        cw,
+        s(14.0),
+        &format!("Tuning: {}", names.join(" ")),
+        ink,
+        Align::Right,
+    );
 }
 
 /// Le titre, le tempo, l'accord.
@@ -846,6 +1185,7 @@ fn draw_system(
                 &mut none,
                 clip,
                 staff.is_none(),
+                false,
             );
         }
     }
