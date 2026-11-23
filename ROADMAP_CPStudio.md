@@ -671,8 +671,12 @@ Guitar Tab pour le rendre complet ») :
   date, la corde allumée le temps de la note, le magnétisme sur les attaques
   de l'audio, un accord = des notes à 30 ms ; le PDF sans barre (à la ligne
   dans un silence), le MusicXML une mesure par phrase, chiffrage caché.
-  Reste : si un tempo est posé plus tard, le MIDI suit les noires et l'audio
-  non (pas encore traité).
+  Un tempo posé plus tard ne bouge rien (2026-11-23, tranché par Cedric :
+  les notes restent collées à l'audio) : en jeu libre, l'audio et son MIDI
+  passent en base de temps « temps », le MIDI ignore le tempo du projet, et
+  la tab gardée se range en secondes ; tout revient comme avant quand le jeu
+  libre s'arrête. Pas encore vu dans un vrai REAPER (que les conversions de
+  noires de REAPER suivent un MIDI qui ignore le tempo, notamment).
 - **des notes choisies ensemble** (2026-11-23, demande de Cedric) : le clic
   droit glissé dans la partition ou la tab choisit des notes (ailleurs, des
   prises) ; Ctrl+clic, Maj+clic ; un glisser gauche les déplace ensemble
