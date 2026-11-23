@@ -672,8 +672,16 @@ Guitar Tab pour le rendre complet ») :
   de l'audio, un accord = des notes à 30 ms ; le PDF sans barre (à la ligne
   dans un silence), le MusicXML une mesure par phrase, chiffrage caché.
   Reste : si un tempo est posé plus tard, le MIDI suit les noires et l'audio
-  non (pas encore traité) ; la même palette que l'éditeur sur une note de
-  Guitar Tab (proposée, pas faite).
+  non (pas encore traité).
+- **des notes choisies ensemble** (2026-11-23, demande de Cedric) : le clic
+  droit glissé dans la partition ou la tab choisit des notes (ailleurs, des
+  prises) ; Ctrl+clic, Maj+clic ; un glisser gauche les déplace ensemble
+  (chacune dans son item ; vers le haut ou le bas dans la tab, elles
+  changent de corde) ; Suppr les efface.
+- **la palette de l'éditeur** sur ces notes (crate `cp_palette`, commune) :
+  accords, arpèges, euclides, temps, vélocité ; les bends, glisses et
+  liaisons de la tab ; un groupe Techniques. Une note née ou changée de
+  hauteur prend un doigté autour des notes restées en place.
 Reste : l'oreille et l'œil de Cedric sur ses vraies prises (les seuils
 viennent de tests synthétiques).
 
@@ -795,6 +803,9 @@ chaque note, et un test le tient.
     aller-retour, vibrato, glisses d'approche), puis deux poignées sur le
     trait (le sommet : de combien et quand ; le pied : quand il part),
     Alt+clic les enlève ; relu dans le vrai REAPER.
+- **la timeline de l'item seul** (2026-11-23, demande de Cedric) : un bouton
+  de la barre ; les mesures comptées depuis le début de l'item, la grille,
+  le magnétisme et la quantification aussi ; la vue bornée à l'item.
 - Reste :
   - les couches CC et pitchbend (l'ancien éditeur n'en avait pas, décidé) ;
   - la probabilité (cases de la Session, à venir) ;
