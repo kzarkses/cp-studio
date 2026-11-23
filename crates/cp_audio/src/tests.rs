@@ -1283,3 +1283,20 @@ fn un_etireur_revient_toujours_au_vivier() {
     let out = block(&mut h, 0, 512);
     assert!(out.iter().all(|x| x.is_finite()));
 }
+
+#[test]
+fn un_saut_vers_une_page_absente_ne_tombe_pas_dans_le_silence() {
+    // Une voix qui joue saute 200 s plus loin (page absente) : le saut
+    // attend sa page, aucun bloc ne lit une page manquante.
+    let (mut h, c) = streamed_host(600, None);
+    let p = pages_of(&h, c);
+    let v = h.play(0, c, 0, 0, false, 1.0).unwrap();
+    realtime(&mut h, 30);
+    let far = 48000 * 200;
+    assert!(!p.has(p.page_of(far)));
+    assert!(h.set(v, Param::Pos, far as f64));
+    realtime(&mut h, 60);
+    let pos = h.voice(v).map_or(0.0, |x| x.0);
+    assert!(pos > far as f64, "la voix a saute : {pos}");
+    assert_eq!(p.misses(), 0, "aucun bloc dans le silence");
+}

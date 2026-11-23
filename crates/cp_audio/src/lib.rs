@@ -289,6 +289,8 @@ pub struct AudioHost {
     streamer: Option<stream::Streamer>,
     /// (voix, pages, derniere frame de sa region).
     streamed: Vec<(VoiceH, Arc<cp_sys::paged::Paged>, i64)>,
+    /// Les sauts qui attendent leur page : (voix, position, depuis quand).
+    jumps: Vec<(VoiceH, f64, std::time::Instant)>,
     stream_above: usize,
     tickets: Vec<(u32, Ticket)>,
     /// Les decodages en cours : ticket -> clip (pour y poser les pics).
@@ -371,6 +373,7 @@ impl AudioHost {
             decoder: Decoder::new(),
             streamer: None,
             streamed: Vec::new(),
+            jumps: Vec::new(),
             stream_above: STREAM_ABOVE_BYTES,
             tickets: Vec::new(),
             in_flight: Vec::new(),
@@ -1231,6 +1234,30 @@ impl AudioHost {
         }
         let live = &self.voices;
         self.streamed.retain(|(v, ..)| live.contains(v));
+        // Les sauts dont la page est la (ou qui attendent depuis 200 ms).
+        let mut go = Vec::new();
+        let streamed = &self.streamed;
+        self.jumps.retain(|&(v, pos, t)| {
+            let Some((_, p, _)) = streamed.iter().find(|x| x.0 == v) else {
+                return false;
+            };
+            let ready =
+                p.has(p.page_of(pos as i64)) || t.elapsed() > std::time::Duration::from_millis(200);
+            if ready {
+                go.push((v, pos));
+            }
+            !ready
+        });
+        for (v, pos) in go {
+            self.ctl.send(
+                v,
+                At::Now,
+                VoiceOp::Set {
+                    param: Param::Pos,
+                    value: pos,
+                },
+            );
+        }
         // Les etireurs des voix rendues reviennent au vivier.
         self.reclaim_shifters();
         self.pool.collect();
@@ -1351,7 +1378,10 @@ impl AudioHost {
 
     pub fn set(&mut self, v: VoiceH, param: Param, value: f64) -> bool {
         // Un saut dans un clip en flux : sa page est demandee tout de suite ;
-        // a l'envers depuis le depart, c'est la fin de la region.
+        // a l'envers depuis le depart, c'est la fin de la region. Une voix
+        // qui joue et saute vers une page absente attend sa page (elle joue
+        // encore ou elle est, puis croise) plutot que de sauter dans le
+        // silence : le saut part du battement ou la page est la.
         if let Some((_, p, last)) = self.streamed.iter().find(|(w, ..)| *w == v) {
             // A l'envers avant le depart, la voix part de la fin de sa region ;
             // une voix qui joue repart a l'envers d'ou elle est.
@@ -1366,23 +1396,33 @@ impl AudioHost {
                 if let Some(st) = &self.streamer {
                     st.wake();
                 }
+                if param == Param::Pos && started && !p.has(p.page_of(h)) {
+                    self.jumps.retain(|j| j.0 != v);
+                    self.jumps.push((v, value, std::time::Instant::now()));
+                    return true;
+                }
             }
         }
-        // Le tempo ou la hauteur a part : la voix emprunte un etireur.
+        // Le tempo ou la hauteur a part : la voix emprunte un etireur. Plus
+        // aucun de libre (seize voix etirees) : refuse, en le disant (rend
+        // faux), plutot qu'un tempo ignore sans un mot.
+        let mut lent = true;
         if matches!(param, Param::Tempo | Param::Shift)
             && (value - 1.0).abs() > 1e-9
             && !self.lent.iter().any(|(w, _)| *w == v)
         {
+            lent = false;
             if let Some(slot) = self.free_shifter() {
                 if self
                     .ctl
                     .send(v, At::Now, VoiceOp::Shifter(Some(slot.clone())))
                 {
                     self.lent.push((v, slot));
+                    lent = true;
                 }
             }
         }
-        self.ctl.send(v, At::Now, VoiceOp::Set { param, value })
+        self.ctl.send(v, At::Now, VoiceOp::Set { param, value }) && lent
     }
 
     /// Un etireur libre du vivier (personne d'autre ne le tient), ou un
