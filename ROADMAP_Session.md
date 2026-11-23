@@ -122,6 +122,21 @@ frontière tombe à l'échantillon, même si le fil principal s'arrête.
   - la panique arrête tout ;
   - Arrange Rec écrit un item de 12 notes, ce qui a joué.
 
+**Relu à part** (le 2026-11-24, un sous-agent qui n'avait pas écrit le
+code) : les règles du fil audio tiennent (rien n'y alloue, ne libère, ni
+n'attend). Il a trouvé 10 défauts, tous corrigés, chacun avec un essai qui
+échouait avant :
+- une note tenue à une frontière (un arrondi) ;
+- un lancement en retard hors phase ;
+- le tempo qui changeait sous un clip qui attend ;
+- l'overdub qui passait dans le clip suivant ;
+- des prises jamais rendues au moteur ;
+- une prise relancée transport arrêté ;
+- un déplacement qui perdait ce qui joue ;
+- un one-shot muet pendant qu'une case attend ;
+- le journal d'Arrange Rec après un saut ;
+- l'édition d'un clip qui attend.
+
 **Reste**
 - ☐ Taire l'arrangement sous une colonne qui joue, et le vrai Back to
   Arrangement (pour l'instant : tout s'arrête). **Mesuré le 2026-11-24** :
@@ -137,6 +152,10 @@ frontière tombe à l'échantillon, même si le fil principal s'arrête.
   qui y sont.
 - ☐ L'oreille de Cedric : les prises, l'overdub, Follow avec une clock
   externe.
+- ☐ Petits restes de la relecture :
+  - un port qui joue hors d'une piste (sortie matérielle) n'a pas de liste
+    MIDI : ses notes se perdent ;
+  - un port remis à zéro oublie ses notes tenues sans les relâcher.
 
 ## Ce qu'on refuse (repris de l'ancienne Session)
 
