@@ -257,8 +257,7 @@ et 85 à 139 ms d'amorçage. D'où deux chemins.
   de 512 et la fin d'ADSR se cale sur la matière lue, pas entendue ; un
   retournement en jouant repart de la position lue (en avance de la latence
   de l'étireur) ; seize voix étirées lancées sur le même temps s'amorcent
-  dans le même bloc ; le taux de l'étireur n'est pas mis à jour si la carte
-  change de taux.
+  dans le même bloc.
 
 ### A6. Les boucles MIDI (les lanes)
 
