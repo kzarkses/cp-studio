@@ -4,9 +4,9 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering::Relaxed};
 use std::time::Instant;
 
-use cp_engine::Core;
 use cp_engine::types::MAX_CHANS;
-use cp_sys::pcm::{Block, PortRender};
+use cp_engine::{Core, MidiSink};
+use cp_sys::pcm::{Block, MidiList, PortRender};
 
 /// Le rendu se fait par morceaux de cette taille, dans un tampon sur la pile :
 /// aucune allocation, aucun verrou dans le fil audio.
@@ -30,6 +30,8 @@ pub struct FeedStats {
     /// La crete de chaque canal depuis la derniere lecture (bits d'un f32
     /// positif : l'ordre des entiers est celui des nombres).
     pub peak: [AtomicU32; 2],
+    /// Messages MIDI poses dans la liste de REAPER.
+    pub midi_sent: AtomicU64,
 }
 
 impl FeedStats {
@@ -39,6 +41,24 @@ impl FeedStats {
             f32::from_bits(self.peak[0].swap(0, Relaxed)),
             f32::from_bits(self.peak[1].swap(0, Relaxed)),
         ]
+    }
+}
+
+/// La lane d'un port ecrit dans la liste MIDI du bloc de REAPER ; le rendu se
+/// fait par morceaux, d'ou le decalage du morceau.
+struct ChunkMidi<'a> {
+    list: &'a mut MidiList,
+    base: i32,
+    sent: &'a AtomicU64,
+}
+
+impl MidiSink for ChunkMidi<'_> {
+    fn push(&mut self, offset: i32, msg: &[u8]) -> bool {
+        let ok = self.list.add(self.base + offset, msg);
+        if ok {
+            self.sent.fetch_add(1, Relaxed);
+        }
+        ok
     }
 }
 
@@ -82,10 +102,28 @@ impl PortRender for PortFeed {
         let mut done = 0;
         while done < b.frames {
             let n = (b.frames - done).min(CHUNK);
-            let ok = self
-                .core
-                .render_port(self.port, &mut tmp[..n * chans], n, chans)
-                .is_some();
+            let ok = match b.midi.as_mut() {
+                Some(list) => {
+                    let mut sink = ChunkMidi {
+                        list,
+                        base: done as i32,
+                        sent: &st.midi_sent,
+                    };
+                    self.core
+                        .render_port_midi(
+                            self.port,
+                            &mut tmp[..n * chans],
+                            n,
+                            chans,
+                            Some(&mut sink),
+                        )
+                        .is_some()
+                }
+                None => self
+                    .core
+                    .render_port(self.port, &mut tmp[..n * chans], n, chans)
+                    .is_some(),
+            };
             let out = &mut b.out[done * nch..(done + n) * nch];
             if ok {
                 for i in 0..n {

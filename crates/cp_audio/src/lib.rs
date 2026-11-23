@@ -1185,6 +1185,7 @@ impl AudioHost {
     /// Le battement du fil principal : les decodages finis entrent au vivier,
     /// les voix finies sont rendues, la memoire liberable est liberee.
     pub fn poll(&mut self) {
+        self.ctl.lanes_gc();
         self.check_routes();
         self.rec_poll();
         self.midi_rec_poll();
@@ -1392,6 +1393,47 @@ impl AudioHost {
             self.streamed.push((v, p, last));
         }
         Some(v)
+    }
+
+    /// Une commande de la lane MIDI d'un port, au temps du moteur `at`
+    /// (`None` : tout de suite). Le port s'ouvre s'il ne l'est pas.
+    pub fn lane(&mut self, port: usize, at: Option<i64>, op: cp_engine::LaneOp) -> bool {
+        if !self.ensure_port(port) {
+            return false;
+        }
+        self.ctl.lane(port, at.map_or(At::Now, At::Frame), op)
+    }
+
+    /// Les notes du clip qui joue sur ce port, remplacees sans relance.
+    pub fn lane_update(&mut self, port: usize, clip: Arc<cp_engine::MidiClip>) -> bool {
+        self.ctl.lane_update(port, clip)
+    }
+
+    /// Ce que publie la lane MIDI d'un port.
+    pub fn lane_query(&self, port: usize) -> Option<cp_engine::LaneSnap> {
+        self.ctl.core().lane_query(port)
+    }
+
+    /// Les messages MIDI qu'un port a poses dans les listes de REAPER.
+    pub fn port_midi_sent(&self, port: usize) -> u64 {
+        self.ports.get(port).map_or(0, |p| {
+            p.stats.midi_sent.load(std::sync::atomic::Ordering::Relaxed)
+        })
+    }
+
+    /// Arrete une voix au temps du moteur `at` (le fondu finit pile a ce
+    /// frame), puis la rend quand elle s'est tue.
+    pub fn stop_at(&mut self, v: VoiceH, at: i64, fade_s: f64) -> bool {
+        if !self.ctl.core().voice_valid(v) {
+            return false;
+        }
+        self.ctl.send(
+            v,
+            At::Frame(at),
+            VoiceOp::Stop {
+                fade_s: fade_s.max(0.0),
+            },
+        )
     }
 
     /// Arrete une voix, avec un fondu (secondes), et la rend.

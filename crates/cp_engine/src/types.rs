@@ -4,8 +4,11 @@
 /// seconde. La carte de tempo reste sur le fil principal, ou elle est exacte.
 pub type Frame = i64;
 
-/// Une colonne = un port.
-pub const MAX_PORTS: usize = 32;
+/// Une colonne = un port. 128 depuis la Session (2026-11-23, « pas de
+/// plafond » au nombre de colonnes) : le port 0 reste a l'ecoute du
+/// navigateur. L'index d'une voix (port * 64 + emplacement) tient dans 16
+/// bits jusqu'a 1024 ports.
+pub const MAX_PORTS: usize = 128;
 /// Voix par port. Borne aussi ce que le fil audio parcourt a chaque bloc.
 pub const MAX_PORT_VOICES: usize = 64;
 /// Clips resident en RAM.

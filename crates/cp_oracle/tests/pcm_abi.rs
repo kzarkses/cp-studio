@@ -10,7 +10,9 @@ use std::mem::{offset_of, size_of};
 
 use cp_oracle::{Dll, build_pcm_abi};
 use cp_sys::audio::{AudioHookRegister, CriticalSection, PreviewRegister};
-use cp_sys::pcm::{Block, CppSource, PeakTransferHead, PortRender, PortSource, Transfer};
+use cp_sys::pcm::{
+    Block, CppSource, MidiEventT, PeakTransferHead, PortRender, PortSource, Transfer,
+};
 
 fn dll() -> Dll {
     let p = build_pcm_abi().unwrap_or_else(|e| panic!("{e}"));
@@ -61,6 +63,10 @@ fn les_structures_ont_la_disposition_du_sdk() {
         offset_of!(PeakTransferHead, peaks_out) as i64,
         size_of::<CriticalSection>() as i64,
         size_of::<f64>() as i64,
+        size_of::<MidiEventT>() as i64,
+        offset_of!(MidiEventT, frame_offset) as i64,
+        offset_of!(MidiEventT, size) as i64,
+        offset_of!(MidiEventT, midi_message) as i64,
     ];
     assert_eq!(n, rust.len(), "nombre de mesures");
     assert_eq!(&v[..n], &rust[..]);
@@ -187,4 +193,40 @@ fn nous_appelons_une_source_cpp_par_sa_table() {
 
     drop(s);
     assert_eq!(destroyed(), before + 1);
+}
+
+/// Une source qui pose trois messages dans la liste MIDI du bloc.
+struct Notes;
+
+impl PortRender for Notes {
+    fn render(&self, b: &mut Block<'_>) {
+        b.out.fill(0.0);
+        if let Some(m) = b.midi.as_mut() {
+            assert!(m.add(3, &[0x90, 60, 100]));
+            assert!(m.add(7, &[0x80, 60, 0]));
+            // Hors du bloc : ramene a sa derniere frame.
+            assert!(m.add(999, &[0xB0, 64, 127]));
+            assert_eq!(m.size_bytes(), 3 * size_of::<MidiEventT>() as i32);
+        }
+    }
+    fn sample_rate(&self) -> f64 {
+        48000.0
+    }
+}
+
+#[test]
+fn notre_source_ecrit_dans_la_liste_midi_de_reaper() {
+    let d = dll();
+    type DriveMidi = extern "C" fn(*mut c_void, *mut f64, i32, i32, *mut i32, i32) -> i32;
+    // SAFETY: signature de cpp/pcm_abi.cpp.
+    let drive: DriveMidi = unsafe { std::mem::transmute(d.sym("abi_drive_midi").unwrap()) };
+    let src = PortSource::new(Box::new(Notes));
+    let mut buf = vec![0.0f64; 16 * 2];
+    let mut out = [0i32; 32];
+    let n = drive(src.as_ptr(), buf.as_mut_ptr(), 16, 2, out.as_mut_ptr(), 32);
+    assert_eq!(n, 3);
+    assert_eq!(
+        &out[..15],
+        &[3, 3, 0x90, 60, 100, 7, 3, 0x80, 60, 0, 15, 3, 0xB0, 64, 127]
+    );
 }

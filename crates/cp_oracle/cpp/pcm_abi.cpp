@@ -56,6 +56,11 @@ EXPORT int abi_layout(long long* out, int n) {
 
     (long long)sizeof(CRITICAL_SECTION),
     (long long)sizeof(ReaSample),
+
+    (long long)sizeof(MIDI_event_t),
+    (long long)offsetof(MIDI_event_t, frame_offset),
+    (long long)offsetof(MIDI_event_t, size),
+    (long long)offsetof(MIDI_event_t, midi_message),
   };
   const int count = (int)(sizeof(v) / sizeof(v[0]));
   for (int i = 0; i < count && i < n; ++i) out[i] = v[i];
@@ -153,3 +158,49 @@ class ProbeSource : public PCM_source {
 EXPORT PCM_source* abi_make_source() { return new ProbeSource(); }
 EXPORT void abi_destroy_source(PCM_source* p) { delete p; }
 EXPORT int abi_destroyed() { return g_destroyed; }
+
+// Une liste MIDI comme celle de REAPER : notre source y ajoute ses messages
+// par la table virtuelle de MIDI_eventlist.
+class ProbeMidiList : public MIDI_eventlist {
+ public:
+  MIDI_event_t ev[64];
+  int n = 0;
+  void AddItem(MIDI_event_t* e) override {
+    if (n < 64) ev[n++] = *e;
+  }
+  MIDI_event_t* EnumItems(int* bpos) override {
+    int i = bpos ? *bpos : 0;
+    if (i < 0 || i >= n) return nullptr;
+    if (bpos) *bpos = i + 1;
+    return &ev[i];
+  }
+  void DeleteItem(int) override {}
+  int GetSize() override { return n * (int)sizeof(MIDI_event_t); }
+  void Empty() override { n = 0; }
+  ~ProbeMidiList() override {}
+};
+
+// GetSamples avec une liste MIDI : rend le nombre de messages, et pour chacun
+// (frame, taille, octet 0, octet 1, octet 2) dans `out`.
+EXPORT int abi_drive_midi(PCM_source* s, double* buf, int frames, int nch,
+                          int* out, int cap) {
+  ProbeMidiList list;
+  PCM_source_transfer_t t;
+  std::memset(&t, 0, sizeof(t));
+  t.time_s = 0.0;
+  t.samplerate = 48000.0;
+  t.nch = nch;
+  t.length = frames;
+  t.samples = buf;
+  t.midi_events = &list;
+  s->GetSamples(&t);
+  int k = 0;
+  for (int i = 0; i < list.n && k + 5 <= cap; ++i) {
+    out[k++] = list.ev[i].frame_offset;
+    out[k++] = list.ev[i].size;
+    out[k++] = list.ev[i].midi_message[0];
+    out[k++] = list.ev[i].midi_message[1];
+    out[k++] = list.ev[i].midi_message[2];
+  }
+  return list.n;
+}

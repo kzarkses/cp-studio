@@ -19,6 +19,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 
 use cp_sys::rt::{Consumer, Producer, spsc};
 
+use crate::lanes::{Lane, LaneOp, LanePub, LaneSnap, MidiClip, MidiSink};
 use crate::pool::ClipData;
 use crate::types::*;
 use crate::voice::{Voice, VoicePub};
@@ -75,6 +76,13 @@ pub(crate) enum Cmd {
     },
     PortGain(f32),
     Panic,
+    /// Une commande de la lane MIDI du port.
+    Lane {
+        at: At,
+        op: LaneOp,
+    },
+    /// Les notes d'un clip qui joue, remplacees (une edition).
+    LaneUpdate(Arc<MidiClip>),
 }
 
 struct PortAudio {
@@ -88,6 +96,7 @@ struct PortAudio {
     gain_target: f32,
     last_clock: Frame,
     consumed: i32,
+    lane: Lane,
 }
 
 struct PortSlot {
@@ -95,6 +104,7 @@ struct PortSlot {
     pubs: Box<[VoicePub]>,
     claims: Box<[AtomicU32]>,
     used: AtomicBool,
+    lane_pub: LanePub,
     /// Diagnostic : plus (moins) de frames rendus que le bloc n'en avait. Le
     /// moteur suppose que REAPER lit un port exactement une fois par bloc.
     over_pulls: AtomicU32,
@@ -120,6 +130,9 @@ pub struct Ctl {
     core: Arc<Core>,
     producers: Vec<Producer<Cmd>>,
     cursors: [usize; MAX_PORTS],
+    /// Chaque clip MIDI envoye a une lane : le fil principal en reste le
+    /// dernier detenteur ([`Ctl::lanes_gc`]).
+    lane_clips: Vec<Arc<MidiClip>>,
 }
 
 fn lock_blocking<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -147,10 +160,12 @@ impl Ctl {
                     gain_target: 1.0,
                     last_clock: -1,
                     consumed: 0,
+                    lane: Lane::new(),
                 }),
                 pubs: (0..MAX_PORT_VOICES).map(|_| VoicePub::new()).collect(),
                 claims: (0..MAX_PORT_VOICES).map(|_| AtomicU32::new(1)).collect(),
                 used: AtomicBool::new(false),
+                lane_pub: LanePub::new(),
                 over_pulls: AtomicU32::new(0),
                 under_pulls: AtomicU32::new(0),
             });
@@ -171,6 +186,7 @@ impl Ctl {
             core,
             producers,
             cursors: [0; MAX_PORTS],
+            lane_clips: Vec::new(),
         }
     }
 
@@ -269,6 +285,48 @@ impl Ctl {
         port < MAX_PORTS && self.post(port, Cmd::PortGain(gain as f32))
     }
 
+    /// Une commande de la lane MIDI d'un port, datee. Faux si l'anneau est
+    /// plein.
+    pub fn lane(&mut self, port: usize, at: At, op: LaneOp) -> bool {
+        if port >= MAX_PORTS {
+            return false;
+        }
+        if let LaneOp::Play { clip, .. } = &op {
+            self.keep_clip(clip);
+        }
+        self.core.ports[port].used.store(true, Relaxed);
+        self.post(port, Cmd::Lane { at, op })
+    }
+
+    /// Les notes du clip qui joue sur ce port, remplacees sans relance (meme
+    /// identite). Faux si l'anneau est plein.
+    pub fn lane_update(&mut self, port: usize, clip: Arc<MidiClip>) -> bool {
+        if port >= MAX_PORTS {
+            return false;
+        }
+        self.keep_clip(&clip);
+        self.post(port, Cmd::LaneUpdate(clip))
+    }
+
+    fn keep_clip(&mut self, clip: &Arc<MidiClip>) {
+        if !self.lane_clips.iter().any(|c| Arc::ptr_eq(c, clip)) {
+            self.lane_clips.push(clip.clone());
+        }
+    }
+
+    /// Libere les clips MIDI que plus aucune lane ne tient (le fil principal
+    /// est alors le seul detenteur). A appeler de temps en temps.
+    pub fn lanes_gc(&mut self) -> usize {
+        let before = self.lane_clips.len();
+        self.lane_clips.retain(|c| Arc::strong_count(c) > 1);
+        before - self.lane_clips.len()
+    }
+
+    /// Les clips MIDI encore tenus par le fil principal.
+    pub fn lane_clips_held(&self) -> usize {
+        self.lane_clips.len()
+    }
+
     /// Tout couper, sans clic.
     pub fn panic(&mut self) {
         for p in 0..MAX_PORTS {
@@ -293,6 +351,7 @@ impl Ctl {
         a.consumed = 0;
         a.gain = 1.0;
         a.gain_target = 1.0;
+        a.lane.reset();
         ps.used.store(false, Relaxed);
         for i in 0..MAX_PORT_VOICES {
             let cur = ps.claims[i].load(Relaxed);
@@ -395,6 +454,11 @@ impl Core {
         Some(lock_blocking(&self.ports.get(port)?.audio).vcount)
     }
 
+    /// Ce que publie la lane MIDI d'un port.
+    pub fn lane_query(&self, port: usize) -> Option<LaneSnap> {
+        Some(self.ports.get(port)?.lane_pub.snap())
+    }
+
     // -----------------------------------------------------------------------
     // Fil audio
     // -----------------------------------------------------------------------
@@ -429,6 +493,20 @@ impl Core {
         out: &mut [f32],
         frames: usize,
         nch: usize,
+    ) -> Option<Frame> {
+        self.render_port_midi(port, out, frames, nch, None)
+    }
+
+    /// [`Core::render_port`], et les messages de la lane MIDI du port vers
+    /// `midi` (sans destination, la lane avance quand meme et ses messages se
+    /// perdent).
+    pub fn render_port_midi(
+        &self,
+        port: usize,
+        out: &mut [f32],
+        frames: usize,
+        nch: usize,
+        midi: Option<&mut dyn MidiSink>,
     ) -> Option<Frame> {
         if port >= MAX_PORTS || frames == 0 || nch < 1 || out.len() < frames * nch {
             return None;
@@ -544,6 +622,11 @@ impl Core {
             k += 1;
         }
 
+        // --- la lane MIDI
+        if !a.lane.is_idle() {
+            a.lane.render(block_start, frames, midi, &ps.lane_pub);
+        }
+
         // --- gain du port
         if a.gain != a.gain_target || a.gain != 1.0 {
             let mut g = a.gain;
@@ -591,7 +674,19 @@ fn drain(a: &mut PortAudio, ps: &PortSlot, block_start: Frame, srate: f64) {
     let mut guard = CMD_RING_CAP;
     while guard > 0 {
         let Some(c) = a.cmds.pop() else { break };
-        apply(a, ps, c, block_start, srate);
+        match c {
+            Cmd::Lane { at, op } => {
+                let at_f = match at {
+                    At::Now => block_start,
+                    At::Frame(f) => f,
+                };
+                if !a.lane.post(at_f, op) {
+                    ps.lane_pub.dropped.fetch_add(1, Relaxed);
+                }
+            }
+            Cmd::LaneUpdate(clip) => a.lane.update(clip),
+            c => apply(a, ps, c, block_start, srate),
+        }
         guard -= 1;
     }
 }
@@ -606,7 +701,10 @@ fn apply(a: &mut PortAudio, ps: &PortSlot, c: Cmd, block_start: Frame, srate: f6
                     stop_now(v, five_ms);
                 }
             }
+            let _ = a.lane.post(block_start, LaneOp::Stop);
         }
+        // Drainees avant (voir `drain`).
+        Cmd::Lane { .. } | Cmd::LaneUpdate(_) => {}
         Cmd::PortGain(g) => a.gain_target = g,
         Cmd::Alloc { local, gen_ } => {
             let port = a.port as i32;

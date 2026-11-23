@@ -112,6 +112,72 @@ const _: () = assert!(std::mem::size_of::<Vtbl>() == VTBL_SLOTS * 8);
 // Notre source, tiree par REAPER
 // ---------------------------------------------------------------------------
 
+/// `MIDI_event_t` : un message court (la taille vaut au moins 3, meme pour
+/// un message de 1 ou 2 octets, dit le SDK).
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct MidiEventT {
+    pub frame_offset: i32,
+    pub size: i32,
+    pub midi_message: [u8; 4],
+}
+
+/// La table de `MIDI_eventlist` (`reaper_plugin.h`) : AddItem, EnumItems,
+/// DeleteItem, GetSize, Empty, puis le destructeur.
+#[repr(C)]
+struct MidiListVtbl {
+    add_item: unsafe extern "C" fn(*mut c_void, *mut MidiEventT),
+    enum_items: unsafe extern "C" fn(*mut c_void, *mut i32) -> *mut MidiEventT,
+    delete_item: unsafe extern "C" fn(*mut c_void, i32),
+    get_size: unsafe extern "C" fn(*mut c_void) -> i32,
+    empty: unsafe extern "C" fn(*mut c_void),
+}
+
+/// La liste MIDI d'un bloc que REAPER tire (`midi_events`) : ce qu'on y
+/// ajoute part dans la piste de l'aperçu, au frame donne. Valide le temps de
+/// l'appel de `GetSamples` seulement.
+pub struct MidiList {
+    ptr: *mut c_void,
+    frames: i32,
+}
+
+impl MidiList {
+    /// Ajoute un message de 1 a 3 octets au frame `offset` du bloc (borne
+    /// dans le bloc). REAPER copie l'evenement.
+    pub fn add(&mut self, offset: i32, msg: &[u8]) -> bool {
+        if self.ptr.is_null() || msg.is_empty() || msg.len() > 3 {
+            return false;
+        }
+        let mut ev = MidiEventT {
+            frame_offset: offset.clamp(0, (self.frames - 1).max(0)),
+            size: msg.len() as i32,
+            midi_message: [0; 4],
+        };
+        ev.midi_message[..msg.len()].copy_from_slice(msg);
+        // SAFETY: `ptr` est la liste que REAPER a passee dans le bloc, vivante
+        // pendant l'appel ; sa premiere case est AddItem (verifie par
+        // cp_oracle/tests/pcm_abi.rs) ; l'evenement vit sur la pile le temps
+        // de l'appel, que REAPER copie.
+        unsafe {
+            let vt = &**(self.ptr as *const *const MidiListVtbl);
+            (vt.add_item)(self.ptr, &mut ev);
+        }
+        true
+    }
+
+    /// Le nombre d'octets de la liste (`GetSize`), pour les tests.
+    pub fn size_bytes(&self) -> i32 {
+        if self.ptr.is_null() {
+            return 0;
+        }
+        // SAFETY: comme `add`.
+        unsafe {
+            let vt = &**(self.ptr as *const *const MidiListVtbl);
+            (vt.get_size)(self.ptr)
+        }
+    }
+}
+
 /// Un bloc a remplir, vu sans pointeur brut.
 pub struct Block<'a> {
     /// Le temps DEMANDE par l'hote (pas un compteur).
@@ -121,6 +187,8 @@ pub struct Block<'a> {
     pub frames: usize,
     /// `frames * nch` echantillons entrelaces, a ecraser.
     pub out: &'a mut [ReaSample],
+    /// La liste MIDI du bloc, si REAPER en passe une (un aperçu de piste).
+    pub midi: Option<MidiList>,
 }
 
 /// Ce qui remplit le bloc. Appele dans le FIL AUDIO : n'alloue pas, ne bloque
@@ -264,12 +332,17 @@ unsafe extern "C" fn port_get_samples(this: *mut c_void, block: *mut Transfer) {
     let out = unsafe { std::slice::from_raw_parts_mut(b.samples, frames * nch) };
     // SAFETY: appele par REAPER sur notre source.
     let p = unsafe { port(this) };
+    let midi = (!b.midi_events.is_null()).then_some(MidiList {
+        ptr: b.midi_events,
+        frames: b.length,
+    });
     let mut blk = Block {
         time_s: b.time_s,
         srate: b.samplerate,
         nch,
         frames,
         out,
+        midi,
     };
     if guard(|| p.render.render(&mut blk)).is_none() {
         blk.out.fill(0.0);

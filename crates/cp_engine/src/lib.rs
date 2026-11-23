@@ -18,12 +18,13 @@
 //!   plus personne ne le tient. La memoire n'est donc jamais rendue dans le fil
 //!   audio (une voix qui lache son clip n'est jamais la derniere a le tenir).
 //!
-//! Pas encore porte : les lanes MIDI (`cp_lanes`) et la clock externe
-//! (`cp_extclock`).
+//! Les lanes MIDI ([`lanes`]) sont neuves (2026-11-23) : la fin de l'ancien
+//! `cp_lanes.cpp` est perdue, elles ne sont donc pas comparees a l'ancien.
 
 pub mod curve;
 mod engine;
 pub mod extclock;
+pub mod lanes;
 pub mod pool;
 pub mod shift;
 pub mod sinc;
@@ -31,5 +32,6 @@ pub mod types;
 mod voice;
 
 pub use engine::{Core, Ctl, VoiceOp};
+pub use lanes::{LaneOp, LaneSnap, MNote, MidiClip, MidiSink};
 pub use pool::{ClipData, Pool, PoolError};
 pub use types::{At, Frame, Param, PlayMode, VoiceH};
