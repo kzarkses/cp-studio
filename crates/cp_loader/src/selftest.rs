@@ -53,6 +53,10 @@ pub struct SelfTest {
     probe: Probe,
     ui_at: Option<Instant>,
     keys_step: u8,
+    /// La mesure du silence de l'arrangement (lanes fixes) : sa piste, la
+    /// crete muette.
+    hush: Option<String>,
+    hush_peak: f32,
     wheels: u32,
     last_tick: Option<Instant>,
     max_gap_ms: f64,
@@ -212,6 +216,8 @@ pub fn requested() -> Option<SelfTest> {
         probe: (0, None, 0.0, 1.0, Vec::new()),
         ui_at: None,
         keys_step: 0,
+        hush: None,
+        hush_peak: 0.0,
         wheels: 0,
         last_tick: None,
         max_gap_ms: 0.0,
@@ -1830,6 +1836,58 @@ impl SelfTest {
                 self.say(
                     field("items") >= 1 && field("notes") >= 8,
                     format!("Session : Arrange Rec ecrit ce qui a joue dans l'arrangement ; {st}"),
+                );
+                // Une mesure pour la suite (taire l'arrangement sous une
+                // colonne) : une piste en lanes fixes dont aucune lane ne
+                // joue se tait-elle ? Rien n'echoue : une mesure au journal.
+                let wav = r
+                    .ext_get("CP_Studio", "selftest_session_wav")
+                    .unwrap_or_default();
+                let n = r.session_tracks(false).len() as i32;
+                let Some(h) = r.insert_track(n, "CPS hush") else {
+                    return true;
+                };
+                if r.insert_audio_item(&h, &wav, 0.0).is_none() {
+                    return true;
+                }
+                r.set_track_value(&h, "I_FREEMODE", 2.0);
+                r.set_track_value(&h, "C_LANEPLAYS:0", 0.0);
+                r.set_edit_cursor(0.0);
+                r.main_on_command(1007);
+                self.hush = Some(h);
+                self.keys_step = 5;
+                self.ui_at = Some(Instant::now());
+            }
+            5 => {
+                if t < 0.8 {
+                    return false;
+                }
+                let Some(h) = self.hush.clone() else {
+                    return true;
+                };
+                let muted = r.track_peak(&h);
+                r.set_track_value(&h, "C_LANEPLAYS:0", 1.0);
+                self.hush_peak = muted;
+                self.keys_step = 6;
+                self.ui_at = Some(Instant::now());
+            }
+            6 => {
+                if t < 0.5 {
+                    return false;
+                }
+                let Some(h) = self.hush.take() else {
+                    return true;
+                };
+                let open = r.track_peak(&h);
+                r.main_on_command(1016);
+                let mode = r.track_value(&h, "I_FREEMODE").unwrap_or(-1.0);
+                r.set_track_value(&h, "I_FREEMODE", 0.0);
+                self.say(
+                    true,
+                    format!(
+                        "Session (mesure) : lanes fixes, aucune ne joue -> crete {:.3} ; la lane rendue -> crete {:.3} (mode {mode})",
+                        self.hush_peak, open
+                    ),
                 );
                 return true;
             }
