@@ -305,8 +305,18 @@ et 85 à 139 ms d'amorçage. D'où deux chemins.
   sur la mesure du maître, latence de sortie comptée, retard du maître
   réglable (« Clock delay », -20 à +20 ms). Simulée : 0,65 ms d'écart après
   5 s, 0,63 ms pendant une rampe 128 → 132 BPM.
+- ✅ **Relu à part le 2026-11-23**, corrigé : un module rechargé perdait le
+  verrou (la clock remise à zéro) ; un changement de tempo du maître
+  relâchait le verrou (la vitesse allait et venait) ; le tempo n'était
+  reposé qu'au changement du maître ; un projet très loin du maître jouait à
+  une vitesse de 3 (son tempo est maintenant posé une fois) ; les sauts se
+  répétaient sans fin (trois au plus, jamais en enregistrant, seuil d'un
+  quart de noire) ; la base prend le tempo là où l'on joue ; la vitesse
+  d'avant rendue après un rechargement ou quand la clock est coupée.
 - Reste : l'essai avec une vraie machine (et le réglage du retard à
-  l'oreille).
+  l'oreille) ; la vitesse d'avant n'est pas rendue si REAPER se ferme en
+  jouant synchronisé, ni au projet d'avant si l'on change d'onglet en
+  jouant.
 
 ### A8. L'enregistrement
 
@@ -639,6 +649,10 @@ Guitar Tab pour le rendre complet ») :
 - **les changements de tempo** (2026-11-23) : écrits là où ils tombent (une
   noire et sa valeur au-dessus de la portée, `<metronome>` en MusicXML) ;
   une mesure où le tempo change ne se reprend pas.
+- **relu à part** (2026-11-23) : des notes qui sortaient de la page avec
+  plusieurs reprises dans un système, une note perdue par la compaction
+  avec des triolets, un triolet coupé par une barre de 7/8, des
+  mesures-copeaux, l'ordre du MusicXML : corrigés, chacun avec son essai.
 Reste : l'oreille et l'œil de Cedric sur ses vraies prises (les seuils
 viennent de tests synthétiques).
 
