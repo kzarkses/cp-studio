@@ -41,6 +41,7 @@ pub mod project;
 pub mod reaper;
 pub mod rt;
 pub mod rui;
+pub mod sess;
 pub mod shell;
 pub mod tab;
 pub mod theme;
