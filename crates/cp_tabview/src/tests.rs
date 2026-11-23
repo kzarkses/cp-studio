@@ -2300,3 +2300,34 @@ fn le_chiffrage_qui_change_se_dessine_et_s_imprime() {
     });
     assert_eq!(measures, 7);
 }
+
+#[test]
+fn les_reprises_s_impriment() {
+    // A A A B C D C D : A x3 et CD x2, ecrits une fois.
+    const A: [&[(usize, i32)]; 4] = [&[(3, 0)], &[(3, 2)], &[(3, 4)], &[(2, 5)]];
+    const B: [&[(usize, i32)]; 4] = [&[(2, 7)], &[(2, 5)], &[(3, 4)], &[(3, 2)]];
+    const C: [&[(usize, i32)]; 4] = [&[(4, 0)], &[(4, 0)], &[(4, 2)], &[(4, 2)]];
+    const D: [&[(usize, i32)]; 4] = [&[(4, 4)], &[(4, 4)], &[(4, 5)], &[(4, 5)]];
+    let mut raw: Vec<Raw> = Vec::new();
+    for (m, pat) in [A, A, A, B, C, D, C, D].into_iter().enumerate() {
+        for k in 0..8 {
+            raw.push((m, k as f64 * 2.0, 2.0, pat[k % 4], ""));
+        }
+    }
+    let it = item("R", "Repeats.wav", 0, 8, &raw);
+    let rep = print::with_repeats(&it);
+    assert_eq!(rep.repeats.len(), 2);
+    let mut b = Bench::new(10, 10);
+    let lanes = Lanes([true, false, true, true]);
+    let mut n = 0;
+    let (measures, _) = print::render(&rep, lanes, &mut b.t, &mut |s| {
+        n += 1;
+        if n == 1 {
+            let mut top = Surface::new(s.w, 900);
+            top.px.copy_from_slice(&s.px[..(s.w * 900) as usize]);
+            let p = std::env::temp_dir().join("cp_tabview_15_print_reprises.png");
+            std::fs::write(&p, png::encode(&top)).unwrap();
+        }
+    });
+    assert_eq!(measures, 4, "A, B, C, D");
+}

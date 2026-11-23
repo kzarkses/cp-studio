@@ -227,6 +227,7 @@ fn measure_sums(xml: &str) -> Vec<(i64, i64)> {
 fn la_partition_tient_dans_ses_mesures() {
     let spec = ScoreSpec {
         meter: None,
+        repeats: Vec::new(),
         title: "Riff & test".into(),
         origin_qn: 8.0,
         sig: (4, 4),
@@ -304,6 +305,7 @@ fn la_partition_tient_dans_ses_mesures() {
 fn un_marteau_et_un_tire_s_ecrivent_sur_la_meme_corde() {
     let spec = ScoreSpec {
         meter: None,
+        repeats: Vec::new(),
         title: "legato".into(),
         origin_qn: 0.0,
         sig: (4, 4),
@@ -668,6 +670,7 @@ fn bends_et_glisses_font_l_aller_retour() {
     // Le MusicXML.
     let spec = ScoreSpec {
         meter: None,
+        repeats: Vec::new(),
         title: "t".into(),
         origin_qn: 4.0,
         sig: (4, 4),
@@ -775,6 +778,7 @@ fn les_triolets_se_reconnaissent_et_s_ecrivent() {
     // Le MusicXML porte le 3 : sept signes de triolet, deux crochets.
     let spec = ScoreSpec {
         meter: None,
+        repeats: Vec::new(),
         title: "t".into(),
         origin_qn: 0.0,
         sig: (4, 4),
@@ -875,6 +879,7 @@ fn une_basse_tenue_sous_la_melodie_fait_une_deuxieme_voix() {
     // Le MusicXML : les voix 2 et 6, trois retours au debut de la mesure 1.
     let spec = ScoreSpec {
         meter: None,
+        repeats: Vec::new(),
         title: "t".into(),
         origin_qn: 0.0,
         sig: (4, 4),
@@ -921,6 +926,7 @@ fn les_techniques_de_jeu_se_gardent_et_s_ecrivent() {
     // losange et l'harmonique, l'onde du vibrato.
     let spec = ScoreSpec {
         meter: None,
+        repeats: Vec::new(),
         title: "t".into(),
         origin_qn: 0.0,
         sig: (4, 4),
@@ -961,6 +967,7 @@ fn les_noms_d_accords_suivent_les_changements() {
     assert_eq!(e.harmony[1].0, 4 * 4);
     let spec = ScoreSpec {
         meter: None,
+        repeats: Vec::new(),
         title: "t".into(),
         origin_qn: 0.0,
         sig: (4, 4),
@@ -1011,6 +1018,7 @@ fn le_chiffrage_change_en_route() {
     // longueur.
     let spec = ScoreSpec {
         meter: Some(meter),
+        repeats: Vec::new(),
         title: "3/4".into(),
         origin_qn: 0.0,
         sig: (4, 4),

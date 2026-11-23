@@ -120,6 +120,62 @@ pub(crate) fn need_ppq(eng: &Engraved) -> Vec<f32> {
         .collect()
 }
 
+/// Les reprises : la prise compactee (chaque passage repris ecrit une
+/// fois), ou la prise telle quelle s'il n'y en a pas.
+pub fn with_repeats(item: &Item) -> Item {
+    let mut it = item.clone();
+    let eng = it.engraved().clone();
+    let reps = cp_tab::repeats::find(&eng, &it.doc);
+    if reps.is_empty() {
+        return it;
+    }
+    let c = cp_tab::repeats::compact(&eng, &it.doc, &reps);
+    it.meter = Some(c.meter);
+    it.repeats = c.repeats;
+    it.set_doc(c.notes);
+    it
+}
+
+/// La place d'une barre de reprise qui ouvre la mesure `m`.
+const REP_W: f32 = 8.0;
+pub(crate) fn rep_room(it: &Item, m: i64) -> f32 {
+    if it.repeats.iter().any(|r| r.m0 == m) {
+        s(REP_W)
+    } else {
+        0.0
+    }
+}
+
+/// La place des points d'une reprise qui se ferme a la fin de la mesure
+/// `m` (sur sa barre de droite).
+pub(crate) fn rep_end_room(it: &Item, m: i64) -> f32 {
+    if it.repeats.iter().any(|r| r.m0 + r.len == m + 1) {
+        s(REP_W * 0.75)
+    } else {
+        0.0
+    }
+}
+
+/// Une barre de reprise sur une portee `[a, b]` : `open` (epaisse, fine,
+/// deux points) depuis `x`, ou fermante (deux points, fine, epaisse) jusqu'a
+/// `x`. Les points dans les deux interlignes du milieu.
+fn repeat_bar(cv: &mut Canvas<'_>, ink: Color, x: f32, a: f32, b: f32, open: bool) {
+    let (thick, thin) = (s(1.8), s(0.6));
+    let mid = (a + b) * 0.5;
+    let dy = ((b - a) / 8.0).max(s(2.0));
+    let r = s(0.9);
+    let (xt, xn, xd) = if open {
+        (x, x + s(2.8), x + s(5.2))
+    } else {
+        (x - thick, x - s(2.8) - thin, x - s(5.2))
+    };
+    cv.fill_rect(xt, a, thick, b - a, ink);
+    cv.fill_rect(xn, a, thin, b - a, ink);
+    for yy in [mid - dy, mid + dy] {
+        cv.fill_rect(xd - r, yy - r, 2.0 * r, 2.0 * r, ink);
+    }
+}
+
 /// La place d'un chiffrage qui change au debut de la mesure `m`.
 pub(crate) fn sig_room(eng: &Engraved, m: i64) -> f32 {
     if m > 0 && eng.sig_of(m) != eng.sig_of(m - 1) {
@@ -248,6 +304,7 @@ pub fn whole_track(tr: &Track) -> Option<Item> {
         qn1: last.qn1,
         origin_qn: first.origin_qn,
         sig: first.sig,
+        meter: first.meter.clone(),
         bpm: first.bpm,
         detect: first.detect.clone(),
         dropped: items.iter().map(|it| it.dropped).sum(),
@@ -302,7 +359,9 @@ pub(crate) fn render(
     let bq: Vec<f64> = (0..eng.measures)
         .map(|m| eng.bar_len(m) as f64 / eng.grid.max(1) as f64)
         .collect();
-    let room: Vec<f32> = (0..eng.measures).map(|m| sig_room(&eng, m)).collect();
+    let room: Vec<f32> = (0..eng.measures)
+        .map(|m| sig_room(&eng, m) + rep_room(&it, m) + rep_end_room(&it, m))
+        .collect();
     let x0 = mm(MARGIN_X);
     let cw = PAGE_W as f32 - 2.0 * x0;
     let need = need_ppq(&eng);
@@ -491,8 +550,16 @@ fn draw_system(
     let mut pts = Vec::new();
     for (j, &bx) in bar_x.iter().enumerate() {
         let m = sy.m0 + j as i64;
+        // Les points d'une reprise qui se ferme : la mesure d'avant finit
+        // avant eux.
+        if j > 0 {
+            let end = rep_end_room(it, m - 1);
+            if end > 0.0 {
+                pts.push((bstart(m), bx - end));
+            }
+        }
         pts.push((bstart(m), bx));
-        let room = sig_room(eng, m);
+        let room = sig_room(eng, m) + rep_room(it, m);
         if j + 1 < bar_x.len() && room > 0.0 {
             pts.push((bstart(m), bx + room));
         }
@@ -602,13 +669,23 @@ fn draw_system(
     let top = staff.or(tabs).map_or(y, |v| v.0);
     let bot = tabs.or(staff).map_or(y, |v| v.1);
     cv.fill_rect(x0, top, bar_w, bot - top, ink);
+    // Les reprises qui s'ouvrent (avant un chiffrage qui change).
+    for m in sy.m0..sy.m1 {
+        if rep_room(it, m) <= 0.0 {
+            continue;
+        }
+        let bx = bar_x[(m - sy.m0) as usize];
+        for (a, b) in [staff, tabs].into_iter().flatten() {
+            repeat_bar(cv, ink, bx, a, b, true);
+        }
+    }
     // Les chiffrages qui changent, au debut de leur mesure.
     for m in sy.m0..sy.m1 {
         if sig_room(eng, m) <= 0.0 {
             continue;
         }
         let (n, d) = eng.sig_of(m);
-        let bx = bar_x[(m - sy.m0) as usize] + s(1.0);
+        let bx = bar_x[(m - sy.m0) as usize] + s(1.0) + rep_room(it, m);
         if let Some((top, _)) = staff {
             time_sig(cv, text, ink, bx, top, 2.0 * gap, n, d);
         } else if let Some((top, _)) = tabs {
@@ -616,9 +693,31 @@ fn draw_system(
             time_sig(cv, text, ink, bx, top, h * 0.5, n, d);
         }
     }
-    // Les barres de mesure ; la double barre a la fin du morceau.
+    // Les barres de mesure ; la double barre a la fin du morceau ; la
+    // reprise qui se ferme (« x3 » au-dessus quand elle se joue plus de deux
+    // fois).
     for m in sy.m0 + 1..=sy.m1 {
         let x = bar_x[(m - sy.m0) as usize].min(xr);
+        if let Some(rp) = it.repeats.iter().find(|r| r.m0 + r.len == m).copied() {
+            for (a, b) in [staff, tabs].into_iter().flatten() {
+                repeat_bar(cv, ink, x, a, b, false);
+            }
+            if rp.times > 2 {
+                let top = staff.or(tabs).map_or(y, |v| v.0);
+                text.draw_in(
+                    cv,
+                    Font::new(0, s(9.0) as u16, 700),
+                    x - s(40.0),
+                    top - s(15.0),
+                    s(40.0),
+                    s(12.0),
+                    &format!("\u{00d7}{}", rp.times),
+                    ink,
+                    Align::Right,
+                );
+            }
+            continue;
+        }
         for (a, b) in [staff, tabs].into_iter().flatten() {
             if m == sy.m1 && last {
                 cv.fill_rect(xr - s(2.4), a, s(2.4), b - a, ink);

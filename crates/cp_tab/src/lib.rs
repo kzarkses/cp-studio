@@ -31,6 +31,7 @@ pub mod key;
 pub mod meter;
 pub mod model;
 pub mod notes;
+pub mod repeats;
 pub mod resample;
 pub mod score;
 pub mod tuner;

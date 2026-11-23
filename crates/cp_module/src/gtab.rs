@@ -1892,10 +1892,26 @@ impl App {
         self.r.ext_set(SECTION, "selftest_editor", &ed, false);
     }
 
+    /// Les reprises dans les exports (menu de la piste ; oui par defaut).
+    fn gtab_repeats_on(&self) -> bool {
+        self.r.ext_get(SECTION, "gt_repeats").as_deref() != Some("0")
+    }
+
+    /// La prise telle qu'elle s'exporte : compactee en reprises si elles
+    /// sont demandees.
+    fn gtab_for_export(&self, it: &Item) -> Item {
+        if self.gtab_repeats_on() {
+            cp_tabview::print::with_repeats(it)
+        } else {
+            it.clone()
+        }
+    }
+
     /// Ecrit la partition d'un item (MusicXML) dans `Guitar Tab/<nom>.musicxml`.
     fn gtab_export_item(&self, it: &Item) -> (Option<PathBuf>, cp_tab::score::Stats) {
         let spec = ScoreSpec {
             meter: it.meter.clone(),
+            repeats: it.repeats.clone(),
             title: it.name.clone(),
             origin_qn: it.origin_qn,
             sig: it.sig,
@@ -2033,6 +2049,7 @@ impl App {
         if pdf {
             self.gtab_write_pdf(&it, t);
         } else {
+            let it = self.gtab_for_export(&it);
             let (p, _) = self.gtab_export_item(&it);
             self.gt.arr.status = match p {
                 Some(p) => format!("Exported: {}", p.display()),
@@ -2044,6 +2061,7 @@ impl App {
     /// Les pages d'une partition (un item, ou une guitare reunie) ; les
     /// couches de la piste `t` decident (la partition, la tab, les deux).
     fn gtab_write_pdf(&mut self, it: &Item, t: usize) {
+        let it = &self.gtab_for_export(it);
         let lanes = self.gt.arr.tracks[t].head.lanes;
         let t0 = std::time::Instant::now();
         let p = cp_tabview::print::pdf(it, lanes, &mut self.text);
@@ -2668,6 +2686,7 @@ impl App {
             GAct::ExportPdf { t, i } => self.gtab_export_pdf(t, i),
             GAct::Export { t, i } => {
                 if let Some(it) = self.gt.arr.item(t, i).cloned() {
+                    let it = self.gtab_for_export(&it);
                     let (p, _) = self.gtab_export_item(&it);
                     self.gt.arr.status = match p {
                         Some(p) => format!("Exported: {}", p.display()),
@@ -2825,6 +2844,12 @@ impl App {
                 checked: false,
                 enabled: has_tab,
             }),
+            Some(MenuItem {
+                id: 6,
+                text: "Repeats in exports",
+                checked: self.gtab_repeats_on(),
+                enabled: true,
+            }),
             None,
             Some(MenuItem {
                 id: 3,
@@ -2842,6 +2867,10 @@ impl App {
             }
             4 => self.gtab_export_track(t, true),
             5 => self.gtab_export_track(t, false),
+            6 => {
+                let v = if self.gtab_repeats_on() { "0" } else { "1" };
+                r.ext_set(SECTION, "gt_repeats", v, true);
+            }
             1 => {
                 if let Some(n) = r.user_inputs("Rename guitar track", 1, "Name", &h.name) {
                     let n = n.trim().to_string();

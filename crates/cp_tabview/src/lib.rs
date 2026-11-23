@@ -330,6 +330,8 @@ pub struct Item {
     pub sig: (i32, i32),
     /// Les mesures du projet (`None` : `sig` partout depuis `origin_qn`).
     pub meter: Option<cp_tab::meter::Meter>,
+    /// Les reprises a ecrire (une prise compactee pour l'impression).
+    pub repeats: Vec<cp_tab::repeats::Repeat>,
     pub bpm: f64,
     pub takes: Vec<TakeInfo>,
     pub active: usize,

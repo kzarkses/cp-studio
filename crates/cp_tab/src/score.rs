@@ -44,6 +44,8 @@ pub struct ScoreSpec {
     /// Les mesures du projet, quand le chiffrage change en route (`None` :
     /// `sig` partout, depuis `origin_qn`).
     pub meter: Option<crate::meter::Meter>,
+    /// Les reprises (une prise compactee, voir [`crate::repeats`]).
+    pub repeats: Vec<crate::repeats::Repeat>,
     pub bpm: f64,
     /// Cases de la grille par noire.
     pub grid: u32,
@@ -223,6 +225,10 @@ pub fn write_musicxml(notes: &[TNote], spec: &ScoreSpec, dropped: usize) -> (Str
                 spec.bpm
             );
         }
+        // Une reprise qui s'ouvre.
+        if spec.repeats.iter().any(|r| r.m0 == m) {
+            x += "      <barline location=\"left\"><bar-style>heavy-light</bar-style><repeat direction=\"forward\"/></barline>\n";
+        }
         // Portee 1 puis tablature ; dans chacune la voix 1, puis la 2 si
         // la mesure en a une (on revient au debut de la mesure entre deux).
         let two = eng.two_voices.contains(&m);
@@ -396,6 +402,14 @@ pub fn write_musicxml(notes: &[TNote], spec: &ScoreSpec, dropped: usize) -> (Str
                     x += "</note>\n";
                 }
             }
+        }
+        // Une reprise qui se ferme : combien de fois.
+        if let Some(r) = spec.repeats.iter().find(|r| r.m0 + r.len - 1 == m) {
+            let _ = writeln!(
+                x,
+                "      <barline location=\"right\"><bar-style>light-heavy</bar-style><repeat direction=\"backward\" times=\"{}\"/></barline>",
+                r.times
+            );
         }
         x += "    </measure>\n";
     }
