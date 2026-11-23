@@ -169,6 +169,12 @@ fn reaper_test() -> ExitCode {
         );
         return ExitCode::from(2);
     }
+    // Le module que REAPER charge (target/debug) : reconstruit d'abord,
+    // sinon l'auto-test juge l'ancien (2026-11-23 : un PASS sur un module
+    // vieux d'une heure).
+    if !cargo(&["build", "-q", "-p", "cp_module"]) {
+        return ExitCode::FAILURE;
+    }
     let exe = env::var_os("CP_REAPER_EXE")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from(r"C:\Program Files\REAPER (x64)\reaper.exe"));
