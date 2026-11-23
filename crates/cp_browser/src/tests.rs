@@ -890,3 +890,31 @@ fn un_long_fichier_s_ecoute_en_flux_dans_le_navigateur() {
     assert_eq!(st.stream_misses, 0, "aucun bloc sans sa page");
     assert!(st.bytes < 64 << 20, "{} Mo", st.bytes >> 20);
 }
+
+#[test]
+fn un_depot_de_l_explorateur_montre_et_fait_ecouter() {
+    let root = library();
+    let mut h = Fake::new();
+    let mut b = Browser::new(places(&root), Path::new("."), Vec::new());
+    b.layout(420.0, 640.0, 1.0);
+    // Un fichier de la bibliotheque : son dossier s'ouvre, il est choisi et
+    // s'ecoute.
+    let kick = root.join("Drums").join("Snares").join("Snare 03.wav");
+    b.drop_paths(&mut h, std::slice::from_ref(&kick));
+    assert_eq!(b.selected_path_pub().as_deref(), Some(kick.as_path()));
+    b.tick(&mut h);
+    assert!(b.animating(), "il joue");
+    // Un dossier hors des siens : ajoute, ouvert, choisi.
+    let other = std::env::temp_dir().join("cp_browser_drop");
+    let _ = std::fs::create_dir_all(&other);
+    let f = other.join("Dropped 01.wav");
+    if !f.exists() {
+        std::fs::write(&f, b"RIFF").unwrap();
+    }
+    b.drop_paths(&mut h, std::slice::from_ref(&other));
+    assert_eq!(b.selected_path_pub().as_deref(), Some(other.as_path()));
+    assert!(h.saved.iter().any(|(k, _)| k == "folders"), "retenu");
+    // Puis un fichier de ce dossier.
+    b.drop_paths(&mut h, std::slice::from_ref(&f));
+    assert_eq!(b.selected_path_pub().as_deref(), Some(f.as_path()));
+}

@@ -489,6 +489,44 @@ impl Browser {
         self.status = format!("Added {}", p.path.display());
     }
 
+    /// Des fichiers deposes depuis l'Explorateur de Windows : un dossier
+    /// s'ouvre, un fichier se montre dans son dossier et s'ecoute. Un dossier
+    /// qui n'est dans aucun des siens est ajoute aux dossiers de Cedric.
+    pub fn drop_paths(&mut self, h: &mut dyn Host, paths: &[PathBuf]) {
+        let Some(p) = paths.first() else { return };
+        let (dir, file) = if p.is_dir() {
+            (p.clone(), None)
+        } else {
+            match p.parent() {
+                Some(d) => (d.to_path_buf(), Some(p.clone())),
+                None => return,
+            }
+        };
+        if self.tree.reveal(&dir).is_none() {
+            self.add_place(
+                h,
+                Place {
+                    path: dir.clone(),
+                    title: None,
+                },
+            );
+        }
+        let Some(did) = self.tree.reveal(&dir) else {
+            return;
+        };
+        self.tree.load(did);
+        self.tree.nodes[did].expanded = true;
+        let target = match &file {
+            Some(f) => self.tree.reveal(f).unwrap_or(did),
+            None => did,
+        };
+        self.rebuild();
+        if let Some(i) = self.rows.iter().position(|&r| r == Row::Node(target)) {
+            self.select_row(i, h, file.is_some());
+        }
+        self.status = format!("Dropped {}", p.display());
+    }
+
     /// Les raccourcis de l'Explorateur de medias de REAPER, ajoutes aux
     /// dossiers de Cedric (sans doublon).
     pub fn import_reaper_shortcuts(&mut self, h: &mut dyn Host) {

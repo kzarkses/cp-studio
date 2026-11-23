@@ -578,6 +578,8 @@ impl App {
     }
 
     fn adopt(&mut self, hwnd: Hwnd, place: Place) {
+        // Des fichiers deposes depuis l'Explorateur : WM_DROPFILES.
+        cp_sys::shell::accept_files(hwnd, true);
         let scale = ui::dpi(hwnd) as f32 / 96.0;
         self.view = Some(View {
             hwnd,
@@ -1081,6 +1083,16 @@ impl App {
                 Some(0)
             }
             msg::ERASEBKGND => Some(1),
+            // Des fichiers deposes depuis l'Explorateur.
+            cp_sys::shell::WM_DROPFILES => {
+                let (files, _, _) = cp_sys::shell::take_drop(m.wp);
+                let paths: Vec<std::path::PathBuf> =
+                    files.into_iter().map(std::path::PathBuf::from).collect();
+                self.with_browser(|b, h| b.drop_paths(h, &paths));
+                self.browser.mark();
+                self.want_frames();
+                Some(0)
+            }
             msg::SETCURSOR => {
                 if (m.lp & 0xFFFF) == 1 {
                     self.cursor(hwnd);
