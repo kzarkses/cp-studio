@@ -1422,6 +1422,7 @@ impl App {
                 audio,
             )),
             Some(item(13, "Source tempo...", false, audio)),
+            Some(item(16, "Region and gain...", false, audio)),
             Some(item(
                 14,
                 "Playback: one-shot each pass",
@@ -1547,6 +1548,44 @@ impl App {
                     if let Some(c) = self.ses.ses.clip_mut(col, scene) {
                         // La passe se recalcule.
                         c.bars = 0.0;
+                    }
+                }
+            }
+            16 => {
+                if let Kind::Audio(a) = &clip.kind {
+                    let gdb = if a.gain > 1e-6 {
+                        20.0 * a.gain.log10()
+                    } else {
+                        -60.0
+                    };
+                    let vals = format!("{:.3},{:.3},{:.1}", a.offs, a.len, gdb);
+                    if let Some(v) = r.user_inputs(
+                        "Region and gain",
+                        3,
+                        "Start (s):,Length (s; 0 = to the end):,Gain (dB):",
+                        &vals,
+                    ) {
+                        let f: Vec<f64> = v
+                            .split(',')
+                            .map(|x| x.trim().parse().unwrap_or(f64::NAN))
+                            .collect();
+                        if let Some(Kind::Audio(au)) =
+                            self.ses.ses.clip_mut(col, scene).map(|c| &mut c.kind)
+                        {
+                            if f.first().is_some_and(|x| x.is_finite()) {
+                                au.offs = f[0].max(0.0);
+                            }
+                            if f.get(1).is_some_and(|x| x.is_finite()) {
+                                au.len = f[1].max(0.0);
+                            }
+                            if f.get(2).is_some_and(|x| x.is_finite()) {
+                                au.gain = 10f64.powf(f[2].clamp(-60.0, 24.0) / 20.0);
+                            }
+                        }
+                        // La passe se recalcule sur la region.
+                        if let Some(c) = self.ses.ses.clip_mut(col, scene) {
+                            c.bars = 0.0;
+                        }
                     }
                 }
             }

@@ -522,6 +522,10 @@ pub const LENGTHS: [f64; 10] = [0.0625, 0.125, 0.25, 0.5, 1.0, 2.0, 4.0, 8.0, 16
 
 /// Le libelle d'une longueur (« 1/4 », « 2 »).
 pub fn length_label(bars: f64) -> String {
+    // Pas encore calculee (une case audio pas encore lancee).
+    if bars <= 0.0 || !bars.is_finite() {
+        return "auto".into();
+    }
     if bars >= 1.0 {
         num(bars)
     } else {
