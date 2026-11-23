@@ -54,7 +54,7 @@ Ce que ces mots veulent dire, en critères :
 | ✅ B3 (base) : texte par GDI, cache de glyphes, mesure, « … » | 2026-11-21 | captures du vrai REAPER |
 | ✅ B4 (base) : icônes Lucide en vecteur (SVG avec arcs) | 2026-11-21 | test : chaque icône se dessine dans son carré |
 | ✅ B5 : horloge calée sur le vrai rafraîchissement de l'écran (`D3DKMTWaitForVerticalBlankEvent` ; `DwmFlush` s'arrêtait sur un écran immobile) ; ne repeindre que ce qui change (la forme d'onde seule pendant l'écoute) et n'envoyer à l'écran que les rangées changées ; une garde laisse toujours au moins la moitié du fil principal à REAPER | 2026-11-21 | vrai REAPER, ancré en 870 × 1298 : 0,4 ms par image d'animation, 1,8 ms par redessin complet, battement de REAPER 42 ms au pire (le gel signalé par Cedric : 32 s) ; reste : le geste de 10 s compté à la main, la latence souris → écran |
-| ✅ B6 (base) : souris (capture, double-clic, molette verticale et horizontale, curseurs), caractères par `WM_CHAR` (AZERTY), menus contextuels natifs, presse-papiers, glisser-déposer Windows vers REAPER, infobulles natives (CP Transport) | 2026-11-21, infobulles le 2026-11-22 | tests ; vrai REAPER pour le clavier ; reste : glisser depuis l'Explorateur vers nos fenêtres, infobulles dans le navigateur |
+| ✅ B6 (base) : souris (capture, double-clic, molette verticale et horizontale, curseurs), caractères par `WM_CHAR` (AZERTY), menus contextuels natifs, presse-papiers, glisser-déposer Windows vers REAPER, infobulles natives (CP Transport) | 2026-11-21, infobulles le 2026-11-22 | tests ; vrai REAPER pour le clavier ; glisser depuis l'Explorateur vers le navigateur et Guitar Tab, infobulles du navigateur (2026-11-23) |
 | ✅ B7 (base) : mesures à l'écran (temps d'image, cadence, images sautées) | 2026-11-21 | action « Performance overlay » |
 | ✅ A2 (base) : écoute en flux (jouable dès la première seconde décodée), pics à plusieurs résolutions | 2026-11-21 | tests ; limite 1,5 Go par fichier (23 min stéréo 48 kHz) ; reste : le vrai flux disque pour les fichiers de plusieurs heures |
 | ✅ A3 (premier critère) : une section de N échantillons rend N échantillons, N de 1 à 4096 | 2026-11-21 | test `cp_audio` |
@@ -152,6 +152,11 @@ faire un vrai retour.
   en mémoire au lieu de 2,8 Go ; aucun bloc sans sa page en temps réel avec
   des sauts au hasard. Vrai REAPER, 12 min de WAV : la bonne seconde entendue
   après deux sauts, 10 Mo, pics complets. L'oracle reste identique au bit.
+- ✅ **Relu à part le 2026-11-23** (une relecture indépendante du code) :
+  aucun défaut de mémoire ; des défauts dans le choix des pages, corrigés et
+  gardés par des essais au rythme de REAPER (à l'envers : 13 615 pages posées
+  en 2 s → 13 ; deux voix d'un même clip ; une boucle au milieu d'un long
+  fichier ; une source plus courte qu'annoncée ; deux départs coup sur coup).
 - Reste : un flux qui cuit (l'élastique) ne se fait pas sur un clip en flux
   (refusé, en le disant ; le navigateur se cale alors par la vitesse).
 - **Les pics pour l'affichage** des formes d'onde, calculés sur un fil de
@@ -308,8 +313,11 @@ et 85 à 139 ms d'amorçage. D'où deux chemins.
   latence de sortie retirée, une entrée ou toutes, les notes tenues relâchées
   à la fin. Vrai REAPER : une prise de toutes les entrées finie à l'heure,
   rien de perdu.
+- ✅ **Dans l'ABI 12** (2026-11-23) : les prises audio et MIDI, le temps du
+  moteur et le lancement daté sont accessibles aux applications (la Session
+  n'aura pas à attendre une réinstallation du chargeur).
 - Reste : la mesure contre une boucle de retour (un câble) ; le branchement
-  dans une application (la Session) et dans l'ABI.
+  dans une application (la Session).
 
 ### A9. La robustesse
 
@@ -615,7 +623,10 @@ Guitar Tab pour le rendre complet ») :
   (noire pointée en 6/8) ; le tempo n'y change rien (tout est en noires) ;
 - **les reprises** (2026-11-23) : un passage rejoué tel quel s'écrit une fois
   entre barres de reprise, « ×3 » au-dessus, dans le PDF et le MusicXML
-  (menu de la piste : « Repeats in exports »).
+  (menu de la piste : « Repeats in exports ») ;
+- **les changements de tempo** (2026-11-23) : écrits là où ils tombent (une
+  noire et sa valeur au-dessus de la portée, `<metronome>` en MusicXML) ;
+  une mesure où le tempo change ne se reprend pas.
 Reste : l'oreille et l'œil de Cedric sur ses vraies prises (les seuils
 viennent de tests synthétiques).
 
@@ -749,7 +760,7 @@ celui de REAPER.
 | FX Constellation | moteur de modulation, pad, graphe, liens | mémoires `project-fx-constellation-refonte`, `project-moteur-modulation-plan`, `ROADMAP_FXConstellation.md` |
 | Séquenceur / Sound Gen | séquenceur à la Pigments, synthé JSFX | mémoires `project-sequenceur`, `project-soundgen-modulation`, `ROADMAP_Sequenceur.md` |
 | Vidéo | caméra, stop motion, calage par le son | mémoire `project-video`, `ROADMAP_Video.md` |
-| Guitar Tab | guitare enregistrée → MIDI, partition et tab éditables dans REAPER | **V1 construite le 2026-11-22** (`cp_tab`, `cp_tabview`) ; V2 en cours (section ci-dessus) ; plus tard : bends écrits, triolets, plusieurs voix |
+| Guitar Tab | guitare enregistrée → MIDI, partition et tab éditables dans REAPER | **V1 construite le 2026-11-22** (`cp_tab`, `cp_tabview`) ; V2 en cours (section ci-dessus) ; bends, triolets, deux voix, armure, techniques, chiffrages et tempos qui changent, reprises : faits (2026-11-22/23) |
 | ChordLab, PaintSynth, barres d'outils… | les plus petits outils | mémoires et anciennes ROADMAP |
 
 Pour chaque application, une ROADMAP à elle (`ROADMAP_<Nom>.md`) sera écrite au
