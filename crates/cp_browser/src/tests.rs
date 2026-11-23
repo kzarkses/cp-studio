@@ -918,3 +918,39 @@ fn un_depot_de_l_explorateur_montre_et_fait_ecouter() {
     b.drop_paths(&mut h, std::slice::from_ref(&f));
     assert_eq!(b.selected_path_pub().as_deref(), Some(f.as_path()));
 }
+
+#[test]
+fn un_depot_relit_un_dossier_deja_lu_et_ignore_la_casse() {
+    let root = library();
+    let mut h = Fake::new();
+    let mut b = Browser::new(places(&root), Path::new("."), Vec::new());
+    b.layout(420.0, 640.0, 1.0);
+    // Le dossier des caisses claires, lu une fois.
+    let snares = root.join("Drums").join("Snares");
+    b.drop_paths(&mut h, std::slice::from_ref(&snares.join("Snare 01.wav")));
+    // Un fichier tout neuf, depose ensuite : le dossier est relu.
+    let fresh = snares.join("Snare 99 tout neuf.wav");
+    std::fs::write(&fresh, b"RIFF").unwrap();
+    b.drop_paths(&mut h, std::slice::from_ref(&fresh));
+    assert_eq!(b.selected_path_pub().as_deref(), Some(fresh.as_path()));
+    // La casse de Windows : le meme fichier, ecrit autrement.
+    let shout = PathBuf::from(fresh.to_string_lossy().to_uppercase());
+    b.drop_paths(&mut h, std::slice::from_ref(&shout));
+    assert!(
+        b.selected_path_pub().is_some_and(|p| p
+            .to_string_lossy()
+            .eq_ignore_ascii_case(&fresh.to_string_lossy())),
+        "pas de dossier en double pour une casse differente"
+    );
+    let n_places = h.saved.iter().filter(|(k, _)| k == "folders").count();
+    // Un fichier qui n'est pas un son : rien n'est ajoute.
+    let txt = std::env::temp_dir().join("cp_browser_drop_note.txt");
+    std::fs::write(&txt, b"x").unwrap();
+    b.drop_paths(&mut h, std::slice::from_ref(&txt));
+    assert_eq!(
+        h.saved.iter().filter(|(k, _)| k == "folders").count(),
+        n_places
+    );
+    let _ = std::fs::remove_file(&fresh);
+    let _ = std::fs::remove_file(&txt);
+}

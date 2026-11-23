@@ -111,6 +111,23 @@ pub const AUDIO_EXT: [&str; 14] = [
     "bwf",
 ];
 
+/// `target` sans son debut `base`, sans tenir compte de la casse (les
+/// chemins de Windows).
+pub fn strip_prefix_ci(target: &Path, base: &Path) -> Option<PathBuf> {
+    let mut t = target.components();
+    for b in base.components() {
+        let c = t.next()?;
+        if !c
+            .as_os_str()
+            .to_string_lossy()
+            .eq_ignore_ascii_case(&b.as_os_str().to_string_lossy())
+        {
+            return None;
+        }
+    }
+    Some(t.as_path().to_path_buf())
+}
+
 pub fn is_audio(p: &Path) -> bool {
     p.extension()
         .and_then(|e| e.to_str())
@@ -771,7 +788,8 @@ impl Tree {
                 continue;
             }
             let base = self.nodes[r].path.clone();
-            let Ok(rel) = target.strip_prefix(&base) else {
+            // Windows ignore la casse : « c:\Samples » est « C:\samples ».
+            let Some(rel) = strip_prefix_ci(target, &base) else {
                 continue;
             };
             let mut cur = r;

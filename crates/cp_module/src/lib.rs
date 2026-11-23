@@ -1004,6 +1004,7 @@ impl App {
                 if b != Button::Right {
                     ui::capture(hwnd);
                 }
+                self.browser_tip_mute();
                 self.feed(down(b, dbl));
             }
             msg::LBUTTONUP | msg::RBUTTONUP | msg::MBUTTONUP => {
@@ -1293,6 +1294,10 @@ impl App {
     /// L'infobulle du navigateur : apres 0,6 s sur un bouton de la barre.
     fn browser_tip(&mut self) {
         let Some(v) = self.view.as_mut() else { return };
+        // Une vue cachee (un raccourci, un onglet) n'a pas d'infobulle.
+        if !ui::is_visible(v.hwnd) {
+            v.mouse = (-1.0, -1.0);
+        }
         let (x, y) = v.mouse;
         let now = if x < 0.0 {
             None
@@ -1327,6 +1332,23 @@ impl App {
         if let Some(t) = &mut v.tip {
             t.show(&text.replace('\n', "\r\n"), sx, sy);
             v.tip_shown = true;
+        }
+    }
+
+    /// Un clic retire l'infobulle, qui ne revient pas tant que la souris
+    /// reste sur le meme bouton (comme celles de Windows).
+    fn browser_tip_mute(&mut self) {
+        if let Some(v) = self.view.as_mut() {
+            if v.tip_shown {
+                if let Some(t) = &mut v.tip {
+                    t.hide();
+                }
+                v.tip_shown = false;
+            }
+            if let Some((k, _)) = v.tip_key.take() {
+                let later = std::time::Instant::now() + std::time::Duration::from_secs(3600);
+                v.tip_key = Some((k, later));
+            }
         }
     }
 

@@ -493,7 +493,16 @@ impl Browser {
     /// s'ouvre, un fichier se montre dans son dossier et s'ecoute. Un dossier
     /// qui n'est dans aucun des siens est ajoute aux dossiers de Cedric.
     pub fn drop_paths(&mut self, h: &mut dyn Host, paths: &[PathBuf]) {
-        let Some(p) = paths.first() else { return };
+        // Le premier dossier, ou le premier son (un fichier qui n'est pas un
+        // son n'ajoute pas son dossier aux siens).
+        let Some(p) = paths
+            .iter()
+            .find(|p| p.is_dir() || crate::model::is_audio(p))
+            .cloned()
+        else {
+            self.status = "Nothing to play in what was dropped".into();
+            return;
+        };
         let (dir, file) = if p.is_dir() {
             (p.clone(), None)
         } else {
@@ -502,7 +511,19 @@ impl Browser {
                 None => return,
             }
         };
-        if self.tree.reveal(&dir).is_none() {
+        // Un dossier deja lu peut avoir change depuis (un fichier tout
+        // neuf) : son plus proche ancetre connu est relu.
+        let fresh = |b: &mut Browser, target: &Path| -> Option<usize> {
+            if let Some(id) = b.tree.reveal(target) {
+                return Some(id);
+            }
+            let known = target.ancestors().skip(1).find_map(|a| b.tree.reveal(a));
+            if let Some(id) = known {
+                b.reload(id);
+            }
+            b.tree.reveal(target)
+        };
+        if fresh(self, &dir).is_none() {
             self.add_place(
                 h,
                 Place {
@@ -511,13 +532,13 @@ impl Browser {
                 },
             );
         }
-        let Some(did) = self.tree.reveal(&dir) else {
+        let Some(did) = fresh(self, &dir) else {
             return;
         };
         self.tree.load(did);
         self.tree.nodes[did].expanded = true;
         let target = match &file {
-            Some(f) => self.tree.reveal(f).unwrap_or(did),
+            Some(f) => fresh(self, f).unwrap_or(did),
             None => did,
         };
         self.rebuild();
