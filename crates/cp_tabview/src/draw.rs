@@ -920,6 +920,34 @@ impl Arr {
         let s = |v: f32| th.s(v);
         cv.fill_rect(0.0, 0.0, l.w, l.bar_h, th.bar);
         let mut x = s(10.0);
+        // La poignee de la vue ancree, a gauche de tout.
+        if self.dock_handle {
+            let hw = cp_ui::handle::handle_width("Guitar Tab", th.scale);
+            let hot = self.hover == Hit::DockHandle;
+            cp_ui::handle::draw_handle(
+                cv,
+                text,
+                icons,
+                th,
+                0.0,
+                0.0,
+                hw,
+                l.bar_h,
+                Icon::Guitar,
+                "Guitar Tab",
+                hot,
+            );
+            push(
+                bx,
+                (0.0, 0.0, l.w, l.bar_h),
+                0.0,
+                0.0,
+                hw,
+                l.bar_h,
+                Hit::DockHandle,
+            );
+            x += hw;
+        }
         let isz = s(18.0) as u16;
         icons.draw(
             cv,

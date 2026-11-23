@@ -391,6 +391,11 @@ impl App {
                 Act::Commit(label) => self.ed_commit(label),
                 Act::Seek(q) => r.set_edit_cursor(r.qn_to_time(q)),
                 Act::StepListen(on) => self.host.midi_listen(on),
+                Act::DockGrab => {
+                    if let Some(h) = self.ed.win.as_ref().map(|w| w.hwnd) {
+                        self.dock_grab(h);
+                    }
+                }
                 Act::Play => r.main_on_command(40044),
                 Act::Undo | Act::Redo => {
                     r.main_on_command(if a == Act::Undo { 40029 } else { 40030 });
@@ -882,6 +887,25 @@ impl App {
             }),
             None,
             Some(MenuItem {
+                id: 20,
+                text: "Docker handle: auto",
+                checked: self.handle_mode() == 0,
+                enabled: true,
+            }),
+            Some(MenuItem {
+                id: 21,
+                text: "Docker handle: always",
+                checked: self.handle_mode() == 1,
+                enabled: true,
+            }),
+            Some(MenuItem {
+                id: 22,
+                text: "Docker handle: never",
+                checked: self.handle_mode() == 2,
+                enabled: true,
+            }),
+            None,
+            Some(MenuItem {
                 id: 4,
                 text: "Close the editor",
                 checked: false,
@@ -889,6 +913,7 @@ impl App {
             }),
         ];
         match ui::popup_menu(owner, sx, sy, &items) {
+            k @ 20..=22 => self.set_handle_mode((k - 20) as u8),
             1 => self.queue(WinOp::EdPlace(Place::Arrange)),
             2 => self.queue(WinOp::EdPlace(Place::Dock)),
             3 => self.queue(WinOp::EdPlace(Place::Float)),

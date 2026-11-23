@@ -514,6 +514,8 @@ pub enum Hit {
     },
     /// Le jeu libre d'une guitare (le bouton de l'en-tete).
     FreeToggle(usize),
+    /// La poignee de la vue ancree (la deplacer d'un docker a l'autre).
+    DockHandle,
     /// Le bord d'une prise (le rognage, comme dans l'arrangement).
     ItemEdge {
         t: usize,
@@ -658,6 +660,8 @@ pub enum Act {
     Free {
         t: usize,
     },
+    /// La poignee de la vue est tiree : passer le glisser a REAPER.
+    DockGrab,
     /// Ce qu'on entend a change ([`Arr::listen`], [`Arr::split`]).
     Listen,
     AddTrack,
@@ -749,6 +753,12 @@ pub enum Act {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Drag {
+    /// La poignee de la vue, appuyee : un glisser au-dela de quelques
+    /// pixels la passe a REAPER.
+    Handle {
+        x0: f32,
+        y0: f32,
+    },
     /// Une note deplacee : son debut d'origine et la position de la souris.
     Note {
         t: usize,
@@ -947,6 +957,8 @@ pub struct Arr {
     pub focus_lane: Lane,
     /// Le bas des pistes a l'ecran (les traits s'y arretent).
     pub(crate) tracks_bottom: f32,
+    /// La poignee de la vue ancree, montree (le module en decide).
+    pub dock_handle: bool,
 }
 
 /// Le magnetisme de REAPER : sa division, s'il est allume, et l'ecart
@@ -1234,6 +1246,7 @@ impl Arr {
             guide_q: None,
             damage: Vec::new(),
             tracks_bottom: 0.0,
+            dock_handle: false,
             mouse: (0.0, 0.0, Mods::default()),
             focus_lane: Lane::Audio,
         }
@@ -2059,7 +2072,16 @@ impl Arr {
         match *ev {
             Ev::Move { x, y, mods } => {
                 self.mouse = (x, y, mods);
+                if let Some(Drag::Handle { x0, y0 }) = self.drag {
+                    let far = cp_ui::handle::HANDLE_DRAG_PX * self.scale;
+                    if (x - x0).abs() > far || (y - y0).abs() > far {
+                        self.drag = None;
+                        return Some(Act::DockGrab);
+                    }
+                    return None;
+                }
                 match self.drag {
+                    Some(Drag::Handle { .. }) => {}
                     Some(Drag::Note {
                         t,
                         i,
@@ -2524,6 +2546,10 @@ impl Arr {
     fn down(&mut self, x: f32, y: f32, b: Button, dbl: bool, mods: Mods) -> Option<Act> {
         let h = self.hit(x, y);
         self.dirty = true;
+        if b == Button::Left && h == Hit::DockHandle {
+            self.drag = Some(Drag::Handle { x0: x, y0: y });
+            return None;
+        }
         if b == Button::Right {
             return match h {
                 Hit::Header(t)
@@ -2849,6 +2875,7 @@ impl Arr {
             }
             // La palette les prend avant (voir `event`).
             Hit::Help | Hit::Mark(_) => None,
+            Hit::DockHandle => None,
             Hit::None => {
                 self.select(None);
                 None
@@ -3085,6 +3112,7 @@ impl Arr {
             Hit::Header(_) => {
                 "Drag: move the guitar \u{00b7} right-click: lanes, rename, delete".into()
             }
+            Hit::DockHandle => cp_ui::handle::HANDLE_TIP.into(),
             Hit::FreeToggle(t) => {
                 if self.tracks.get(t).is_some_and(|x| x.head.free) {
                     "Free time: no bars, ruler in seconds (click: bars)".into()

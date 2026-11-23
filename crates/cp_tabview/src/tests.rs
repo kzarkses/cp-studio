@@ -2536,3 +2536,53 @@ fn jeu_libre_le_pdf_va_a_la_ligne_dans_un_silence() {
     assert_eq!(systems, 2);
     assert_eq!(pages, 1);
 }
+
+/// La poignee de la vue ancree : a gauche de la barre ; un glisser passe la
+/// main a REAPER, un clic droit ouvre le menu de la vue.
+#[test]
+fn la_poignee_de_la_vue_ancree() {
+    let mut b = Bench::new(1600, 900);
+    let mut v = arranger();
+    v.dock_handle = true;
+    b.draw(&mut v);
+    let (x, y) = find(&v, |h| *h == Hit::DockHandle).expect("la poignee");
+    assert!(x < 60.0);
+    let mods = Mods::default();
+    let down = |v: &mut Arr, x: f32, y: f32, b: Button| {
+        v.event(&Ev::Down {
+            x,
+            y,
+            b,
+            dbl: false,
+            mods,
+        })
+    };
+    assert!(down(&mut v, x, y, Button::Left).is_none());
+    assert!(
+        v.event(&Ev::Move {
+            x: x + 2.0,
+            y,
+            mods
+        })
+        .is_none()
+    );
+    assert_eq!(
+        v.event(&Ev::Move {
+            x: x + 14.0,
+            y: y + 8.0,
+            mods
+        }),
+        Some(Act::DockGrab)
+    );
+    v.event(&Ev::Up {
+        x: x + 14.0,
+        y: y + 8.0,
+        b: Button::Left,
+        mods,
+    });
+    assert!(matches!(
+        down(&mut v, x, y, Button::Right),
+        Some(Act::ViewMenu { .. })
+    ));
+    b.shot(&mut v, "19_poignee");
+}

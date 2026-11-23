@@ -86,6 +86,8 @@ pub trait Host {
         Vec::new()
     }
     fn window_action(&mut self, _id: u32) {}
+    /// La poignee de la vue est tiree : passer le glisser a REAPER.
+    fn dock_grab(&mut self) {}
 
     // --- V2 (par defaut : absent)
     /// Le tempo du projet.
@@ -204,6 +206,8 @@ pub struct Layout {
     pub status_y: f32,
     pub status_h: f32,
     pub scroll_w: f32,
+    /// La poignee de la vue ancree (0 : cachee).
+    pub handle_w: f32,
     pub search_x: f32,
     pub search_w: f32,
     pub btn: f32,
@@ -237,6 +241,12 @@ enum Grab {
     WavePan,
     /// La couture entre la liste et la forme d'onde.
     Split,
+    /// La poignee de la vue, appuyee : au-dela de quelques pixels, le
+    /// glisser passe a REAPER.
+    Handle {
+        x0: f32,
+        y0: f32,
+    },
 }
 
 /// Un clip garde en memoire (les derniers ecoutes).
@@ -252,6 +262,8 @@ const CACHE_MAX: usize = 12;
 const CACHE_BYTES: i64 = 1_500_000_000;
 
 pub struct Browser {
+    /// La poignee de la vue ancree, montree (le module en decide).
+    pub dock_handle: bool,
     pub tree: Tree,
     pub rows: Vec<Row>,
     pub hits: Vec<Hit>,
@@ -334,6 +346,7 @@ impl Browser {
             rows: Vec::new(),
             hits: Vec::new(),
             search: TextField::default(),
+            dock_handle: false,
             focus: Focus::List,
             scroll: Scroll::default(),
             sel: None,
@@ -707,7 +720,12 @@ impl Browser {
         let loop_x = play_x - s(2.0) - tw;
         let sync_x = loop_x - s(6.0) - btn;
         let view_x = sync_x - s(4.0) - btn;
-        let search_x = pad;
+        let handle_w = if self.dock_handle {
+            cp_ui::handle::handle_width("Browser", scale)
+        } else {
+            0.0
+        };
+        let search_x = pad + handle_w;
         let search_w = (view_x - s(8.0) - search_x).max(s(40.0));
         let list_y = bar_h + 1.0;
         let wave_y = h - status_h - wave_h;
@@ -723,6 +741,7 @@ impl Browser {
             status_y: h - status_h,
             status_h,
             scroll_w: s(10.0),
+            handle_w,
             search_x,
             search_w,
             btn,
@@ -1473,6 +1492,9 @@ impl Browser {
         }
         let b = |bx: f32, w: f32| (bx, 0.0, w, l.bar_h);
         let on = |v: bool| if v { "on" } else { "off" };
+        if x < l.handle_w {
+            return Some((cp_ui::handle::HANDLE_TIP.into(), b(0.0, l.handle_w)));
+        }
         if self.btn_hit(x, y, l.view_x) {
             return Some((
                 format!(
@@ -1571,6 +1593,14 @@ impl Browser {
                 self.dirty = true;
             }
             Ev::Move { x, y, .. } => {
+                if let Grab::Handle { x0, y0 } = self.grab {
+                    let far = cp_ui::handle::HANDLE_DRAG_PX * self.scale;
+                    if (x - x0).abs() > far || (y - y0).abs() > far {
+                        self.grab = Grab::None;
+                        h.dock_grab();
+                    }
+                    return self.take_dirty();
+                }
                 match self.grab {
                     Grab::Scrollbar => {
                         let track = self.lay.list_h;
@@ -1591,6 +1621,7 @@ impl Browser {
                             self.wave.pan_px(x0 - x);
                         }
                     }
+                    Grab::Handle { .. } => {}
                     Grab::None => {
                         if let Some(p) = &mut self.press {
                             if !p.dragging
@@ -1638,6 +1669,10 @@ impl Browser {
                 return;
             }
             if b != Button::Left {
+                return;
+            }
+            if x < self.lay.handle_w {
+                self.grab = Grab::Handle { x0: x, y0: y };
                 return;
             }
             if self.btn_hit(x, y, self.lay.view_x) {
@@ -1791,6 +1826,7 @@ impl Browser {
                 h.save("wave_h", &format!("{:.0}", self.wave_h_pref));
                 return;
             }
+            Grab::Handle { .. } => return,
             Grab::Wave => {
                 let click = self.wave.end_select();
                 if b == Button::Left {

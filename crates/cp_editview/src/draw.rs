@@ -274,6 +274,27 @@ impl Ed {
         let by = ((l.bar_h - s(24.0)) * 0.5).floor();
         let bh = s(24.0);
         let mut x = s(10.0);
+        // La poignee de la vue ancree, a gauche de tout.
+        if self.dock_handle {
+            let hw = cp_ui::handle::handle_width("Editor", th.scale);
+            let hot = self.hover == Hit::DockHandle
+                || matches!(self.drag, Some(crate::Drag::Handle { .. }));
+            cp_ui::handle::draw_handle(
+                cv,
+                text,
+                icons,
+                th,
+                0.0,
+                0.0,
+                hw,
+                l.bar_h,
+                Icon::Piano,
+                "Editor",
+                hot,
+            );
+            bx.push((0.0, 0.0, hw, l.bar_h, Hit::DockHandle));
+            x += hw;
+        }
         let (icon, name) = match &self.clip {
             Clip::Midi(m) => (Icon::Piano, m.name.as_str()),
             Clip::Audio(a) => (Icon::AudioLines, a.name.as_str()),

@@ -53,6 +53,9 @@ const WIN_PERF: u32 = 1003;
 const WIN_PLACE_ARRANGE: u32 = 1004;
 const WIN_PLACE_DOCK: u32 = 1005;
 const WIN_PLACE_FLOAT: u32 = 1006;
+/// La poignee de la vue tiree (passee a REAPER), et son reglage.
+const WIN_DOCK_GRAB: u32 = 1007;
+const WIN_HANDLE: u32 = 1010;
 
 pub(crate) mod msg {
     pub const DESTROY: u32 = 0x0002;
@@ -243,6 +246,11 @@ impl BrowserHost for Adapter<'_> {
             .ext_set(SECTION, &format!("browser_{key}"), value, true);
     }
     fn window_items(&mut self) -> Vec<MenuEntry> {
+        let handle = match self.r.ext_get(SECTION, "dock_handle").as_deref() {
+            Some("always") => 1,
+            Some("never") => 2,
+            _ => 0,
+        };
         vec![
             MenuEntry::new(
                 WIN_PLACE_ARRANGE,
@@ -256,11 +264,17 @@ impl BrowserHost for Adapter<'_> {
                 self.place == Place::Float,
             ),
             MenuEntry::new(WIN_PERF, "Performance overlay", self.perf),
+            MenuEntry::new(WIN_HANDLE, "Docker handle: auto", handle == 0),
+            MenuEntry::new(WIN_HANDLE + 1, "Docker handle: always", handle == 1),
+            MenuEntry::new(WIN_HANDLE + 2, "Docker handle: never", handle == 2),
             MenuEntry::new(WIN_CLOSE, "Close", false),
         ]
     }
     fn window_action(&mut self, id: u32) {
         *self.action = Some(id);
+    }
+    fn dock_grab(&mut self) {
+        *self.action = Some(WIN_DOCK_GRAB);
     }
     fn project_bpm(&mut self) -> f64 {
         self.r.master_tempo()
@@ -401,6 +415,8 @@ pub(crate) struct App {
     /// Battements depuis le chargement : au demarrage de REAPER, on attend
     /// qu'il ait fini de se construire avant d'ouvrir (et d'ancrer).
     ticks: u32,
+    /// Un glisser de poignee passe a REAPER : sa poignee native, et quand.
+    grab: Option<(Hwnd, std::time::Instant)>,
     /// Les raccourcis de la fenetre principale de REAPER (les editions au
     /// survol), lus une fois.
     main_keys: Option<cp_editview::keys::KeyMap>,
@@ -726,6 +742,12 @@ impl App {
                 self.browser.mark();
                 self.want_frames();
             }
+            Some(WIN_DOCK_GRAB) => {
+                if let Some(h) = self.view.as_ref().map(|v| v.hwnd) {
+                    self.dock_grab(h);
+                }
+            }
+            Some(k @ WIN_HANDLE..=1012) => self.set_handle_mode((k - WIN_HANDLE) as u8),
             _ => {}
         }
     }
@@ -1203,6 +1225,140 @@ fn decode(st: &[u8]) -> Option<Saved> {
     Some(out)
 }
 
+/// La poignee de REAPER dans le docker d'une vue : son WDLTabCtrl reduit a
+/// quelques pixels (une seule fenetre dans le docker : REAPER cache ses
+/// onglets). Mesure du 2026-11-23 (auto-test, phase DockGrip).
+pub(crate) fn dock_grip(view: Hwnd) -> Option<Hwnd> {
+    let b = ui::parent(view);
+    if b.0 == 0 {
+        return None;
+    }
+    ui::children(b).into_iter().find(|&c| {
+        let r = ui::window_rect(c);
+        c != view
+            && ui::class_name(c) == "WDLTabCtrl"
+            && ui::is_visible(c)
+            && r.bottom - r.top <= 10
+    })
+}
+
+fn lparam(x: i32, y: i32) -> isize {
+    ((y as u16 as isize) << 16) | (x as u16 as isize)
+}
+
+impl App {
+    /// Le reglage de la poignee des vues : 0 auto (quand REAPER cache ses
+    /// onglets), 1 toujours (ancree), 2 jamais.
+    pub(crate) fn handle_mode(&self) -> u8 {
+        match self.r.ext_get(SECTION, "dock_handle").as_deref() {
+            Some("always") => 1,
+            Some("never") => 2,
+            _ => 0,
+        }
+    }
+
+    pub(crate) fn set_handle_mode(&mut self, m: u8) {
+        let v = ["auto", "always", "never"][m.min(2) as usize];
+        self.r.ext_set(SECTION, "dock_handle", v, true);
+        self.handle_tick();
+    }
+
+    /// La poignee d'une vue doit-elle se montrer ?
+    fn handle_wanted(&self, view: Hwnd, mode: u8) -> bool {
+        if mode == 2 || self.r.dock_of(view).is_none() {
+            return false;
+        }
+        mode == 1 || dock_grip(view).is_some()
+    }
+
+    /// Les poignees des vues suivent leur docker (une vue de plus dans le
+    /// docker : REAPER montre ses onglets, la poignee s'efface).
+    pub(crate) fn handle_tick(&mut self) {
+        let mode = self.handle_mode();
+        if crate::gtab::selftest() {
+            self.r.ext_set(
+                SECTION,
+                "selftest_handle",
+                &format!(
+                    "browser={} grip={}",
+                    self.browser.dock_handle as u8,
+                    self.view.as_ref().and_then(|v| dock_grip(v.hwnd)).is_some() as u8
+                ),
+                false,
+            );
+        }
+        if let Some(h) = self.view.as_ref().map(|v| v.hwnd) {
+            let want = self.handle_wanted(h, mode);
+            if want != self.browser.dock_handle {
+                self.browser.dock_handle = want;
+                let (w, hh, s) = (self.browser.lay.w, self.browser.lay.h, self.browser.scale);
+                self.browser.layout(w, hh, s);
+                self.browser.mark();
+                self.want_frames();
+            }
+        }
+        if let Some(h) = self.ed.win.as_ref().map(|w| w.hwnd) {
+            let want = self.handle_wanted(h, mode);
+            if want != self.ed.ed.dock_handle {
+                self.ed.ed.dock_handle = want;
+                self.ed.ed.mark();
+                self.ed_render(true);
+            }
+        }
+        if let Some(h) = self.gt.win.as_ref().map(|w| w.hwnd) {
+            let want = self.handle_wanted(h, mode);
+            if want != self.gt.arr.dock_handle {
+                self.gt.arr.dock_handle = want;
+                self.gt.arr.mark();
+                self.gtab_render(true);
+            }
+        }
+    }
+
+    /// La poignee d'une vue est tiree : le glisser passe a REAPER. Un
+    /// appui poste a sa poignee native (son WDLTabCtrl) : REAPER prend la
+    /// souris et deplace la vue comme si on avait saisi sa poignee.
+    pub(crate) fn dock_grab(&mut self, view: Hwnd) {
+        const WM_MOUSEMOVE: u32 = 0x0200;
+        const WM_LBUTTONDOWN: u32 = 0x0201;
+        const MK_LBUTTON: usize = 1;
+        let Some(grip) = dock_grip(view) else {
+            self.host
+                .info("poignee : pas de poignee native dans ce docker (ses onglets sont montres)");
+            return;
+        };
+        let r = ui::window_rect(grip);
+        let (gx, gy) = ((r.right - r.left) / 2, (r.bottom - r.top) / 2);
+        ui::release_capture();
+        win::post_message(grip, WM_LBUTTONDOWN, MK_LBUTTON, lparam(gx, gy));
+        let (cx, cy) = ui::cursor_pos();
+        let (mx, my) = ui::screen_to_client(grip, cx, cy);
+        win::post_message(grip, WM_MOUSEMOVE, MK_LBUTTON, lparam(mx, my));
+        self.grab = Some((grip, std::time::Instant::now()));
+        self.host.info("poignee : glisser passe a REAPER");
+    }
+
+    /// Le glisser passe a REAPER : si le bouton est deja lache (un geste
+    /// tres court), REAPER attend encore son lacher ; on le lui donne, la
+    /// ou est la souris.
+    fn grab_tick(&mut self) {
+        const WM_LBUTTONUP: u32 = 0x0202;
+        let Some((grip, t0)) = self.grab else { return };
+        // L'auto-test n'a pas de vraie souris : il lache lui-meme.
+        let wait = if crate::gtab::selftest() { 10 } else { 30 };
+        if (ui::mouse_held() || crate::gtab::selftest()) && t0.elapsed().as_secs() < wait {
+            return;
+        }
+        if ui::capture_window() == grip {
+            let (cx, cy) = ui::cursor_pos();
+            let (mx, my) = ui::screen_to_client(grip, cx, cy);
+            win::post_message(grip, WM_LBUTTONUP, 0, lparam(mx, my));
+        }
+        self.grab = None;
+        self.handle_tick();
+    }
+}
+
 impl App {
     /// La bande d'onglets des dockers. Quand un docker ne tient qu'une
     /// fenetre et qu'il est plus petit que `dock_mini_tab_size`
@@ -1506,6 +1662,7 @@ impl Module for App {
             action: None,
             ops: Vec::new(),
             ticks: 0,
+            grab: None,
             show_perf: false,
             main_keys: None,
             last_mods: Mods::default(),
@@ -1633,6 +1790,10 @@ impl Module for App {
         }
         self.reaper_look();
         self.pointer_tick();
+        self.grab_tick();
+        if self.ticks % 10 == 5 {
+            self.handle_tick();
+        }
         self.gtab_tick();
         self.ed_tick();
         self.transport_tick();

@@ -1868,6 +1868,69 @@ impl SelfTest {
                         now.map_or("flottante".to_string(), |d| d.to_string())
                     ),
                 );
+                self.keys_step = 6;
+                self.ui_at = Some(Instant::now());
+            }
+            // Notre poignee : montree (seul dans son docker, REAPER cache ses
+            // onglets) ; appuyee puis tiree, le glisser passe a REAPER.
+            6 if t > 0.8 => {
+                let st = r
+                    .ext_get("CP_Studio", "selftest_handle")
+                    .unwrap_or_default();
+                self.say(
+                    st.contains("browser=1") && st.contains("grip=1"),
+                    format!("poignee du navigateur montree dans son docker ({st})"),
+                );
+                let s = cp_sys::ui::dpi(h) as f32 / 96.0;
+                let (x, y) = ((12.0 * s) as i32, (12.0 * s) as i32);
+                cp_sys::win::post_message(h, WM_LBUTTONDOWN, MK_LBUTTON, lp(x, y));
+                cp_sys::win::post_message(h, WM_MOUSEMOVE, MK_LBUTTON, lp(x + 30, y + 20));
+                self.keys_step = 7;
+                self.ui_at = Some(Instant::now());
+            }
+            7 if t > 0.4 => {
+                let cap = ui::capture_window();
+                let (d0, _, _) = self.grip.unwrap_or((0, 0, 0));
+                self.say(
+                    ui::class_name(cap) == "WDLTabCtrl",
+                    format!(
+                        "la poignee tiree passe le glisser a REAPER (souris tenue par {})",
+                        if cap.0 == 0 {
+                            "personne".to_string()
+                        } else {
+                            ui::class_name(cap)
+                        }
+                    ),
+                );
+                // Le lacher sur sa propre poignee : la vue reste ou elle est.
+                if cap.0 != 0 {
+                    let cr = ui::window_rect(cap);
+                    let (cx, cy) = ((cr.right - cr.left) / 2, (cr.bottom - cr.top) / 2);
+                    cp_sys::win::post_message(cap, WM_MOUSEMOVE, MK_LBUTTON, lp(cx, cy));
+                    cp_sys::win::post_message(cap, WM_LBUTTONUP, 0, lp(cx, cy));
+                }
+                self.grip_api = Some((d0, d0));
+                self.keys_step = 8;
+                self.ui_at = Some(Instant::now());
+            }
+            8 if t > 0.6 => {
+                let (d0, _, _) = self.grip.unwrap_or((0, 0, 0));
+                let mut now = r.dock_of(h);
+                if now != Some(d0) {
+                    // Rendre a Cedric son docker, quoi qu'il arrive.
+                    r.dock_set_target("cp_studio_browser", d0);
+                    r.dock_remove(h);
+                    r.dock_add(h, "CP Browser", "cp_studio_browser");
+                    r.dock_activate(h);
+                    now = r.dock_of(h);
+                }
+                self.say(
+                    now == Some(d0) && ui::capture_window().0 == 0,
+                    format!(
+                        "lache sur place : docker {} (depart {d0}), souris rendue",
+                        now.map_or("flottante".to_string(), |d| d.to_string())
+                    ),
+                );
                 return true;
             }
             _ => {}

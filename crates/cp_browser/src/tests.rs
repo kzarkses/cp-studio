@@ -30,6 +30,8 @@ struct Fake {
     /// Les longs fichiers, charges par le vrai moteur (en flux) : (ticket
     /// du navigateur, ticket du moteur).
     real: Vec<(u32, u32)>,
+    /// La poignee de la vue tiree (le glisser passe a REAPER).
+    grabbed: usize,
 }
 
 /// Un long fichier synthetique : a gauche un La a 0,25, a droite la seconde
@@ -80,6 +82,7 @@ impl Fake {
             thumbs_asked: std::collections::HashSet::new(),
             stretches: 0,
             real: Vec::new(),
+            grabbed: 0,
         }
     }
 
@@ -109,6 +112,9 @@ fn synth(path: &str) -> Vec<f32> {
 }
 
 impl Host for Fake {
+    fn dock_grab(&mut self) {
+        self.grabbed += 1;
+    }
     fn load(&mut self, path: &str) -> u32 {
         let t = self.next;
         self.next += 1;
@@ -953,4 +959,84 @@ fn un_depot_relit_un_dossier_deja_lu_et_ignore_la_casse() {
     );
     let _ = std::fs::remove_file(&fresh);
     let _ = std::fs::remove_file(&txt);
+}
+
+/// La poignee de la vue ancree : a gauche de la barre (la recherche se
+/// pousse), une infobulle ; un clic ne fait rien, un glisser passe la main
+/// a REAPER.
+#[test]
+fn la_poignee_de_la_vue_ancree() {
+    let root = library();
+    let mut h = Fake::new();
+    let mut b = Browser::new(places(&root), Path::new("."), Vec::new());
+    b.layout(460.0, 520.0, 1.0);
+    let x0 = b.lay.search_x;
+    assert_eq!(b.lay.handle_w, 0.0);
+    b.dock_handle = true;
+    b.layout(460.0, 520.0, 1.0);
+    let hw = b.lay.handle_w;
+    assert!(hw > 40.0 && (b.lay.search_x - x0 - hw).abs() < 0.5);
+    let y = b.lay.bar_h * 0.5;
+    assert!(b.tip_at(10.0, y).unwrap().0.contains("another docker"));
+    let mods = Mods::default();
+    let ev = |b: &mut Browser, h: &mut Fake, e: Ev| {
+        b.event(h, &e);
+    };
+    // Un clic : rien.
+    ev(
+        &mut b,
+        &mut h,
+        Ev::Down {
+            x: 10.0,
+            y,
+            b: Button::Left,
+            dbl: false,
+            mods,
+        },
+    );
+    ev(&mut b, &mut h, Ev::Move { x: 11.0, y, mods });
+    ev(
+        &mut b,
+        &mut h,
+        Ev::Up {
+            x: 11.0,
+            y,
+            b: Button::Left,
+            mods,
+        },
+    );
+    assert_eq!(h.grabbed, 0);
+    // Un glisser : une fois.
+    ev(
+        &mut b,
+        &mut h,
+        Ev::Down {
+            x: 10.0,
+            y,
+            b: Button::Left,
+            dbl: false,
+            mods,
+        },
+    );
+    ev(
+        &mut b,
+        &mut h,
+        Ev::Move {
+            x: 30.0,
+            y: y + 12.0,
+            mods,
+        },
+    );
+    ev(
+        &mut b,
+        &mut h,
+        Ev::Move {
+            x: 60.0,
+            y: y + 40.0,
+            mods,
+        },
+    );
+    assert_eq!(h.grabbed, 1);
+    let mut sc = Screen::new(460, 520);
+    sc.shot(&mut b, &mut h, "poignee");
 }

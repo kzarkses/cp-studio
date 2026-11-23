@@ -2487,6 +2487,11 @@ impl App {
             GAct::AddTrack => self.gtab_add_menu(),
             GAct::TrackMenu { t, x, y } => self.gtab_track_menu(t, x, y),
             GAct::ViewMenu { x, y } => self.gtab_place_menu(x, y),
+            GAct::DockGrab => {
+                if let Some(h) = self.gt.win.as_ref().map(|w| w.hwnd) {
+                    self.dock_grab(h);
+                }
+            }
             GAct::MoveItem { t, i, qn0, to } => {
                 // La prise et son MIDI bougent ensemble, en un pas
                 // d'annulation ; vers une autre guitare, le MIDI suit sur sa
@@ -3587,6 +3592,25 @@ impl App {
             }),
             None,
             Some(MenuItem {
+                id: 20,
+                text: "Docker handle: auto",
+                checked: self.handle_mode() == 0,
+                enabled: true,
+            }),
+            Some(MenuItem {
+                id: 21,
+                text: "Docker handle: always",
+                checked: self.handle_mode() == 1,
+                enabled: true,
+            }),
+            Some(MenuItem {
+                id: 22,
+                text: "Docker handle: never",
+                checked: self.handle_mode() == 2,
+                enabled: true,
+            }),
+            None,
+            Some(MenuItem {
                 id: 4,
                 text: "Close Guitar Tab",
                 checked: false,
@@ -3594,6 +3618,7 @@ impl App {
             }),
         ];
         match ui::popup_menu(owner, sx, sy, &items) {
+            k @ 20..=22 => self.set_handle_mode((k - 20) as u8),
             1 => self.queue(WinOp::GtabPlace(Place::Arrange)),
             2 => self.queue(WinOp::GtabPlace(Place::Dock)),
             3 => self.queue(WinOp::GtabPlace(Place::Float)),

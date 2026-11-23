@@ -11,6 +11,7 @@
 // parametres positionnels nombreux sont la forme juste ici.
 #![allow(clippy::too_many_arguments)]
 
+pub mod handle;
 pub mod icons;
 pub mod scroll;
 pub mod svg;

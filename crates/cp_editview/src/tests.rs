@@ -1230,3 +1230,30 @@ fn les_bends_de_l_editeur_et_leurs_poignees() {
     let ok = &w.palette.as_ref().unwrap().ok;
     assert!(ok.contains(&101) && !ok.contains(&102));
 }
+
+/// La poignee de la vue ancree : a gauche de la barre, la barre se pousse ;
+/// un clic ne fait rien, un glisser de quelques pixels passe la main a
+/// REAPER ; un clic droit ouvre le menu de la vue.
+#[test]
+fn la_poignee_de_la_vue_ancree() {
+    let mut b = Bench::new(1280, 760);
+    let mut v = riff();
+    b.draw(&mut v);
+    let snap_x = v.rect_of(Hit::Snap).unwrap().0;
+    v.dock_handle = true;
+    b.draw(&mut v);
+    let r = v.rect_of(Hit::DockHandle).expect("la poignee");
+    assert_eq!(r.0, 0.0);
+    assert!(v.rect_of(Hit::Snap).unwrap().0 >= snap_x + r.2 - 1.0);
+    assert!(v.label(Hit::DockHandle).unwrap().contains("another docker"));
+    let (x, y) = (r.0 + 10.0, r.1 + r.3 * 0.5);
+    down(&mut v, x, y, Button::Left, m0());
+    assert!(mv(&mut v, x + 2.0, y, m0()).is_empty());
+    assert!(up(&mut v, x + 2.0, y, Button::Left, m0()).is_empty());
+    down(&mut v, x, y, Button::Left, m0());
+    assert_eq!(mv(&mut v, x + 12.0, y + 6.0, m0()), vec![Act::DockGrab]);
+    assert!(mv(&mut v, x + 40.0, y + 30.0, m0()).is_empty());
+    let a = down(&mut v, x, y, Button::Right, m0());
+    assert!(matches!(a.as_slice(), [Act::ViewMenu { .. }]), "{a:?}");
+    b.shot(&mut v, "23_poignee");
+}

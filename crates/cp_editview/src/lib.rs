@@ -241,6 +241,8 @@ pub enum Hit {
     /// Les poignees du bend d'une note : son sommet, son pied.
     BendPeak(u64),
     BendFoot(u64),
+    /// La poignee de la vue ancree (la deplacer d'un docker a l'autre).
+    DockHandle,
 }
 
 /// Ce que le module doit faire.
@@ -287,6 +289,8 @@ pub enum Act {
     AudioNormalize,
     /// La saisie pas a pas : ecouter (ou plus) les claviers MIDI.
     StepListen(bool),
+    /// La poignee de la vue est tiree : passer le glisser a REAPER.
+    DockGrab,
 }
 
 /// Une cible de la barre : rectangle et ce qu'elle est.
@@ -423,6 +427,12 @@ enum Drag {
         y0: f32,
         v0: f64,
     },
+    /// La poignee de la vue, appuyee : un glisser au-dela de quelques
+    /// pixels la passe a REAPER.
+    Handle {
+        x0: f32,
+        y0: f32,
+    },
     /// Une poignee du bend d'une note : le sommet (de combien, et quand il
     /// y arrive) ou le pied (quand il part). La courbe au depart, relative a
     /// la note, et ses deux poignees (noires depuis la note, demi-tons).
@@ -528,6 +538,8 @@ pub struct Ed {
     /// La note dont on montre les poignees du bend (survolee, ou qu'on
     /// vient de quitter vers une poignee).
     pub(crate) bend_note: Option<u64>,
+    /// La poignee de la vue ancree, montree (le module en decide).
+    pub dock_handle: bool,
 }
 
 /// La hauteur d'un rang par defaut, et ses bornes (px a 96 DPI).
@@ -590,6 +602,7 @@ impl Ed {
             pal_last: Cat::default(),
             euclid: EUCLID,
             bend_note: None,
+            dock_handle: false,
         }
     }
 
@@ -799,6 +812,7 @@ impl Ed {
                 Drag::Bend { peak, .. } => {
                     return if *peak { P::NoteMoveV } else { P::NoteMoveH };
                 }
+                Drag::Handle { .. } => return P::ItemMove,
                 Drag::Press { .. } => {}
             }
         }
@@ -827,6 +841,7 @@ impl Ed {
             Hit::BendPeak(_) if m.alt => P::NoteErase,
             Hit::BendFoot(_) if m.alt => P::NoteErase,
             Hit::BendPeak(_) => P::NoteMoveV,
+            Hit::DockHandle => P::ItemMove,
             Hit::BendFoot(_) => P::NoteMoveH,
             h @ (Hit::Wave | Hit::EdgeL | Hit::EdgeR | Hit::FadeIn | Hit::FadeOut | Hit::Gain) => {
                 Self::audio_pointer(h)
@@ -1522,6 +1537,10 @@ impl Ed {
             if let Hit::BendPeak(id) | Hit::BendFoot(id) = h {
                 return self.down_bend(id, matches!(h, Hit::BendPeak(_)), x, y, m);
             }
+            if h == Hit::DockHandle {
+                self.drag = Some(Drag::Handle { x0: x, y0: y });
+                return Vec::new();
+            }
         }
         if b == Button::Right {
             // Clic droit : le menu ; glisser : le lasso (comme REAPER).
@@ -1666,7 +1685,8 @@ impl Ed {
             | Hit::PalOp(_)
             | Hit::Palette
             | Hit::BendPeak(_)
-            | Hit::BendFoot(_) => Vec::new(),
+            | Hit::BendFoot(_)
+            | Hit::DockHandle => Vec::new(),
             // Le clip audio.
             Hit::Wave => vec![Act::Seek(self.snap_q(self.qn_of(x), !m.shift))],
             Hit::EdgeL | Hit::EdgeR | Hit::FadeIn | Hit::FadeOut | Hit::Gain => {
@@ -2046,6 +2066,14 @@ impl Ed {
         };
         self.dirty = true;
         match d {
+            Drag::Handle { x0, y0 } => {
+                let far = cp_ui::handle::HANDLE_DRAG_PX * self.scale;
+                if (x - x0).abs() > far || (y - y0).abs() > far {
+                    self.drag = None;
+                    return vec![Act::DockGrab];
+                }
+                Vec::new()
+            }
             Drag::Bend {
                 id,
                 peak,
@@ -2449,6 +2477,7 @@ impl Ed {
         self.dirty = true;
         let _ = b;
         match d {
+            Drag::Handle { .. } => Vec::new(),
             Drag::Bend { moved, .. } => {
                 if moved {
                     return vec![Act::Commit("CP Editor: bend")];
@@ -3673,6 +3702,7 @@ impl Ed {
                 "Drag: how far and how fast it bends (Shift: free) \u{00b7} Alt+click: remove".into()
             }
             Hit::BendFoot(_) => "Drag: when the bend starts \u{00b7} Alt+click: remove".into(),
+            Hit::DockHandle => cp_ui::handle::HANDLE_TIP.into(),
             Hit::VelToggle => "Velocity lane".into(),
             Hit::Follow => "Follow playback (F)".into(),
             Hit::Help => HELP.into(),
