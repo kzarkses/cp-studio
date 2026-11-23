@@ -680,6 +680,11 @@ impl AudioHost {
     /// La clock MIDI externe : ecouter l'entree MIDI `dev` (son rang dans
     /// les entrees de REAPER), ou rien (-1). Repart de zero.
     pub fn set_clock_device(&mut self, dev: i32) {
+        // La meme entree (un module recharge la redonne) : rien ne change,
+        // l'estimation en cours et le verrou sont gardes.
+        if dev == CLOCK_DEV.load(std::sync::atomic::Ordering::Relaxed) {
+            return;
+        }
         if let Some(c) = CLOCK.get() {
             if let Ok(mut ck) = c.lock() {
                 ck.reset();

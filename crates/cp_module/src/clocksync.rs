@@ -19,8 +19,11 @@
 //!   lecture. La vitesse vaut le rapport des tempos (le maitre peut changer
 //!   de tempo en jouant), plus une correction qui rattrape l'ecart en deux
 //!   secondes, bornee a 2 %. L'ecart se mesure a la mesure pres (on se cale
-//!   sur la mesure du maitre, pas sur son numero) ; au-dela d'une
-//!   demi-noire, on saute.
+//!   sur la mesure du maitre, pas sur son numero) ; au-dela d'un quart de
+//!   noire, on saute (trois fois de suite au plus, jamais en enregistrant) ;
+//! - le maitre qui change de tempo raccourcit son estimation : le verrou
+//!   tient a sa vitesse le temps qu'elle se refasse ; un projet a plus de
+//!   10 % du maitre en jouant prend son tempo une fois.
 //!
 //! L'ecart compare le bloc que REAPER calcule a la position du maitre PLUS
 //! la latence de sortie : ce qu'on calcule maintenant s'entend une latence
@@ -30,8 +33,12 @@
 /// Ce que la synchro demande au transport (REAPER, ou une imitation).
 pub(crate) trait Transport {
     fn bpm(&self) -> f64;
+    /// Le tempo la ou l'on joue (un projet a plusieurs tempos).
+    fn bpm_here(&self) -> f64;
     fn set_bpm(&self, bpm: f64);
     fn playing(&self) -> bool;
+    /// REAPER enregistre (un saut y est interdit).
+    fn recording(&self) -> bool;
     fn play(&self);
     fn stop(&self);
     /// La vitesse de lecture (1 = normale).
@@ -58,11 +65,17 @@ impl Transport for Reaper {
     fn bpm(&self) -> f64 {
         self.0.master_tempo()
     }
+    fn bpm_here(&self) -> f64 {
+        self.0.time_sig_at(self.0.play_position2()).2
+    }
     fn set_bpm(&self, bpm: f64) {
         self.0.set_bpm(bpm, false);
     }
     fn playing(&self) -> bool {
         self.0.play_state() & cp_sys::transport::play::PLAYING != 0
+    }
+    fn recording(&self) -> bool {
+        self.0.play_state() & cp_sys::transport::play::RECORDING != 0
     }
     fn play(&self) {
         self.0.main_on_command(crate::tview::cmd::PLAY);
@@ -114,8 +127,17 @@ const WAITING: i32 = 16;
 /// remplit ses tampons).
 const PLL_S: f64 = 2.0;
 const PLL_MAX: f64 = 0.02;
-const JUMP_QN: f64 = 0.5;
+const JUMP_QN: f64 = 0.25;
 const SETTLE: u32 = 12;
+/// Les sauts : au plus `JUMPS` de suite (un saut qui n'aboutit pas, REAPER
+/// en boucle ou en « smooth seek », ne se repete pas sans fin), espaces de
+/// `JUMP_GAP` battements.
+const JUMPS: u32 = 3;
+const JUMP_GAP: u32 = 60;
+/// Un tempo du projet a plus de 10 % du maitre en jouant (une machine qui
+/// n'envoie sa clock qu'en jouant) : on le pose une fois, plutot qu'une
+/// vitesse de 3.
+const TEMPO_GAP: f64 = 0.1;
 
 #[derive(Clone, Debug)]
 pub(crate) struct ClockSync {
@@ -148,6 +170,10 @@ pub(crate) struct ClockSync {
     /// sauts faits.
     pub last_err: f64,
     pub jumps: u32,
+    /// Les sauts de suite sans reprendre la phase, et les battements depuis
+    /// le dernier.
+    jump_streak: u32,
+    since_jump: u32,
 }
 
 impl Default for ClockSync {
@@ -169,6 +195,8 @@ impl Default for ClockSync {
             was_playing: false,
             last_err: f64::NAN,
             jumps: 0,
+            jump_streak: 0,
+            since_jump: u32::MAX,
         }
     }
 }
@@ -209,6 +237,7 @@ impl ClockSync {
         self.offset = None;
         self.err = 0.0;
         self.last_err = f64::NAN;
+        self.jump_streak = 0;
     }
 
     /// Un battement : `v` = les 14 valeurs de la clock (voir
@@ -229,15 +258,14 @@ impl ClockSync {
         let running = flags & RUNNING != 0;
         let waiting = flags & WAITING != 0;
         let playing = t.playing();
-        let sure = present && bpm > 20.0 && beats >= 1.0;
+        let sure = present && bpm.is_finite() && bpm > 20.0 && beats >= 1.0;
+        let target = (bpm * 100.0).round() / 100.0;
         // Le tempo : celui du maitre, au centieme, une fois la fenetre
-        // assez large pour que la pente soit sure ; a l'arret seulement.
-        if sure && !playing {
-            let target = (bpm * 100.0).round() / 100.0;
-            if (target - self.bpm_set).abs() >= 0.02 && (t.bpm() - target).abs() >= 0.02 {
-                t.set_bpm(target);
-                self.bpm_set = target;
-            }
+        // assez large pour que la pente soit sure ; a l'arret seulement
+        // (et a chaque fois qu'il differe : un autre projet, une annulation).
+        if sure && !playing && (t.bpm() - target).abs() >= 0.02 {
+            t.set_bpm(target);
+            self.bpm_set = target;
         }
         // Le Stop du maitre arrete ce qu'il a lance.
         if stops != self.stops {
@@ -260,21 +288,42 @@ impl ClockSync {
                 self.started_by_us = true;
             }
         }
-        // La phase : les deux jouent, la pente est sure.
+        // La phase : les deux jouent.
         let playing = t.playing();
         if playing && !self.was_playing {
             self.settle = SETTLE;
         }
+        // REAPER arrete (par Cedric aussi) : le Stop du maitre n'arretera
+        // plus une lecture qu'il n'a pas lancee.
+        if !playing && self.was_playing {
+            self.started_by_us = false;
+        }
         self.was_playing = playing;
-        if !(playing && running && !waiting && sure) {
+        if !(playing && running && !waiting && present) {
             self.release_rate(t);
             return;
         }
+        // Le maitre change de tempo : l'estimation repart d'une fenetre
+        // courte. Le verrou tient a la vitesse en cours le temps qu'elle se
+        // refasse (le lacher faisait aller la vitesse et venir).
+        if !(bpm.is_finite() && bpm > 20.0 && beats >= 0.25) {
+            return;
+        }
+        self.since_jump = self.since_jump.saturating_add(1);
         if self.settle > 0 {
             self.settle -= 1;
             return;
         }
-        let proj = t.bpm().max(1.0);
+        let proj = t.bpm_here().max(1.0);
+        // Un projet tres loin du tempo du maitre : le poser une fois (un
+        // court accroc, que la phase rattrape) plutot qu'une vitesse de 3.
+        if sure && ((bpm / proj) - 1.0).abs() > TEMPO_GAP && (self.bpm_set - target).abs() >= 0.02 {
+            t.set_bpm(target);
+            self.bpm_set = target;
+            self.offset = None;
+            self.settle = SETTLE;
+            return;
+        }
         let lead = t.out_latency_s() + self.delay_ms / 1000.0;
         let mq = v[13] + lead * bpm / 60.0;
         let rq = t.qn_now();
@@ -288,8 +337,15 @@ impl ClockSync {
             self.rate0 = Some(t.rate());
             t.rate0_set(self.rate0);
         }
-        let base = bpm / proj;
-        if e.abs() > JUMP_QN {
+        let base = (bpm / proj).clamp(0.25, 4.0);
+        if e.abs() < JUMP_QN * 0.25 {
+            self.jump_streak = 0;
+        }
+        if e.abs() > JUMP_QN
+            && !t.recording()
+            && self.jump_streak < JUMPS
+            && self.since_jump >= JUMP_GAP
+        {
             // Trop loin : un saut, a la vitesse du maitre.
             t.seek_qn(mq + off);
             t.set_rate(base);
@@ -297,6 +353,8 @@ impl ClockSync {
             self.err = 0.0;
             self.settle = SETTLE;
             self.jumps += 1;
+            self.jump_streak += 1;
+            self.since_jump = 0;
             return;
         }
         self.err += 0.3 * (e - self.err);
@@ -323,10 +381,16 @@ mod tests {
         qn: Cell<f64>,
         seeks: Cell<u32>,
         stash: Cell<Option<f64>>,
+        /// REAPER ignore les sauts (boucle, enregistrement).
+        deaf: Cell<bool>,
+        recording: Cell<bool>,
     }
 
     impl Transport for Fake {
         fn bpm(&self) -> f64 {
+            self.bpm.get()
+        }
+        fn bpm_here(&self) -> f64 {
             self.bpm.get()
         }
         fn set_bpm(&self, bpm: f64) {
@@ -335,6 +399,9 @@ mod tests {
         }
         fn playing(&self) -> bool {
             self.playing.get()
+        }
+        fn recording(&self) -> bool {
+            self.recording.get()
         }
         fn play(&self) {
             self.playing.set(true);
@@ -354,7 +421,9 @@ mod tests {
             self.qn.get()
         }
         fn seek_qn(&self, q: f64) {
-            self.qn.set(q);
+            if !self.deaf.get() {
+                self.qn.set(q);
+            }
             self.seeks.set(self.seeks.get() + 1);
         }
         fn bar_qn(&self) -> f64 {
@@ -440,6 +509,8 @@ mod tests {
         master_qn: f64,
         reaper_qn: f64,
         now_s: f64,
+        /// La fenetre de l'estimation (noires).
+        beats: f64,
     }
 
     impl Sim {
@@ -458,6 +529,7 @@ mod tests {
                 master_qn: 0.0,
                 reaper_qn,
                 now_s: 0.0,
+                beats: 16.0,
             }
         }
 
@@ -489,7 +561,7 @@ mod tests {
                     .set(q(self.reaper_qn, self.t.bpm.get() * self.t.rate.get()));
                 let mut v = [0.0; 14];
                 v[0] = mb;
-                v[4] = 16.0;
+                v[4] = self.beats;
                 v[9] = (PRESENT | RUNNING) as f64;
                 v[13] = q(self.master_qn, mb);
                 let seeks_before = self.c.jumps;
@@ -585,5 +657,98 @@ mod tests {
         fresh.step(&t, Some(v));
         assert_eq!(t.rate.get(), 1.0, "la vitesse d'avant la synchro");
         assert_eq!(t.stash.get(), None);
+    }
+
+    #[test]
+    fn le_verrou_tient_pendant_que_l_estimation_se_refait() {
+        // Le maitre change de tempo : sa fenetre retombe a une demi-noire.
+        // La vitesse reste celle du verrou (elle revenait a 1 puis repartait).
+        let mut s = Sim::new(128.0, 0.0);
+        s.run(3.0, |_| 128.4);
+        let r = s.t.rate.get();
+        assert!((r - 1.0).abs() > 1e-3);
+        s.beats = 0.5;
+        s.run(0.5, |_| 128.4);
+        assert!(
+            (s.t.rate.get() - r).abs() < 0.01,
+            "{} puis {}",
+            r,
+            s.t.rate.get()
+        );
+        s.beats = 16.0;
+        let worst = s.run(3.0, |_| 128.4);
+        assert!(worst < 2.0, "{worst:.2} ms");
+    }
+
+    #[test]
+    fn un_projet_tres_loin_du_maitre_prend_son_tempo_une_fois() {
+        // REAPER a 60, le maitre a 180 (il n'envoie sa clock qu'en jouant) :
+        // le tempo est pose une fois, puis la phase se cale ; jamais une
+        // vitesse de 3.
+        let mut s = Sim::new(60.0, 0.0);
+        let mut worst = 0.0;
+        for k in 0..8 {
+            worst = s.run(1.0, |_| 180.0);
+            eprintln!(
+                "{k} s : vitesse {:.4}, ecart {:.4} noire, sauts {}, bpm {}, pire {worst:.2} ms",
+                s.t.rate.get(),
+                s.c.last_err,
+                s.c.jumps,
+                s.t.bpm.get()
+            );
+        }
+        let sets =
+            s.t.log
+                .borrow()
+                .iter()
+                .filter(|l| l.starts_with("bpm"))
+                .count();
+        assert_eq!(sets, 1, "{:?}", s.t.log.borrow());
+        assert_eq!(s.t.bpm.get(), 180.0);
+        assert!(
+            (s.t.rate.get() - 1.0).abs() < 0.03,
+            "vitesse {}",
+            s.t.rate.get()
+        );
+        assert!(worst < 3.0, "{worst:.2} ms");
+    }
+
+    #[test]
+    fn les_sauts_ne_se_repetent_pas_sans_fin() {
+        // REAPER ignore les sauts (en boucle, en « smooth seek ») : trois
+        // essais, puis la vitesse seule.
+        let mut s = Sim::new(128.0, 16.7);
+        s.t.deaf.set(true);
+        s.run(20.0, |_| 128.0);
+        assert!(s.t.seeks.get() <= JUMPS, "{} sauts", s.t.seeks.get());
+        // En enregistrement : aucun saut.
+        let mut s = Sim::new(128.0, 16.7);
+        s.t.recording.set(true);
+        s.run(5.0, |_| 128.0);
+        assert_eq!(s.t.seeks.get(), 0);
+    }
+
+    #[test]
+    fn un_arret_a_la_main_rend_la_main() {
+        // Parti par le Start du maitre, puis arrete par Cedric et relance a
+        // la main : le Stop du maitre ne l'arrete plus.
+        let t = Fake::default();
+        t.bpm.set(120.0);
+        t.rate.set(1.0);
+        let mut c = ClockSync {
+            dev: 0,
+            ..Default::default()
+        };
+        c.step(&t, snap(120.0, 4.0, PRESENT, 0, 0));
+        c.step(&t, snap(120.0, 4.0, PRESENT | RUNNING | WAITING, 1, 0));
+        c.step(&t, snap(120.0, 4.0, PRESENT | RUNNING, 1, 0));
+        assert!(c.started_by_us);
+        t.playing.set(false);
+        c.step(&t, snap(120.0, 4.0, PRESENT | RUNNING, 1, 0));
+        assert!(!c.started_by_us);
+        t.playing.set(true);
+        c.step(&t, snap(120.0, 4.0, PRESENT | RUNNING, 1, 0));
+        c.step(&t, snap(120.0, 4.0, PRESENT, 1, 1));
+        assert!(t.playing.get(), "sa lecture a lui");
     }
 }
