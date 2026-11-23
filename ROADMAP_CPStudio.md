@@ -402,6 +402,10 @@ C'est le travail du socle d'octobre, à refaire dans le nouveau moteur.
 - **Un écran ou plusieurs**, et la mise à l'échelle par écran (DPI).
 - **Une fenêtre cachée ne dessine plus**, mais sa logique continue : la Session
   relance ses cases sous un onglet caché.
+- **La poignée des vues ancrées** (2026-11-23) : points, icône et nom à gauche
+  de la barre ; tirée, elle passe le glisser à REAPER (un appui posté à la
+  poignée native du docker, son `WDLTabCtrl`, mesuré) ; montrée quand REAPER
+  cache ses onglets (réglage auto / always / never dans le menu de la vue).
 - **Fini quand :** chaque fenêtre s'ancre partout, garde sa place au
   redémarrage, et le clavier et le double-clic y marchent comme en flottant.
 
@@ -662,6 +666,14 @@ Guitar Tab pour le rendre complet ») :
   plusieurs reprises dans un système, une note perdue par la compaction
   avec des triolets, un triolet coupé par une barre de 7/8, des
   mesures-copeaux, l'ordre du MusicXML : corrigés, chacun avec son essai.
+- **le jeu libre** (2026-11-23, pour une prise ad lib) : un bouton par
+  guitare ; aucune ligne verticale, la règle en secondes, chaque note à sa
+  date, la corde allumée le temps de la note, le magnétisme sur les attaques
+  de l'audio, un accord = des notes à 30 ms ; le PDF sans barre (à la ligne
+  dans un silence), le MusicXML une mesure par phrase, chiffrage caché.
+  Reste : si un tempo est posé plus tard, le MIDI suit les noires et l'audio
+  non (pas encore traité) ; la même palette que l'éditeur sur une note de
+  Guitar Tab (proposée, pas faite).
 Reste : l'oreille et l'œil de Cedric sur ses vraies prises (les seuils
 viennent de tests synthétiques).
 
@@ -773,6 +785,16 @@ chaque note, et un test le tient.
   - le menu des notes porte les générateurs de l'ancien `Roll` : accords
     (dont la triade diatonique), arpèges (montant, descendant, aller-retour,
     hasard, deux octaves), rythmes euclidiens ; le canal (la corde) gardé.
+- Le 23 novembre (maquette validée par Cedric) :
+  - **la palette du clic droit** remplace le menu d'une soixantaine de
+    lignes : neuf groupes d'icônes, le survol d'un groupe ouvre ses icônes,
+    le survol d'une icône montre son résultat en pointillés, une icône qui ne
+    ferait rien est éteinte, Maj+clic garde la palette, la molette règle un
+    rythme euclidien, le dernier groupe revient ;
+  - **les bends se modifient** : posés par la palette (½, 1, 1½ ton,
+    aller-retour, vibrato, glisses d'approche), puis deux poignées sur le
+    trait (le sommet : de combien et quand ; le pied : quand il part),
+    Alt+clic les enlève ; relu dans le vrai REAPER.
 - Reste :
   - les couches CC et pitchbend (l'ancien éditeur n'en avait pas, décidé) ;
   - la probabilité (cases de la Session, à venir) ;
