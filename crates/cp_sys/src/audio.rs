@@ -23,6 +23,72 @@ use crate::reaper::Reaper;
 unsafe extern "system" {
     fn InitializeCriticalSection(cs: *mut CriticalSection);
     fn DeleteCriticalSection(cs: *mut CriticalSection);
+    fn EnterCriticalSection(cs: *mut CriticalSection);
+    fn LeaveCriticalSection(cs: *mut CriticalSection);
+}
+
+/// Attend qu'aucune lecture de REAPER ne tienne la section critique d'un
+/// apercu (une lecture commencee avant l'arret finit avant qu'on libere).
+fn barrier(cs: &mut CriticalSection) {
+    // SAFETY: section initialisee, vivante.
+    unsafe {
+        EnterCriticalSection(cs);
+        LeaveCriticalSection(cs);
+    }
+}
+
+type ValidFn = unsafe extern "C" fn(*mut c_void, *mut c_void, *const std::ffi::c_char) -> bool;
+type EnumProjFn = unsafe extern "C" fn(i32, *mut std::ffi::c_char, i32) -> *mut c_void;
+
+/// Les projets : REAPER tient les apercus de PISTE par projet (onglet). Un
+/// apercu lance dans un onglet s'arrete dans CET onglet, pas dans celui qui
+/// est devant au moment de l'arret.
+#[derive(Clone, Copy)]
+struct Projects {
+    valid: Option<ValidFn>,
+    current: Option<EnumProjFn>,
+}
+
+impl Projects {
+    fn of(r: &Reaper) -> Projects {
+        Projects {
+            // SAFETY: bool ValidatePtr2(ReaProject*, void*, const char*) ;
+            // ReaProject* EnumProjects(int, char*, int).
+            valid: unsafe { r.api::<ValidFn>(c"ValidatePtr2") },
+            // SAFETY: voir ci-dessus.
+            current: unsafe { r.api::<EnumProjFn>(c"EnumProjects") },
+        }
+    }
+    /// Le projet devant (l'onglet courant).
+    fn current(&self) -> *mut c_void {
+        match self.current {
+            // SAFETY: -1 = le projet courant, sans nom demande.
+            Some(f) => unsafe { f(-1, null_mut(), 0) },
+            None => null_mut(),
+        }
+    }
+    /// Un projet encore ouvert ?
+    fn alive(&self, p: *mut c_void) -> bool {
+        if p.is_null() {
+            return false;
+        }
+        match self.valid {
+            // SAFETY: tout pointeur est permis, c'est son role.
+            Some(f) => unsafe { f(null_mut(), p, c"ReaProject*".as_ptr()) },
+            None => true,
+        }
+    }
+    /// Une piste de ce projet (encore ouvert) ?
+    fn track_in(&self, p: *mut c_void, tr: *mut c_void) -> bool {
+        if !self.alive(p) {
+            return false;
+        }
+        match self.valid {
+            // SAFETY: projet vivant ; tout pointeur de piste est permis.
+            Some(f) => unsafe { f(p, tr, c"MediaTrack*".as_ptr()) },
+            None => true,
+        }
+    }
 }
 
 /// `CRITICAL_SECTION` x64 : 40 octets, aligne sur 8.
@@ -41,6 +107,22 @@ pub struct PreviewRegister {
     pub volume: f64,
     pub peakvol: [f64; 2],
     pub preview_track: *mut c_void,
+}
+
+impl PreviewRegister {
+    /// Un registre inerte (jamais donne a REAPER).
+    fn empty() -> PreviewRegister {
+        PreviewRegister {
+            cs: CriticalSection([0; 5]),
+            src: null_mut(),
+            m_out_chan: 0,
+            curpos: 0.0,
+            loop_: false,
+            volume: 1.0,
+            peakvol: [0.0; 2],
+            preview_track: null_mut(),
+        }
+    }
 }
 
 /// `audio_hook_register_t`.
@@ -210,7 +292,8 @@ type StopPreviewFn = unsafe extern "C" fn(*mut PreviewRegister) -> i32;
 /// Un aperçu qui tire une [`PortSource`] sans jamais s'arreter.
 pub struct Preview {
     reg: Box<PreviewRegister>,
-    source: PortSource,
+    /// Rendue a l'arret seulement si REAPER a bien lache l'apercu.
+    source: std::mem::ManuallyDrop<PortSource>,
     playing: bool,
     play: Option<PlayPreviewExFn>,
     stop: Option<StopPreviewFn>,
@@ -218,6 +301,14 @@ pub struct Preview {
     stop_tr: Option<StopTrackFn>,
     /// La piste ou l'apercu joue (son GUID), ou rien : la sortie materielle.
     route: Option<String>,
+    /// Le projet (onglet) ou l'apercu de piste a ete lance.
+    proj: *mut c_void,
+    projects: Projects,
+    /// Un arret refuse par REAPER : le registre reste peut-etre dans sa liste,
+    /// il ne sera jamais libere.
+    stuck: bool,
+    /// Ce que REAPER a rendu au dernier arret d'un apercu de piste.
+    pub last_stop: Option<i32>,
 }
 
 // SAFETY: le registre n'est touche que par le fil principal (play/stop/drop) ;
@@ -240,7 +331,7 @@ impl Preview {
         unsafe { InitializeCriticalSection(&mut reg.cs) };
         Preview {
             reg,
-            source,
+            source: std::mem::ManuallyDrop::new(source),
             playing: false,
             // SAFETY: signatures de reaper_plugin_functions.h :
             // int PlayPreviewEx(preview_register_t*, int bufflags, double measure_align),
@@ -255,6 +346,10 @@ impl Preview {
             // SAFETY: voir ci-dessus.
             stop_tr: unsafe { r.api::<StopTrackFn>(c"StopTrackPreview2") },
             route: None,
+            proj: null_mut(),
+            projects: Projects::of(r),
+            stuck: false,
+            last_stop: None,
         }
     }
 
@@ -272,11 +367,13 @@ impl Preview {
         };
         self.reg.preview_track = tr;
         self.reg.m_out_chan = -1;
+        let proj = self.projects.current();
         // SAFETY: registre et source vivants tant que `self` vit ; `stop`
         // (et `Drop`) arretent l'apercu avant de les liberer.
-        self.playing = unsafe { play(null_mut(), &mut *self.reg, 0, -1.0) } != 0;
+        self.playing = unsafe { play(proj, &mut *self.reg, 0, -1.0) } != 0;
         if self.playing {
             self.route = Some(guid.to_string());
+            self.proj = proj;
         }
         self.playing
     }
@@ -288,19 +385,12 @@ impl Preview {
 
     /// La piste de l'apercu existe-t-elle toujours (a la meme adresse) ? Vrai
     /// sans piste.
-    pub fn track_alive(&self, r: &Reaper) -> bool {
+    pub fn track_alive(&self, _r: &Reaper) -> bool {
         if self.route.is_none() {
             return true;
         }
-        type Valid =
-            unsafe extern "C" fn(*mut c_void, *mut c_void, *const std::ffi::c_char) -> bool;
-        // SAFETY: bool ValidatePtr2(ReaProject*, void*, const char*) ; un
-        // pointeur quelconque est permis, c'est son role.
-        match unsafe { r.api::<Valid>(c"ValidatePtr2") } {
-            // SAFETY: projet nul = courant ; tout pointeur est permis.
-            Some(f) => unsafe { f(null_mut(), self.reg.preview_track, c"MediaTrack*".as_ptr()) },
-            None => true,
-        }
+        // Dans SON projet (un autre onglet devant ne la fait pas mourir).
+        self.projects.track_in(self.proj, self.reg.preview_track)
     }
 
     /// Lance l'aperçu vers la sortie materielle `first_out` (0 = sorties 1/2),
@@ -324,21 +414,50 @@ impl Preview {
             return;
         }
         if self.route.is_some() {
-            if let Some(stop) = self.stop_tr {
-                // SAFETY: le registre lance par `play_track`.
-                unsafe { stop(null_mut(), &mut *self.reg) };
+            // Arrete dans le projet ou il a ete lance ; un projet ferme a deja
+            // vide sa liste.
+            if self.projects.alive(self.proj) {
+                // Mesure dans le vrai REAPER : l'arret rend 1 sur une piste
+                // vivante, 0 si la piste a ete effacee (REAPER a deja retire
+                // l'apercu de sa liste). Un 0 sur une piste vivante est un vrai
+                // refus.
+                let track_ok = self.projects.track_in(self.proj, self.reg.preview_track);
+                match self.stop_tr {
+                    Some(stop) => {
+                        // SAFETY: le registre lance par `play_track`, dans ce
+                        // projet (encore ouvert).
+                        let ret = unsafe { stop(self.proj, &mut *self.reg) };
+                        self.last_stop = Some(ret);
+                        if ret == 0 && track_ok {
+                            self.stuck = true;
+                        }
+                    }
+                    None => self.stuck = true,
+                }
             }
-        } else if let Some(stop) = self.stop {
-            // SAFETY: le registre lance par `play_hardware`.
-            unsafe { stop(&mut *self.reg) };
+        } else {
+            match self.stop {
+                Some(stop) => {
+                    // SAFETY: le registre lance par `play_hardware`.
+                    unsafe { stop(&mut *self.reg) };
+                }
+                None => self.stuck = true,
+            }
         }
+        barrier(&mut self.reg.cs);
         self.playing = false;
         self.route = None;
+        self.proj = null_mut();
         self.reg.preview_track = null_mut();
     }
 
     pub fn is_playing(&self) -> bool {
         self.playing
+    }
+
+    /// REAPER a refuse un arret : l'apercu ne sera jamais libere.
+    pub fn is_stuck(&self) -> bool {
+        self.stuck
     }
 
     pub fn source(&self) -> &PortSource {
@@ -354,8 +473,19 @@ impl Preview {
 impl Drop for Preview {
     fn drop(&mut self) {
         self.stop();
+        if self.stuck {
+            // REAPER le tient peut-etre encore : ni la section, ni le registre,
+            // ni la source ne sont rendus (une fuite plutot qu'une lecture
+            // de memoire liberee).
+            let reg = std::mem::replace(&mut self.reg, Box::new(PreviewRegister::empty()));
+            std::mem::forget(reg);
+            return;
+        }
         // SAFETY: initialisee dans `new`, plus utilisee par REAPER (arretee).
         unsafe { DeleteCriticalSection(&mut self.reg.cs) };
+        // SAFETY: REAPER a lache l'apercu : plus personne ne lit la source ;
+        // elle n'est rendue qu'ici, une fois.
+        unsafe { std::mem::ManuallyDrop::drop(&mut self.source) };
     }
 }
 
@@ -377,6 +507,8 @@ pub struct Audition {
     playing: bool,
     play: Option<PlayTrackFn>,
     stop: Option<StopTrackFn>,
+    proj: *mut c_void,
+    projects: Projects,
 }
 
 // SAFETY: le registre n'est touche que par le fil principal ; REAPER le lit
@@ -440,6 +572,8 @@ impl Audition {
             play: unsafe { r.api::<PlayTrackFn>(c"PlayTrackPreview2Ex") },
             // SAFETY: voir ci-dessus.
             stop: unsafe { r.api::<StopTrackFn>(c"StopTrackPreview2") },
+            proj: null_mut(),
+            projects: Projects::of(r),
         }
     }
 
@@ -477,21 +611,32 @@ impl Audition {
         self.reg.m_out_chan = -1;
         self.reg.curpos = 0.0;
         self.src = Some(src);
+        let proj = self.projects.current();
         // SAFETY: registre et source vivants tant que `self` vit ; `stop`
         // arrete l'apercu avant de liberer la source.
-        self.playing = unsafe { play(null_mut(), &mut *self.reg, 0, -1.0) } != 0;
+        self.playing = unsafe { play(proj, &mut *self.reg, 0, -1.0) } != 0;
+        self.proj = if self.playing { proj } else { null_mut() };
         self.playing
     }
 
     pub fn stop(&mut self) {
         if self.playing {
-            if let Some(stop) = self.stop {
-                // SAFETY: le registre lance par `start`.
-                unsafe { stop(null_mut(), &mut *self.reg) };
+            // Dans le projet ou elle a ete lancee ; un projet ferme a deja
+            // vide sa liste.
+            if let (Some(stop), true) = (self.stop, self.projects.alive(self.proj)) {
+                // SAFETY: le registre lance par `start`, dans ce projet.
+                unsafe { stop(self.proj, &mut *self.reg) };
             }
             self.playing = false;
         }
+        // La source se retire sous la section : une lecture en cours finit
+        // avant qu'elle soit detruite.
+        // SAFETY: section initialisee, vivante.
+        unsafe { EnterCriticalSection(&mut self.reg.cs) };
         self.reg.src = null_mut();
+        // SAFETY: voir ci-dessus.
+        unsafe { LeaveCriticalSection(&mut self.reg.cs) };
+        self.proj = null_mut();
         self.src = None;
     }
 

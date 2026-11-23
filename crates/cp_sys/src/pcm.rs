@@ -253,7 +253,12 @@ unsafe extern "C" fn port_get_samples(this: *mut c_void, block: *mut Transfer) {
     if b.samples.is_null() || b.length <= 0 {
         return;
     }
-    let nch = if b.nch > 0 { b.nch as usize } else { 2 };
+    // Un bloc sans canaux : son tampon ne tient rien, on n'y ecrit rien.
+    if b.nch <= 0 {
+        b.samples_out = 0;
+        return;
+    }
+    let nch = b.nch as usize;
     let frames = b.length as usize;
     // SAFETY: l'appelant alloue `length * nch` echantillons (contrat du SDK).
     let out = unsafe { std::slice::from_raw_parts_mut(b.samples, frames * nch) };

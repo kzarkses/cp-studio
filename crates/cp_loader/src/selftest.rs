@@ -938,7 +938,24 @@ impl SelfTest {
                     ),
                 );
                 a.stop(v, 0.0);
+                let after_delete = a.port_last_stop(3);
                 a.route_port(3, None);
+                // Un apercu de piste arrete dans son projet, piste vivante :
+                // REAPER accepte l'arret (sinon l'apercu est garde a vie).
+                let mut live = None;
+                if let Some(g2) = r.insert_track(0, "CP selftest route 2") {
+                    a.route_port(3, Some(&g2));
+                    a.route_port(3, None);
+                    live = a.port_last_stop(3);
+                    r.delete_track(&g2);
+                }
+                self.say(
+                    live.is_some_and(|x| x != 0) && a.ports_stuck() == 0,
+                    format!(
+                        "apercu de piste arrete dans son projet : StopTrackPreview2 rend {live:?} (piste vivante), {after_delete:?} (piste effacee) ; {} garde(s) a vie",
+                        a.ports_stuck()
+                    ),
+                );
                 r.set_master_mute(false);
                 self.route = None;
                 let ins = r.midi_inputs();

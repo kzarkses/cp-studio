@@ -261,7 +261,13 @@ fn clock_block(
     frames: i32,
     srate: f64,
 ) {
-    let Ok(mut ck) = c.try_lock() else { return };
+    // Une panique attrapee empoisonne le verrou : on le reprend (sinon la
+    // clock externe s'arretait pour de bon).
+    let mut ck = match c.try_lock() {
+        Ok(g) => g,
+        Err(std::sync::TryLockError::Poisoned(p)) => p.into_inner(),
+        Err(std::sync::TryLockError::WouldBlock) => return,
+    };
     ck.set_srate(srate);
     m.for_each(dev, |off, msg| {
         let t = base + off as f64 * srate / 1_024_000.0;
@@ -480,6 +486,19 @@ impl AudioHost {
 
     /// Les cretes d'un port (gauche, droite) depuis la derniere lecture, pour
     /// les vumetres.
+    /// Ce que REAPER a rendu au dernier arret de l'apercu de piste d'un port.
+    pub fn port_last_stop(&self, port: usize) -> Option<i32> {
+        self.ports.get(port)?.preview.as_ref()?.last_stop
+    }
+
+    /// Les apercus dont REAPER a refuse l'arret (jamais liberes).
+    pub fn ports_stuck(&self) -> usize {
+        self.ports
+            .iter()
+            .filter(|p| p.preview.as_ref().is_some_and(|pv| pv.is_stuck()))
+            .count()
+    }
+
     pub fn port_levels(&self, port: usize) -> [f32; 2] {
         self.ports
             .get(port)

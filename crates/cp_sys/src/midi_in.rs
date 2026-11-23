@@ -95,7 +95,10 @@ impl MidiInputs {
                     break;
                 }
                 let n = (*ev).size.clamp(0, 1 << 20) as usize;
-                let msg = std::slice::from_raw_parts((*ev).msg.as_ptr(), n);
+                // Le message continue au-dela des 4 octets declares (un
+                // sysex) : la tranche part du pointeur brut, pas d'une
+                // reference au tableau.
+                let msg = std::slice::from_raw_parts((&raw const (*ev).msg).cast::<u8>(), n);
                 f((*ev).frame_offset, msg);
             }
         }
