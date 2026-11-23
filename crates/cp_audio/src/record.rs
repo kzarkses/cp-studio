@@ -206,6 +206,16 @@ impl Recorder {
                         .push(f32::from_bits(ring.buf[(w + 1) % RN].load(Relaxed)));
                 }
             }
+            // L'ecrivain a-t-il rattrape ce bloc PENDANT la copie (le fil
+            // principal gele une dizaine de secondes) ? Alors ce qui vient
+            // d'etre copie peut etre ecrase : la prise est perdue, et le dit.
+            let w_after = ring.w.load(Acquire);
+            if w_after.wrapping_sub(w0) > RN - 2 * n {
+                for r in &mut self.recs {
+                    r.failed
+                        .get_or_insert_with(|| "recording overrun".to_string());
+                }
+            }
         }
         // Les prises finies : leur fin est passee (latence comprise).
         let last = if hn == 0 {

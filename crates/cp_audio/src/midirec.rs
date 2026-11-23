@@ -108,8 +108,10 @@ impl MidiRing {
         let k = (i % MN) * 2;
         let frame = self.ev[k].load(Relaxed) as i64;
         let p = self.ev[k + 1].load(Relaxed);
-        // Ecrase pendant la lecture : l'ecrivain a fait le tour.
-        if self.w.load(Acquire).saturating_sub(i) > MN {
+        // Ecrase pendant la lecture : l'ecrivain a fait le tour. Des qu'il a
+        // atteint `i + MN`, il peut etre en train d'ecrire cette case (il
+        // ecrit la case, puis avance) : elle n'est plus sure.
+        if self.w.load(Acquire).saturating_sub(i) >= MN {
             return None;
         }
         Some((
@@ -200,9 +202,11 @@ impl MidiRecorder {
     /// pouvait tomber avant leur fin est arrive).
     pub fn drain(&mut self) -> Vec<(u32, Vec<MidiEv>)> {
         let w = self.ring.written();
-        if w.saturating_sub(self.read) > MN {
-            self.lost += w - self.read - MN;
-            self.read = w - MN;
+        // Les `MN - 1` derniers seulement sont surs (la case suivante peut
+        // etre en train de s'ecrire).
+        if w.saturating_sub(self.read) >= MN {
+            self.lost += w - self.read - (MN - 1);
+            self.read = w - (MN - 1);
         }
         while self.read < w {
             let Some((g, dev, len, msg)) = self.ring.read(self.read) else {
@@ -343,8 +347,8 @@ mod tests {
         r.stop(id, (MN + 100) as i64);
         ring.advance((MN + 100) as i64);
         let done = r.drain();
-        assert_eq!(r.lost, 100);
-        assert_eq!(done[0].1.len(), MN);
-        assert_eq!(done[0].1[0].frame, 100, "les plus vieux sont perdus");
+        assert_eq!(r.lost, 101);
+        assert_eq!(done[0].1.len(), MN - 1);
+        assert_eq!(done[0].1[0].frame, 101, "les plus vieux sont perdus");
     }
 }
