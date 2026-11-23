@@ -246,7 +246,18 @@ et 85 à 139 ms d'amorçage. D'où deux chemins.
   daté dans 0,3 s donne exactement les mêmes écarts : l'amorçage ne décale
   rien, la compensation prévue n'est pas nécessaire. +4 demi-tons : 554,3 Hz
   pour 554,4.
-- Reste : l'entendre (Cedric).
+- ✅ **Relu à part le 2026-11-23** : aucun défaut de mémoire ; corrigés : un
+  étireur gardé par une voix annulée ou coupée net (au-delà de 16, le tempo
+  d'une voix neuve était ignoré), le passage par tempo 1 en jouant (un saut
+  et une réserve périmée), le retournement en jouant, une vitesse infinie.
+- Reste : l'entendre (Cedric) ; un saut ou un relancement d'une voix étirée
+  claque (le fondu de saut ne passe pas par l'étireur, et le redémarrage
+  jette sa réserve) ; les enveloppes d'une voix étirée avancent par blocs
+  de 512 et la fin d'ADSR se cale sur la matière lue, pas entendue ; un
+  retournement en jouant repart de la position lue (en avance de la latence
+  de l'étireur) ; seize voix étirées lancées sur le même temps s'amorcent
+  dans le même bloc ; le taux de l'étireur n'est pas mis à jour si la carte
+  change de taux.
 
 ### A6. Les boucles MIDI (les lanes)
 
