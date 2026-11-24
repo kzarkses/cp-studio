@@ -1,0 +1,12 @@
+[package]
+name = "cp_fxc"
+description = "FX Constellation, le modele : les sources de modulation, les parametres suivis d'une piste, le pad, ROLL, les liens voulus, les presets. Pur, sans REAPER"
+edition.workspace = true
+version.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+
+[lints]
+workspace = true

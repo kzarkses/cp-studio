@@ -136,9 +136,11 @@ pe_run ? (
       : pe_fg < 0.75 ? ( pe_k = (pe_fg - 0.5) * 4; pe_wx = 0.5 + pe_hs - pe_k * fig_size; pe_wy = 0.5 + pe_hs; )
       : ( pe_k = (pe_fg - 0.75) * 4; pe_wx = 0.5 - pe_hs; pe_wy = 0.5 + pe_hs - pe_k * fig_size; );
     ) : fig_mode < 2.5 ? (
-      pe_fg < 0.33 ? ( pe_k = pe_fg * 3; pe_wx = 0.5; pe_wy = 0.5 - pe_hs + pe_k * pe_hs; )
-      : pe_fg < 0.66 ? ( pe_k = (pe_fg - 0.33) * 3; pe_wx = 0.5 - pe_k * fig_size; pe_wy = 0.5 + pe_hs; )
-      : ( pe_k = (pe_fg - 0.66) * 3; pe_wx = 0.5 - pe_hs + pe_k * fig_size; pe_wy = 0.5 + pe_hs - pe_k * pe_hs; );
+      // Le triangle : sommet, bas gauche, bas droite (un trace continu ; le
+      // trace d'avant sautait deux fois, CP Studio 2026-11-25).
+      pe_fg < 0.3333 ? ( pe_k = pe_fg * 3; pe_wx = 0.5 - pe_k * pe_hs; pe_wy = 0.5 + pe_hs - pe_k * fig_size; )
+      : pe_fg < 0.6667 ? ( pe_k = (pe_fg - 0.3333) * 3; pe_wx = 0.5 - pe_hs + pe_k * fig_size; pe_wy = 0.5 - pe_hs; )
+      : ( pe_k = (pe_fg - 0.6667) * 3; pe_wx = 0.5 + pe_hs - pe_k * pe_hs; pe_wy = 0.5 - pe_hs + pe_k * fig_size; );
     ) : fig_mode < 3.5 ? (
       pe_fg < 0.25 ? ( pe_k = pe_fg * 4; pe_wx = 0.5 - pe_hs + pe_k * pe_hs; pe_wy = 0.5 + pe_k * pe_hs; )
       : pe_fg < 0.5 ? ( pe_k = (pe_fg - 0.25) * 4; pe_wx = 0.5 + pe_k * pe_hs; pe_wy = 0.5 + pe_hs - pe_k * pe_hs; )

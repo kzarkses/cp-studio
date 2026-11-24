@@ -86,6 +86,14 @@ impl Reaper {
             .find(|&t| self.fb_str(t, "GUID", None).as_deref() == Some(guid))
     }
 
+    /// Pour `fxc` : la piste d'un GUID, le GUID d'une piste.
+    pub(crate) fn fb_track_ptr(&self, guid: &str) -> Option<P> {
+        self.fb_track(guid)
+    }
+    pub(crate) fn fb_guid_of(&self, tr: P) -> Option<String> {
+        self.fb_guid(tr)
+    }
+
     fn fb_guid(&self, tr: P) -> Option<String> {
         if self.fb_master() == Some(tr) {
             return Some(MASTER.into());

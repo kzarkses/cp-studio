@@ -28,6 +28,7 @@ pub mod dylib;
 pub mod folders;
 pub mod font;
 pub mod fxb;
+pub mod fxc;
 pub mod grow;
 pub mod guard;
 pub mod host;
