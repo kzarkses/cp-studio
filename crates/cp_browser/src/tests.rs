@@ -1083,6 +1083,10 @@ fn l_onglet_de_la_vue_ancree() {
         },
     );
     assert_eq!((h.switched.as_slice(), h.grabbed), (&[1usize][..], 1));
+    b.dock.hot = Some(1);
+    let mut sc = Screen::new(460, 520);
+    sc.shot(&mut b, &mut h, "onglets");
+    b.dock.hot = None;
     b.dock.names.truncate(1);
     let mut sc = Screen::new(460, 520);
     sc.shot(&mut b, &mut h, "poignee");
