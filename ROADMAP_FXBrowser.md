@@ -85,6 +85,12 @@ défaut)
 - ✅ Le bouton FX d'une piste **sans effet** l'ouvre pour elle. Avec des
   effets, la chaîne de REAPER s'ouvre comme avant.
 - ✅ Le « + » des effets d'une tranche de la Session l'ouvre pour sa piste.
+- ✅ La boîte « Add FX to Track N » de REAPER (demande de Cedric, le même
+  soir) : le bouton « Add » d'une fenêtre de chaîne, un emplacement libre de
+  la liste d'effets d'une piste, le clic droit « Add FX »… Tous ouvrent
+  cette boîte. Le crochet d'activation du chargeur la reconnaît à son titre,
+  la ferme comme « Cancel » et ouvre la nôtre pour la même piste. Une chaîne
+  d'entrée, de monitoring ou de prise reste à REAPER.
 - ✅ Le module rend tout à REAPER en se déchargeant.
 
 **Vérifié dans le vrai REAPER** (`cargo xtask reaper-test`, phase
@@ -100,14 +106,14 @@ FxBrowser) :
 - Le clic sur le bouton FX d'une piste : l'auto-test n'a pas de vraie
   souris. Le nom « tcp.fx » / « mcp.fx » vient de la documentation de
   `GetThingFromPoint`.
+- Un emplacement libre de la liste d'effets du TCP : même raison. Il passe
+  par la même boîte « Add FX to » que le bouton « Add », que l'auto-test
+  clique.
 - Un glisser hors de la fenêtre vers une piste ou la Session.
 
 **Reste**
-- ☐ Le bouton « Add » de la fenêtre de chaîne de REAPER, son double-clic,
-  son clic droit. À mesurer d'abord.
-- ☐ Le double-clic sur une case vide des effets de la console
-  (`mcp.fxlist` ?).
-- ☐ Les effets d'une prise, d'entrée, de monitoring.
+- ☐ Les effets d'une prise, d'entrée, de monitoring (leur boîte « Add FX »
+  reste celle de REAPER).
 - ☐ Ce que FX Constellation recevait après une insertion (paramètres,
   portées, pools ROLL / détaché). Il attend que FX Constellation soit refait
   en Rust.
