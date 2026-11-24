@@ -569,6 +569,182 @@ impl Reaper {
         out
     }
 
+    // -------------------------------------------------------------------
+    // Les pistes du projet, la piste cachee « CP MOD », ses envois
+    // -------------------------------------------------------------------
+
+    pub fn xc_track_count(&self) -> usize {
+        type F = unsafe extern "C" fn(P) -> i32;
+        match self.xf::<F>(c"CountTracks") {
+            // SAFETY: projet nul = courant.
+            Some(f) => unsafe { f(null_mut()) }.max(0) as usize,
+            None => 0,
+        }
+    }
+
+    /// La piste `i` (0 = la premiere ; la maitre n'en fait pas partie).
+    pub fn xc_track_index(&self, i: usize) -> Option<Tk> {
+        type F = unsafe extern "C" fn(P, i32) -> P;
+        let f: F = self.xf(c"GetTrack")?;
+        // SAFETY: projet nul = courant ; indice verifie par REAPER.
+        let p = unsafe { f(null_mut(), i as i32) };
+        (!p.is_null()).then_some(Tk(p as usize))
+    }
+
+    /// Le nom d'une piste (sans repli « Track N »).
+    pub fn xc_track_raw_name(&self, t: Tk) -> String {
+        type F = unsafe extern "C" fn(P, *const c_char, *mut c_char, bool) -> bool;
+        let (Some(p), Some(f)) = (self.xp(t), self.xf::<F>(c"GetSetMediaTrackInfo_String")) else {
+            return String::new();
+        };
+        let mut buf = vec![0u8; 1024];
+        // SAFETY: piste vivante ; tampon de 1 Ko (un nom de piste est court).
+        if unsafe {
+            f(
+                p,
+                c"P_NAME".as_ptr(),
+                buf.as_mut_ptr() as *mut c_char,
+                false,
+            )
+        } {
+            cstr(&buf)
+        } else {
+            String::new()
+        }
+    }
+
+    pub fn xc_set_track_name(&self, t: Tk, name: &str) {
+        type F = unsafe extern "C" fn(P, *const c_char, *mut c_char, bool) -> bool;
+        if let (Some(p), Some(f), Ok(v)) = (
+            self.xp(t),
+            self.xf::<F>(c"GetSetMediaTrackInfo_String"),
+            CString::new(name),
+        ) {
+            let mut b = v.into_bytes_with_nul();
+            // SAFETY: piste vivante ; en ecriture REAPER lit la chaine.
+            unsafe { f(p, c"P_NAME".as_ptr(), b.as_mut_ptr() as *mut c_char, true) };
+        }
+    }
+
+    /// Une valeur d'une piste (`GetMediaTrackInfo_Value`).
+    pub fn xc_track_value(&self, t: Tk, key: &str) -> f64 {
+        type F = unsafe extern "C" fn(P, *const c_char) -> f64;
+        let (Some(p), Some(f), Ok(k)) = (
+            self.xp(t),
+            self.xf::<F>(c"GetMediaTrackInfo_Value"),
+            CString::new(key),
+        ) else {
+            return 0.0;
+        };
+        // SAFETY: piste vivante ; cle terminee par zero.
+        unsafe { f(p, k.as_ptr()) }
+    }
+
+    pub fn xc_set_track_value(&self, t: Tk, key: &str, v: f64) {
+        type F = unsafe extern "C" fn(P, *const c_char, f64) -> bool;
+        if let (Some(p), Some(f), Ok(k)) = (
+            self.xp(t),
+            self.xf::<F>(c"SetMediaTrackInfo_Value"),
+            CString::new(key),
+        ) {
+            // SAFETY: piste vivante ; cle terminee par zero.
+            unsafe { f(p, k.as_ptr(), v) };
+        }
+    }
+
+    /// Une piste neuve a la fin du projet.
+    pub fn xc_insert_track_end(&self) -> Option<Tk> {
+        type Ins = unsafe extern "C" fn(i32, bool);
+        let n = self.xc_track_count();
+        let ins: Ins = self.xf(c"InsertTrackAtIndex")?;
+        // SAFETY: indice = le nombre de pistes (a la fin).
+        unsafe { ins(n as i32, false) };
+        self.xc_track_index(n)
+    }
+
+    /// Les pistes que `src` envoie (ses envois).
+    pub fn xc_send_dests(&self, src: Tk) -> Vec<Tk> {
+        type Num = unsafe extern "C" fn(P, i32) -> i32;
+        type Info = unsafe extern "C" fn(P, i32, i32, *const c_char) -> f64;
+        let (Some(p), Some(num), Some(info)) = (
+            self.xp(src),
+            self.xf::<Num>(c"GetTrackNumSends"),
+            self.xf::<Info>(c"GetTrackSendInfo_Value"),
+        ) else {
+            return Vec::new();
+        };
+        // SAFETY: piste vivante ; 0 = envois.
+        let n = unsafe { num(p, 0) };
+        (0..n)
+            .map(|i| {
+                // SAFETY: indice dans les bornes ; le pointeur rendu est
+                // celui d'une piste (en double).
+                let d = unsafe { info(p, 0, i, c"P_DESTTRACK".as_ptr()) };
+                Tk(d as usize)
+            })
+            .collect()
+    }
+
+    /// Un envoi MIDI seul (sans audio) de `src` vers `dst`. Rend vrai s'il
+    /// vient d'etre cree.
+    pub fn xc_ensure_midi_send(&self, src: Tk, dst: Tk) -> bool {
+        type Send = unsafe extern "C" fn(P, P) -> i32;
+        type Set = unsafe extern "C" fn(P, i32, i32, *const c_char, f64) -> bool;
+        if self.xc_send_dests(src).contains(&dst) {
+            return false;
+        }
+        let (Some(a), Some(b), Some(send), Some(set)) = (
+            self.xp(src),
+            self.xp(dst),
+            self.xf::<Send>(c"CreateTrackSend"),
+            self.xf::<Set>(c"SetTrackSendInfo_Value"),
+        ) else {
+            return false;
+        };
+        // SAFETY: pistes vivantes.
+        let i = unsafe { send(a, b) };
+        if i < 0 {
+            return false;
+        }
+        // SAFETY: l'envoi vient d'etre cree a l'indice i.
+        unsafe {
+            set(a, 0, i, c"I_SRCCHAN".as_ptr(), -1.0);
+            set(a, 0, i, c"I_MIDIFLAGS".as_ptr(), 0.0);
+        }
+        true
+    }
+
+    /// Une boite de REAPER ; rend le bouton (1 OK, 2 Annuler, 6 Oui, 7 Non).
+    pub fn xc_message(&self, title: &str, text: &str, kind: i32) -> i32 {
+        type F = unsafe extern "C" fn(*const c_char, *const c_char, i32) -> i32;
+        let (Some(f), Ok(t), Ok(m)) = (
+            self.xf::<F>(c"ShowMessageBox"),
+            CString::new(title),
+            CString::new(text),
+        ) else {
+            return 0;
+        };
+        // SAFETY: chaines vivantes pendant l'appel (boite modale).
+        unsafe { f(m.as_ptr(), t.as_ptr(), kind) }
+    }
+
+    /// Le parametre porte-t-il une enveloppe d'automation ?
+    pub fn xc_has_envelope(&self, t: Tk, fx: usize, k: usize) -> bool {
+        type F = unsafe extern "C" fn(P, i32, i32, bool) -> P;
+        match (self.xp(t), self.xf::<F>(c"GetFXEnvelope")) {
+            // SAFETY: piste vivante ; faux = ne pas creer.
+            (Some(p), Some(f)) => !unsafe { f(p, fx as i32, k as i32, false) }.is_null(),
+            _ => false,
+        }
+    }
+
+    /// Le nom d'une piste vers son pointeur (la premiere de ce nom).
+    pub fn xc_find_track_named(&self, name: &str) -> Option<Tk> {
+        (0..self.xc_track_count())
+            .filter_map(|i| self.xc_track_index(i))
+            .find(|&t| self.xc_track_raw_name(t) == name)
+    }
+
     /// La memoire partagee des JSFX (`gmem_*`) est-elle offerte aux
     /// extensions ? (Le SDK 7.78 ne la declare pas.)
     pub fn xc_has_gmem(&self) -> bool {

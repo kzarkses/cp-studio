@@ -728,6 +728,120 @@ pub fn popup_menu(owner: Hwnd, x: i32, y: i32, items: &[Option<MenuItem<'_>>]) -
     r.max(0) as u32
 }
 
+/// Une ligne d'un menu en arbre.
+#[derive(Clone, Debug, PartialEq)]
+pub enum MenuEntry {
+    Item {
+        id: u32,
+        text: String,
+        checked: bool,
+        enabled: bool,
+    },
+    Sep,
+    /// Un sous-menu.
+    Sub(String, Vec<MenuEntry>),
+}
+
+impl MenuEntry {
+    pub fn item(id: u32, text: impl Into<String>) -> MenuEntry {
+        MenuEntry::Item {
+            id,
+            text: text.into(),
+            checked: false,
+            enabled: true,
+        }
+    }
+    pub fn check(id: u32, text: impl Into<String>, checked: bool) -> MenuEntry {
+        MenuEntry::Item {
+            id,
+            text: text.into(),
+            checked,
+            enabled: true,
+        }
+    }
+    pub fn off(text: impl Into<String>) -> MenuEntry {
+        MenuEntry::Item {
+            id: 0,
+            text: text.into(),
+            checked: false,
+            enabled: false,
+        }
+    }
+}
+
+fn build_menu(entries: &[MenuEntry]) -> *mut c_void {
+    const MF_STRING: u32 = 0;
+    const MF_SEPARATOR: u32 = 0x800;
+    const MF_CHECKED: u32 = 0x8;
+    const MF_GRAYED: u32 = 0x1;
+    const MF_POPUP: u32 = 0x10;
+    // SAFETY: menu cree ici ; l'appelant le detruit (avec ses sous-menus).
+    let m = unsafe { CreatePopupMenu() };
+    if m.is_null() {
+        return m;
+    }
+    for e in entries {
+        match e {
+            MenuEntry::Sep => {
+                // SAFETY: menu vivant.
+                unsafe { AppendMenuW(m, MF_SEPARATOR, 0, null()) };
+            }
+            MenuEntry::Item {
+                id,
+                text,
+                checked,
+                enabled,
+            } => {
+                let w = wide(text);
+                let mut f = MF_STRING;
+                if *checked {
+                    f |= MF_CHECKED;
+                }
+                if !*enabled {
+                    f |= MF_GRAYED;
+                }
+                // SAFETY: chaine terminee par zero, vivante pendant l'appel.
+                unsafe { AppendMenuW(m, f, *id as usize, w.as_ptr()) };
+            }
+            MenuEntry::Sub(text, sub) => {
+                let sm = build_menu(sub);
+                if sm.is_null() {
+                    continue;
+                }
+                let w = wide(text);
+                // SAFETY: le sous-menu appartient desormais au menu.
+                unsafe { AppendMenuW(m, MF_STRING | MF_POPUP, sm as usize, w.as_ptr()) };
+            }
+        }
+    }
+    m
+}
+
+/// Un menu en arbre a l'ecran (x, y). Rend l'identifiant choisi (0 = rien).
+pub fn popup_tree(owner: Hwnd, x: i32, y: i32, entries: &[MenuEntry]) -> u32 {
+    const TPM_RETURNCMD: u32 = 0x100;
+    const TPM_RIGHTBUTTON: u32 = 0x2;
+    let m = build_menu(entries);
+    if m.is_null() {
+        return 0;
+    }
+    // SAFETY: menu vivant ; TPM_RETURNCMD rend le choix.
+    let r = unsafe {
+        TrackPopupMenu(
+            m,
+            TPM_RETURNCMD | TPM_RIGHTBUTTON,
+            x,
+            y,
+            0,
+            owner.raw(),
+            null(),
+        )
+    };
+    // SAFETY: le menu cree ci-dessus (ses sous-menus avec lui).
+    unsafe { DestroyMenu(m) };
+    r.max(0) as u32
+}
+
 // ---------------------------------------------------------------------------
 // Le presse-papiers
 // ---------------------------------------------------------------------------

@@ -191,6 +191,10 @@ enum Phase {
     /// Le navigateur d'effets : ajouter, deplacer, contourner, copier, le de,
     /// la recherche ; « View: Show FX browser window » passe par lui.
     FxBrowser,
+    /// FX Constellation : suivre un parametre, le pad, une source, deux
+    /// sources (le Mod Mix en tete), ROLL, un preset, le Sound Gen, le
+    /// sequenceur, l'etat de la piste.
+    Fxc,
     /// La poignee native d'un docker : REAPER prend-il un appui envoye par
     /// message (pour qu'une poignee a nous lui passe le glisser) ? Et
     /// l'API des dockers deplace-t-elle une vue d'un docker a l'autre ?
@@ -1342,6 +1346,7 @@ impl SelfTest {
             | Phase::GuitarTab
             | Phase::Session
             | Phase::FxBrowser
+            | Phase::Fxc
             | Phase::DockGrip
             | Phase::Done => {}
         }
@@ -1708,6 +1713,13 @@ impl SelfTest {
                 if self.fxb_tick(r) {
                     self.keys_step = 0;
                     self.ui_at = Some(Instant::now());
+                    self.phase = Phase::Fxc;
+                }
+            }
+            Phase::Fxc => {
+                if self.fxc_tick(r) {
+                    self.keys_step = 0;
+                    self.ui_at = Some(Instant::now());
                     self.phase = Phase::DockGrip;
                 }
             }
@@ -1721,6 +1733,97 @@ impl SelfTest {
             _ => {}
         }
         false
+    }
+
+    /// FX Constellation : le module joue tout (« run ») sur une piste a lui
+    /// et rend une ligne ; puis il nettoie (« clean »).
+    fn fxc_tick(&mut self, r: &cp_sys::reaper::Reaper) -> bool {
+        let t = self.ui_at.map_or(0.0, |t| t.elapsed().as_secs_f64());
+        let act = |step: &str| {
+            r.ext_set("CP_Studio", "selftest_fxc_step", step, false);
+            r.ext_set("CP_Studio", "selftest_fxc", "", false);
+            let c = r.named_command("_CPSTUDIO_FXC_SELFTEST");
+            if c != 0 {
+                r.main_on_command(c);
+            }
+            c != 0
+        };
+        let out = || r.ext_get("CP_Studio", "selftest_fxc").unwrap_or_default();
+        let field = |st: &str, k: &str| -> String {
+            st.split_whitespace()
+                .find_map(|w| w.strip_prefix(&format!("{k}=")))
+                .unwrap_or("")
+                .to_string()
+        };
+        match self.keys_step {
+            0 => {
+                if t < 0.3 {
+                    return false;
+                }
+                if !act("run") {
+                    self.say(
+                        false,
+                        "FX Constellation : l'action de test n'existe pas".into(),
+                    );
+                    return true;
+                }
+                let st = out();
+                self.say(st.starts_with("run OK"), format!("FX Constellation : {st}"));
+                let checks = [
+                    (
+                        "pad_link",
+                        "1",
+                        "suivre un parametre pose le bridge et le lien du pad",
+                    ),
+                    (
+                        "lfo_link",
+                        "1",
+                        "une source tiree pose la banque, le lien la lit",
+                    ),
+                    ("slot2_on", "1", "le slot tire s'allume"),
+                    (
+                        "bus_link",
+                        "1",
+                        "deux sources : le parametre lit un bus du Mod Mix",
+                    ),
+                    ("bus_input", "1", "l'entree du bus lit la banque"),
+                    (
+                        "pad_link_after",
+                        "1",
+                        "le Mod Mix en tete : le lien du pad suit son bridge",
+                    ),
+                    (
+                        "preset",
+                        "1",
+                        "un preset enregistre puis rappele rend les memes parametres",
+                    ),
+                    ("sg_on", "1", "le Sound Gen pose"),
+                    ("sg_off", "1", "le Sound Gen retire"),
+                    ("sg_park", "1", "son reglage reste dans la piste"),
+                    ("seq_at", "0", "le sequenceur en tete de chaine"),
+                    ("seq_removed", "1", "le sequenceur retire"),
+                    ("state", "1", "l'etat de la piste relu du projet"),
+                ];
+                for (k, want, what) in checks {
+                    self.say(field(&st, k) == want, format!("FX Constellation : {what}"));
+                }
+                self.keys_step = 1;
+                self.ui_at = Some(Instant::now());
+                false
+            }
+            _ => {
+                if t < 0.3 {
+                    return false;
+                }
+                act("clean");
+                let st = out();
+                self.say(
+                    st.starts_with("cleaned"),
+                    format!("FX Constellation : {st}"),
+                );
+                true
+            }
+        }
     }
 
     /// Le navigateur d'effets sur une piste neuve : le module fait les gestes

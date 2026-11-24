@@ -14,6 +14,8 @@ crate-type = ["cdylib"]
 [dependencies]
 cp_fxlist = { path = "../cp_fxlist" }
 cp_fxview = { path = "../cp_fxview" }
+cp_fxc = { path = "../cp_fxc" }
+cp_fxcview = { path = "../cp_fxcview" }
 cp_session = { path = "../cp_session" }
 cp_sessionview = { path = "../cp_sessionview" }
 cp_abi = { path = "../cp_abi" }

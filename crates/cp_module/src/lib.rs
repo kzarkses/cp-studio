@@ -40,6 +40,10 @@ mod docking;
 mod editor;
 mod frame;
 mod fxb;
+mod fxc;
+mod fxc_act;
+mod fxc_sync;
+mod fxc_test;
 mod grip;
 mod gtab;
 mod items;
@@ -360,6 +364,9 @@ pub(crate) enum WinOp {
     FxbOpen,
     FxbClose,
     FxbPlace(Place),
+    FxcOpen,
+    FxcClose,
+    FxcPlace(Place),
 }
 
 /// La fenetre du navigateur.
@@ -414,6 +421,10 @@ pub(crate) struct App {
     cmd_session_test: i32,
     cmd_fxb: i32,
     cmd_fxb_test: i32,
+    cmd_fxc: i32,
+    cmd_fxc_test: i32,
+    /// FX Constellation : la piste suivie, son modele, sa fenetre.
+    fxc: fxc::CPart,
     /// Le navigateur d'effets : le catalogue, sa fenetre, la chaine montree.
     fxb: fxb::FPart,
     /// L'editeur : la fenetre, l'item ouvert.
@@ -755,6 +766,9 @@ impl App {
                 WinOp::FxbOpen => self.fxb_open(),
                 WinOp::FxbClose => self.fxb_close(true),
                 WinOp::FxbPlace(p) => self.fxb_set_place(p),
+                WinOp::FxcOpen => self.fxc_open(),
+                WinOp::FxcClose => self.fxc_close(true),
+                WinOp::FxcPlace(p) => self.fxc_set_place(p),
             }
         }
         if self.tp.view.is_some() {
@@ -1592,6 +1606,18 @@ impl Module for App {
         } else {
             0
         };
+        let cmd_fxc = host.register_action(
+            "CPSTUDIO_FXCONSTELLATION",
+            "CP Studio: FX Constellation - open",
+        );
+        let cmd_fxc_test = if crate::gtab::selftest() {
+            host.register_action(
+                "CPSTUDIO_FXC_SELFTEST",
+                "CP Studio: FX Constellation - self-test step",
+            )
+        } else {
+            0
+        };
         let tp = tview::TPart::new(&r);
         // La clock externe retenue : le chargeur l'ecoute de nouveau.
         if tp.clock.dev >= 0 {
@@ -1622,6 +1648,9 @@ impl Module for App {
             cmd_fxb,
             cmd_fxb_test,
             fxb: fxb::FPart::new(&r),
+            cmd_fxc,
+            cmd_fxc_test,
+            fxc: fxc::CPart::new(&r),
             ed: editor::EPart::new(&r),
             ses: session::SPart::new(&r),
             gt: gtab::GPart::new(&r),
@@ -1694,6 +1723,9 @@ impl Module for App {
                 if app.ext("fxb_open").as_deref() == Some("1") {
                     app.queue(WinOp::FxbOpen);
                 }
+                if app.ext("fxc_open").as_deref() == Some("1") {
+                    app.queue(WinOp::FxcOpen);
+                }
             }
         }
         // Guitar Tab : sa fenetre reprise apres un rechargement, et sa prise.
@@ -1733,6 +1765,15 @@ impl Module for App {
             .filter(|&h| h.0 != 0 && win::is_window(h));
         if let Some(h) = fh {
             app.fxb_adopt(h);
+        }
+        // FX Constellation : sa fenetre reprise.
+        let ch = app
+            .ext("fxc_hwnd")
+            .and_then(|v| v.parse::<isize>().ok())
+            .map(Hwnd)
+            .filter(|&h| h.0 != 0 && win::is_window(h));
+        if let Some(h) = ch {
+            app.fxc_adopt_window(h);
         }
         host.info(&format!(
             "module pret : generation {}, navigateur {} ({}), transport {}",
@@ -1774,6 +1815,7 @@ impl Module for App {
         self.ed_shutdown();
         self.ses_shutdown();
         self.fxb_shutdown();
+        self.fxc_shutdown();
         // Les fenetres restent au chargeur : le module suivant les reprend.
         // Elles ne recevront plus d'images d'ici la.
         if let Some(v) = &self.view {
@@ -1812,6 +1854,7 @@ impl Module for App {
         self.ed_tick();
         self.ses_tick();
         self.fxb_tick();
+        self.fxc_tick();
         self.transport_tick();
         if self.view.is_none() {
             return;
@@ -1848,6 +1891,14 @@ impl Module for App {
         }
         if cmd != 0 && cmd == self.cmd_fxb_test {
             self.fxb_selftest();
+            return true;
+        }
+        if cmd == self.cmd_fxc {
+            self.fxc_toggle();
+            return true;
+        }
+        if cmd != 0 && cmd == self.cmd_fxc_test {
+            self.fxc_selftest();
             return true;
         }
         if cmd == self.cmd_browser {
@@ -1957,6 +2008,8 @@ impl Module for App {
             Some(self.ses.win.is_some())
         } else if cmd == self.cmd_fxb {
             Some(self.fxb.win.is_some())
+        } else if cmd == self.cmd_fxc {
+            Some(self.fxc.win.is_some())
         } else {
             None
         }
@@ -1984,6 +2037,9 @@ impl Module for App {
             return Some(r);
         }
         if let Some(r) = self.fxb_wnd(m) {
+            return Some(r);
+        }
+        if let Some(r) = self.fxc_wnd(m) {
             return Some(r);
         }
         self.browser_wnd(m)

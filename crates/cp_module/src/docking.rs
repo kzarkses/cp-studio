@@ -180,6 +180,11 @@ impl App {
                 "FX Browser",
                 "cp_studio_fxbrowser",
             ),
+            v(
+                self.fxc.win.as_ref().map(|w| w.hwnd),
+                "FX Constellation",
+                "cp_studio_fxconstellation",
+            ),
         ]
         .into_iter()
         .flatten()
@@ -284,6 +289,12 @@ impl App {
                     if apply(&mut self.ses.view.dock, t) {
                         self.ses.view.mark();
                         self.ses_render(true);
+                    }
+                }
+                "FX Constellation" => {
+                    if apply(&mut self.fxc.view.dock, t) {
+                        self.fxc.view.mark();
+                        self.fxc_render(true);
                     }
                 }
                 _ => {
