@@ -1011,6 +1011,8 @@ fn add_fx_target(title: &str) -> Option<i32> {
 
 /// Les titres de boites « Add FX » deja ecrits au journal.
 static ADD_FX_SEEN: Mutex<Vec<String>> = Mutex::new(Vec::new());
+/// La derniere boite prise, et quand (deux crochets la voient).
+static ADD_FX_LAST: Mutex<Option<(isize, Instant)>> = Mutex::new(None);
 
 /// Une fenetre s'active : si c'est la boite « Add FX to ... » de REAPER et
 /// que le module la prend, elle se ferme (comme « Cancel ») et le
@@ -1021,8 +1023,14 @@ pub(crate) fn add_fx_window(h: Hwnd) {
         return;
     }
     let title = cp_sys::ui::window_text(h);
-    if !title.starts_with("Add FX") {
+    if !title.starts_with("Add FX") || !cp_sys::ui::is_visible(h) {
         return;
+    }
+    {
+        let last = lock(&ADD_FX_LAST);
+        if last.is_some_and(|(w, t)| w == h.0 && t.elapsed().as_secs_f64() < 0.5) {
+            return;
+        }
     }
     let target = add_fx_target(&title);
     {
@@ -1044,6 +1052,7 @@ pub(crate) fn add_fx_window(h: Hwnd) {
         Some(1) => {
             const WM_COMMAND: u32 = 0x0111;
             const IDCANCEL: usize = 2;
+            *lock(&ADD_FX_LAST) = Some((h.0, Instant::now()));
             cp_sys::ui::show_window(h, false);
             win::post_message(h, WM_COMMAND, IDCANCEL, 0);
         }
@@ -1442,6 +1451,11 @@ fn on_load(instance: isize, r: Reaper) -> bool {
     if !r.register_accelerator(views::on_key) {
         log(LOG_ERROR, "crochet clavier refuse");
     }
+    // La boite « Add FX to ... » de REAPER : vue quand elle se montre ou
+    // change de titre (le crochet d'activation ne la voyait pas).
+    if !cp_sys::rui::install_show_hook(add_fx_window) {
+        log(LOG_ERROR, "crochet WinEvent refuse");
+    }
     if !cp_sys::rui::install_mouse_hook(on_mouse) {
         log(LOG_ERROR, "crochet souris refuse");
     }
@@ -1464,6 +1478,7 @@ fn on_unload() {
         r.unregister_toggle_state();
     }
     cp_sys::rui::remove_mouse_hook();
+    cp_sys::rui::remove_show_hook();
     dark::shutdown();
     views::stop_clock();
     // REAPER retrouve son arrangement et son transport avant que nos

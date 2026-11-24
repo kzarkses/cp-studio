@@ -1871,8 +1871,11 @@ impl SelfTest {
                         && field(&st, "track") == "CPF"
                         && reaper_box.is_empty(),
                     format!(
-                        "FX Browser : le bouton « Add » de la chaine de REAPER ouvre le notre, pour sa piste ({st} ; boites de REAPER restees : {})",
-                        reaper_box.len()
+                        "FX Browser : le bouton « Add » de la chaine de REAPER ouvre le notre, pour sa piste ({st} ; boites de REAPER restees : {:?})",
+                        reaper_box
+                            .iter()
+                            .map(|&b| cp_sys::ui::window_text(b))
+                            .collect::<Vec<_>>()
                     ),
                 );
                 self.keys_step = 5;

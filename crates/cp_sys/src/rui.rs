@@ -381,3 +381,92 @@ pub fn remove_mouse_hook() {
         *g = 0;
     }
 }
+
+// ---------------------------------------------------------------------------
+// Les fenetres qui se montrent ou changent de titre (WinEvent)
+// ---------------------------------------------------------------------------
+
+type WinEventProc = unsafe extern "system" fn(*mut c_void, u32, *mut c_void, i32, i32, u32, u32);
+
+#[link(name = "user32")]
+unsafe extern "system" {
+    fn SetWinEventHook(
+        min: u32,
+        max: u32,
+        module: *mut c_void,
+        f: WinEventProc,
+        pid: u32,
+        tid: u32,
+        flags: u32,
+    ) -> *mut c_void;
+    fn UnhookWinEvent(h: *mut c_void) -> i32;
+}
+
+#[link(name = "kernel32")]
+unsafe extern "system" {
+    fn GetCurrentProcessId() -> u32;
+}
+
+static SHOW_FN: OnceLock<fn(Hwnd)> = OnceLock::new();
+static SHOW_HOOKS: std::sync::Mutex<Vec<usize>> = std::sync::Mutex::new(Vec::new());
+
+unsafe extern "system" fn show_proc(
+    _hook: *mut c_void,
+    _event: u32,
+    hwnd: *mut c_void,
+    id_object: i32,
+    id_child: i32,
+    _thread: u32,
+    _time: u32,
+) {
+    // OBJID_WINDOW, la fenetre elle-meme (pas un de ses elements).
+    if id_object != 0 || id_child != 0 || hwnd.is_null() {
+        return;
+    }
+    if let Some(f) = SHOW_FN.get() {
+        let _ = guard(|| f(Hwnd(hwnd as isize)));
+    }
+}
+
+/// `f` voit chaque fenetre du processus qui se montre ou change de titre
+/// (EVENT_OBJECT_SHOW, EVENT_OBJECT_NAMECHANGE), apres coup, par la boucle
+/// de messages du fil appelant. Le code doit vivre dans une DLL jamais
+/// dechargee : le chargeur.
+pub fn install_show_hook(f: fn(Hwnd)) -> bool {
+    let _ = SHOW_FN.set(f);
+    let mut g = SHOW_HOOKS.lock().unwrap_or_else(|e| e.into_inner());
+    if !g.is_empty() {
+        return true;
+    }
+    const EVENT_OBJECT_SHOW: u32 = 0x8002;
+    const EVENT_OBJECT_NAMECHANGE: u32 = 0x800C;
+    const WINEVENT_OUTOFCONTEXT: u32 = 0;
+    // SAFETY: procedure dans cette DLL ; seulement ce processus.
+    let pid = unsafe { GetCurrentProcessId() };
+    for ev in [EVENT_OBJECT_SHOW, EVENT_OBJECT_NAMECHANGE] {
+        // SAFETY: crochet hors contexte, rappels sur ce fil.
+        let h = unsafe {
+            SetWinEventHook(
+                ev,
+                ev,
+                std::ptr::null_mut(),
+                show_proc,
+                pid,
+                0,
+                WINEVENT_OUTOFCONTEXT,
+            )
+        };
+        if !h.is_null() {
+            g.push(h as usize);
+        }
+    }
+    !g.is_empty()
+}
+
+pub fn remove_show_hook() {
+    let mut g = SHOW_HOOKS.lock().unwrap_or_else(|e| e.into_inner());
+    for h in g.drain(..) {
+        // SAFETY: un crochet pose ci-dessus.
+        unsafe { UnhookWinEvent(h as *mut c_void) };
+    }
+}
