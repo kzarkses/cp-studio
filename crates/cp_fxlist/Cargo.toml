@@ -1,0 +1,12 @@
+[package]
+name = "cp_fxlist"
+description = "Le catalogue des effets : la liste de REAPER, ses dossiers, categories et developpeurs, et ce que CP Studio y ajoute (favoris, onglets, de). Pur, sans REAPER"
+edition.workspace = true
+version.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+
+[lints]
+workspace = true

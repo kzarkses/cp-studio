@@ -51,6 +51,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "cp_fxlist"
+version = "0.1.0"
+
+[[package]]
 name = "cp_gfx"
 version = "0.1.0"
 
