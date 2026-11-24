@@ -325,7 +325,12 @@ pub const EXT_NAME: &[u8] = b"__cp_studio_ext\0";
 
 /// La version de [`ExtApi`] ; elle ne fait que monter, et un champ n'est
 /// jamais retire ni deplace (on n'ajoute qu'a la fin).
-pub const EXT_VERSION: u32 = 1;
+pub const EXT_VERSION: u32 = 2;
+
+/// L'action que le chargeur passe au module (`on_action`) quand un clic
+/// gauche tombe sur le bouton FX d'une piste (EXT 2, [`ExtApi::steal_fx_button`]).
+/// Le module rend 1 s'il a pris le clic.
+pub const ACTION_FX_BUTTON: i32 = -0x0046_5842;
 
 /// Une note d'un clip MIDI de la Session, en noires depuis son debut.
 #[repr(C)]
@@ -398,6 +403,15 @@ pub struct ExtApi {
     /// Ecrit un clip en WAV (32 bits flottants) au chemin UTF-8 donne. 1 si
     /// ecrit.
     pub clip_save: extern "C" fn(clip: u32, path: *const u8, len: usize) -> i32,
+    // --- EXT 2 : remplacer des fenetres de REAPER
+    /// Prend (`on` = 1) ou rend (0) une action native de la section
+    /// principale : le chargeur la passe d'abord au module (`on_action`) ;
+    /// le module rend 0 pour la laisser a REAPER. 1 si fait.
+    pub steal_action: extern "C" fn(cmd: i32, on: i32) -> i32,
+    /// Le clic gauche sur le bouton FX d'une piste (arrangement ou console)
+    /// passe d'abord au module ([`ACTION_FX_BUTTON`]) ; s'il le prend,
+    /// REAPER ne le voit pas. 1 si fait.
+    pub steal_fx_button: extern "C" fn(on: i32) -> i32,
 }
 
 /// Ce que le module offre au chargeur. Tous les appels se font sur le fil

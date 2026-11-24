@@ -214,6 +214,13 @@ pub trait Host: Send + Sync {
     fn clip_save(&self, _clip: u32, _path: &str) -> bool {
         false
     }
+    // --- EXT 2
+    fn steal_action(&self, _cmd: i32, _on: bool) -> bool {
+        false
+    }
+    fn steal_fx_button(&self, _on: bool) -> bool {
+        false
+    }
 
     fn audio_input(&self, _ch0: i32, _ch1: i32, _out: &mut [f32]) -> usize {
         0
@@ -253,6 +260,8 @@ static EXT: ExtApi = ExtApi {
     midi_sent: e_midi_sent,
     lane_cancel: e_lane_cancel,
     clip_save: e_clip_save,
+    steal_action: e_steal_action,
+    steal_fx_button: e_steal_fx_button,
 };
 
 static API: HostApi = HostApi {
@@ -799,6 +808,14 @@ extern "C" fn e_midi_sent(port: u32) -> u64 {
 
 extern "C" fn e_lane_cancel(port: u32) -> i32 {
     with(false, |h| h.lane_cancel(port)) as i32
+}
+
+extern "C" fn e_steal_action(cmd: i32, on: i32) -> i32 {
+    with(false, |h| h.steal_action(cmd, on != 0)) as i32
+}
+
+extern "C" fn e_steal_fx_button(on: i32) -> i32 {
+    with(false, |h| h.steal_fx_button(on != 0)) as i32
 }
 
 extern "C" fn e_clip_save(clip: u32, path: *const u8, len: usize) -> i32 {

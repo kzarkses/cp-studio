@@ -26,6 +26,7 @@ pub mod audio;
 pub mod dark;
 pub mod dylib;
 pub mod folders;
+pub mod fxb;
 pub mod font;
 pub mod grow;
 pub mod guard;

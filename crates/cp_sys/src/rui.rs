@@ -327,7 +327,10 @@ unsafe extern "system" {
     fn GetCurrentThreadId() -> u32;
 }
 
-static MOUSE_FN: OnceLock<fn(Hwnd, u32)> = OnceLock::new();
+/// (fenetre, message, x, y ecran) -> pris.
+type MouseFn = fn(Hwnd, u32, i32, i32) -> bool;
+
+static MOUSE_FN: OnceLock<MouseFn> = OnceLock::new();
 static MOUSE_HOOK: std::sync::Mutex<usize> = std::sync::Mutex::new(0);
 
 unsafe extern "system" fn mouse_proc(code: i32, wp: usize, lp: isize) -> isize {
@@ -335,7 +338,10 @@ unsafe extern "system" fn mouse_proc(code: i32, wp: usize, lp: isize) -> isize {
         // SAFETY: pour WH_MOUSE, lParam pointe un MOUSEHOOKSTRUCT.
         let m = unsafe { &*(lp as *const MouseHookStruct) };
         if let Some(f) = MOUSE_FN.get() {
-            let _ = guard(|| f(Hwnd(m.hwnd as isize), wp as u32));
+            // Vrai : le message est pris, la fenetre ne le recoit pas.
+            if guard(|| f(Hwnd(m.hwnd as isize), wp as u32, m.pt_x, m.pt_y)).unwrap_or(false) {
+                return 1;
+            }
         }
     }
     // SAFETY: le premier argument est ignore depuis Windows NT.
@@ -343,9 +349,10 @@ unsafe extern "system" fn mouse_proc(code: i32, wp: usize, lp: isize) -> isize {
 }
 
 /// Voit chaque message souris du fil appelant (le fil principal de REAPER)
-/// avant sa fenetre. Le code du crochet doit vivre dans une DLL jamais
-/// dechargee : le chargeur.
-pub fn install_mouse_hook(f: fn(Hwnd, u32)) -> bool {
+/// avant sa fenetre : (fenetre, message, point ecran). `f` rend vrai pour
+/// prendre le message (la fenetre ne le recoit pas). Le code du crochet doit
+/// vivre dans une DLL jamais dechargee : le chargeur.
+pub fn install_mouse_hook(f: MouseFn) -> bool {
     let _ = MOUSE_FN.set(f);
     let mut g = MOUSE_HOOK.lock().unwrap_or_else(|e| e.into_inner());
     if *g != 0 {

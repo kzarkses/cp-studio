@@ -207,6 +207,26 @@ impl HostRef {
             .is_some_and(|e| (e.clip_save)(clip, path.as_ptr(), path.len()) == 1)
     }
 
+    /// La table d'extension, si elle a au moins la version `v` (un champ
+    /// plus recent ne se lit jamais dans une table plus ancienne).
+    fn ext_v(&self, v: u32) -> Option<&'static ExtApi> {
+        self.ext().filter(|e| e.version >= v)
+    }
+
+    /// Prend (ou rend) une action native de REAPER : elle passe d'abord par
+    /// `on_action`. Faux si le chargeur ne sait pas (redemarrer REAPER).
+    pub fn steal_action(&self, cmd: i32, on: bool) -> bool {
+        self.ext_v(2)
+            .is_some_and(|e| (e.steal_action)(cmd, on as i32) == 1)
+    }
+
+    /// Le clic sur le bouton FX d'une piste passe d'abord par `on_action`
+    /// (`cp_abi::ACTION_FX_BUTTON`).
+    pub fn steal_fx_button(&self, on: bool) -> bool {
+        self.ext_v(2)
+            .is_some_and(|e| (e.steal_fx_button)(on as i32) == 1)
+    }
+
     // --- le moteur audio (il vit dans le chargeur)
 
     /// Ouvre et decode un fichier sur un fil de travail. Rend un ticket.

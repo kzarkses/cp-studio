@@ -73,6 +73,13 @@ static LAST_RELOAD: Mutex<Option<String>> = Mutex::new(None);
 /// lancee depuis l'une de ses fenetres, une macro qui la contient) : rejouees
 /// au battement suivant au lieu d'etre perdues.
 static PENDING: Mutex<Vec<i32>> = Mutex::new(Vec::new());
+/// Les actions natives de REAPER que le module prend (EXT 2) : elles passent
+/// d'abord par lui.
+static STOLEN: Mutex<Vec<i32>> = Mutex::new(Vec::new());
+/// Le bouton FX des pistes passe d'abord par le module (EXT 2).
+static STEAL_FX: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+/// Un appui pris sur le bouton FX : son relachement l'est aussi.
+static EAT_UP: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 /// Les fenetres a repeindre entieres : un WM_PAINT est arrive pendant que le
 /// module etait occupe.
 static REPAINT: Mutex<Vec<Hwnd>> = Mutex::new(Vec::new());
@@ -517,6 +524,23 @@ impl Host for LoaderHost {
         })
     }
 
+    fn steal_action(&self, cmd: i32, on: bool) -> bool {
+        if cmd <= 0 {
+            return false;
+        }
+        let mut s = lock(&STOLEN);
+        s.retain(|&c| c != cmd);
+        if on {
+            s.push(cmd);
+        }
+        true
+    }
+
+    fn steal_fx_button(&self, on: bool) -> bool {
+        STEAL_FX.store(on, std::sync::atomic::Ordering::Relaxed);
+        true
+    }
+
     fn clip_save(&self, clip: u32, path: &str) -> bool {
         let r = audio(Err("no audio".to_string()), |a| {
             a.save_wav(ClipH(clip), std::path::Path::new(path))
@@ -940,6 +964,60 @@ fn status_text() -> String {
     s
 }
 
+/// Une action native que le module a prise : il la traite (1) ou la laisse
+/// a REAPER (0, et aussi s'il est occupe, absent ou en faute).
+fn stolen_action(cmd: i32) -> bool {
+    if !lock(&STOLEN).contains(&cmd) {
+        return false;
+    }
+    let hot = HOT.get();
+    let sane = hot.is_some_and(|h| h.fault().is_none());
+    match hot.and_then(|h| h.call(|api| (api.on_action)(cmd))) {
+        Some(FAULT) => {
+            check_fault(sane, "action prise");
+            false
+        }
+        Some(1) => true,
+        _ => false,
+    }
+}
+
+/// Le crochet souris : le clavier suit le dernier clic (`views`), et le
+/// bouton FX d'une piste passe d'abord par le module. Vrai : le message est
+/// pris.
+fn on_mouse(h: Hwnd, msg: u32, x: i32, y: i32) -> bool {
+    use std::sync::atomic::Ordering::Relaxed;
+    views::on_mouse(h, msg);
+    const DOWN: u32 = 0x201;
+    const DBL: u32 = 0x203;
+    const UP: u32 = 0x202;
+    if msg == UP {
+        return EAT_UP.swap(false, Relaxed);
+    }
+    if (msg != DOWN && msg != DBL) || !STEAL_FX.load(Relaxed) {
+        return false;
+    }
+    let Some(r) = REAPER.get() else { return false };
+    let (_, info) = r.thing_at(x, y);
+    if info != "tcp.fx" && info != "mcp.fx" {
+        return false;
+    }
+    let hot = HOT.get();
+    let sane = hot.is_some_and(|h| h.fault().is_none());
+    let took = match hot.and_then(|h| h.call(|api| (api.on_action)(cp_abi::ACTION_FX_BUTTON))) {
+        Some(FAULT) => {
+            check_fault(sane, "bouton FX");
+            false
+        }
+        Some(1) => true,
+        _ => false,
+    };
+    if took {
+        EAT_UP.store(true, Relaxed);
+    }
+    took
+}
+
 fn on_command(cmd: i32) -> bool {
     let owner = lock(&ACTIONS)
         .by_cmd
@@ -947,7 +1025,7 @@ fn on_command(cmd: i32) -> bool {
         .find(|(c, _)| *c == cmd)
         .map(|e| e.1);
     match owner {
-        None => false,
+        None => stolen_action(cmd),
         Some(Owner::Reload) => {
             let msg = match reload(true) {
                 Some(Ok(r)) => {
@@ -1295,7 +1373,7 @@ fn on_load(instance: isize, r: Reaper) -> bool {
     if !r.register_accelerator(views::on_key) {
         log(LOG_ERROR, "crochet clavier refuse");
     }
-    if !cp_sys::rui::install_mouse_hook(views::on_mouse) {
+    if !cp_sys::rui::install_mouse_hook(on_mouse) {
         log(LOG_ERROR, "crochet souris refuse");
     }
     if !r.register_toggle_state(toggle_state) {
