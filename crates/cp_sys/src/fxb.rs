@@ -42,7 +42,14 @@ impl Reaper {
             buf[..b.len().min(1024)].copy_from_slice(&b[..b.len().min(1024)]);
         }
         // SAFETY: piste vivante ; tampon de 1 Ko termine par zero.
-        let ok = unsafe { f(tr, k.as_ptr(), buf.as_mut_ptr() as *mut c_char, set.is_some()) };
+        let ok = unsafe {
+            f(
+                tr,
+                k.as_ptr(),
+                buf.as_mut_ptr() as *mut c_char,
+                set.is_some(),
+            )
+        };
         if !ok {
             return None;
         }
@@ -258,11 +265,15 @@ impl Reaper {
         }
     }
 
-    /// Une piste neuve pour un instrument, apres la piste `after` (aucune : a
-    /// la fin) : nommee, choisie, armee sur toutes les entrees MIDI, a
-    /// l'ecoute, comme « Insert virtual instrument on new track ». Rend son
-    /// GUID.
-    pub fn fx_new_track(&self, name: &str, after: Option<&str>) -> Option<String> {
+    /// Une piste neuve, apres la piste `after` (aucune : a la fin), nommee et
+    /// choisie. Pour un instrument, comme « Insert virtual instrument on new
+    /// track » : armee sur toutes les entrees MIDI, a l'ecoute. Rend son GUID.
+    pub fn fx_new_track(
+        &self,
+        name: &str,
+        after: Option<&str>,
+        instrument: bool,
+    ) -> Option<String> {
         type Count = unsafe extern "C" fn(P) -> i32;
         type Num = unsafe extern "C" fn(P, *const c_char) -> f64;
         type Ins = unsafe extern "C" fn(i32, bool);
@@ -295,9 +306,11 @@ impl Reaper {
         // SAFETY: piste vivante. 4096 | 63 << 5 : toutes les entrees MIDI,
         // tous les canaux.
         unsafe {
-            set(tr, c"I_RECINPUT".as_ptr(), (4096 | (63 << 5)) as f64);
-            set(tr, c"I_RECMON".as_ptr(), 1.0);
-            set(tr, c"I_RECARM".as_ptr(), 1.0);
+            if instrument {
+                set(tr, c"I_RECINPUT".as_ptr(), (4096 | (63 << 5)) as f64);
+                set(tr, c"I_RECMON".as_ptr(), 1.0);
+                set(tr, c"I_RECARM".as_ptr(), 1.0);
+            }
             if let Some(o) = self.fb::<Only>(c"SetOnlyTrackSelected") {
                 o(tr);
             }
@@ -308,7 +321,10 @@ impl Reaper {
     /// Choisit seulement cette piste (la maitre comprise).
     pub fn fx_select_track(&self, guid: &str) {
         type Only = unsafe extern "C" fn(P);
-        if let (Some(tr), Some(o)) = (self.fb_track(guid), self.fb::<Only>(c"SetOnlyTrackSelected")) {
+        if let (Some(tr), Some(o)) = (
+            self.fb_track(guid),
+            self.fb::<Only>(c"SetOnlyTrackSelected"),
+        ) {
             // SAFETY: piste vivante.
             unsafe { o(tr) };
         }

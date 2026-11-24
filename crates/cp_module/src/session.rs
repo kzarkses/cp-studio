@@ -1011,12 +1011,43 @@ impl App {
             Act::FxMenu { col, fx, x, y } => self.ses_fx_menu(col, fx, x, y),
             Act::AddFx(col) => {
                 if let Some(g) = self.ses_guid(col) {
-                    r.select_only_track(&g);
-                    r.track_fx_chain(&g);
+                    if self.fxb.st.set.steal {
+                        self.fxb_open_for(&g);
+                    } else {
+                        r.select_only_track(&g);
+                        r.track_fx_chain(&g);
+                    }
                 }
             }
         }
         self.ses.view.mark();
+    }
+
+    /// La piste de la colonne sous un point de l'ecran, si la Session est
+    /// la (un effet lache depuis le navigateur d'effets).
+    pub(crate) fn ses_track_at_screen(&self, sx: i32, sy: i32) -> Option<String> {
+        let w = self.ses.win.as_ref()?;
+        if !ui::is_shown(w.hwnd) {
+            return None;
+        }
+        let (cx, cy) = ui::screen_to_client(w.hwnd, sx, sy);
+        let rc = ui::client_rect(w.hwnd);
+        if cx < 0 || cy < 0 || cx >= rc.right - rc.left || cy >= rc.bottom - rc.top {
+            return None;
+        }
+        let col = match self
+            .ses
+            .view
+            .hit(&self.ses.ses, &w.theme, cx as f32, cy as f32)
+        {
+            Hit::Cell { col, .. }
+            | Hit::Header(col)
+            | Hit::Arm(col)
+            | Hit::StopCol(col)
+            | Hit::Strip(col, _) => col,
+            _ => return None,
+        };
+        self.ses_guid(col)
     }
 
     fn ses_guid(&self, col: usize) -> Option<String> {

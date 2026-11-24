@@ -38,6 +38,7 @@ use cp_ui::{Button, Ev, IconCache, Mods, Theme};
 mod clocksync;
 mod editor;
 mod frame;
+mod fxb;
 mod gtab;
 mod items;
 mod native;
@@ -349,6 +350,9 @@ pub(crate) enum WinOp {
     SesOpen,
     SesClose,
     SesPlace(Place),
+    FxbOpen,
+    FxbClose,
+    FxbPlace(Place),
 }
 
 /// La fenetre du navigateur.
@@ -401,6 +405,10 @@ pub(crate) struct App {
     cmd_editor: i32,
     cmd_session: i32,
     cmd_session_test: i32,
+    cmd_fxb: i32,
+    cmd_fxb_test: i32,
+    /// Le navigateur d'effets : le catalogue, sa fenetre, la chaine montree.
+    fxb: fxb::FPart,
     /// L'editeur : la fenetre, l'item ouvert.
     ed: editor::EPart,
     /// La Session : la grille, sa fenetre, ce qui joue.
@@ -733,6 +741,9 @@ impl App {
                 WinOp::SesOpen => self.ses_open(),
                 WinOp::SesClose => self.ses_close(true),
                 WinOp::SesPlace(p) => self.ses_set_place(p),
+                WinOp::FxbOpen => self.fxb_open(),
+                WinOp::FxbClose => self.fxb_close(true),
+                WinOp::FxbPlace(p) => self.fxb_set_place(p),
             }
         }
         if self.tp.view.is_some() {
@@ -1348,6 +1359,14 @@ impl App {
                 self.ses_render(true);
             }
         }
+        if let Some(h) = self.fxb.win.as_ref().map(|w| w.hwnd) {
+            let want = self.handle_wanted(h, mode);
+            if want != self.fxb.view.dock_handle {
+                self.fxb.view.dock_handle = want;
+                self.fxb.view.mark();
+                self.fxb_render(true);
+            }
+        }
     }
 
     /// La poignee d'une vue est tiree : le glisser passe a REAPER. Un
@@ -1661,6 +1680,15 @@ impl Module for App {
         } else {
             0
         };
+        let cmd_fxb = host.register_action("CPSTUDIO_FXBROWSER", "CP Studio: FX Browser - open");
+        let cmd_fxb_test = if crate::gtab::selftest() {
+            host.register_action(
+                "CPSTUDIO_FXB_SELFTEST",
+                "CP Studio: FX Browser - self-test step",
+            )
+        } else {
+            0
+        };
         let tp = tview::TPart::new(&r);
         // La clock externe retenue : le chargeur l'ecoute de nouveau.
         if tp.clock.dev >= 0 {
@@ -1688,6 +1716,9 @@ impl Module for App {
             cmd_editor,
             cmd_session,
             cmd_session_test,
+            cmd_fxb,
+            cmd_fxb_test,
+            fxb: fxb::FPart::new(&r),
             ed: editor::EPart::new(&r),
             ses: session::SPart::new(&r),
             gt: gtab::GPart::new(&r),
@@ -1755,6 +1786,9 @@ impl Module for App {
                 if app.ext("ses_open").as_deref() == Some("1") {
                     app.queue(WinOp::SesOpen);
                 }
+                if app.ext("fxb_open").as_deref() == Some("1") {
+                    app.queue(WinOp::FxbOpen);
+                }
             }
         }
         // Guitar Tab : sa fenetre reprise apres un rechargement, et sa prise.
@@ -1785,6 +1819,15 @@ impl Module for App {
             .filter(|&h| h.0 != 0 && win::is_window(h));
         if let Some(h) = sh {
             app.ses_adopt(h);
+        }
+        // Le navigateur d'effets : sa fenetre reprise.
+        let fh = app
+            .ext("fxb_hwnd")
+            .and_then(|v| v.parse::<isize>().ok())
+            .map(Hwnd)
+            .filter(|&h| h.0 != 0 && win::is_window(h));
+        if let Some(h) = fh {
+            app.fxb_adopt(h);
         }
         host.info(&format!(
             "module pret : generation {}, navigateur {} ({}), transport {}",
@@ -1825,6 +1868,7 @@ impl Module for App {
         self.gtab_shutdown();
         self.ed_shutdown();
         self.ses_shutdown();
+        self.fxb_shutdown();
         // Les fenetres restent au chargeur : le module suivant les reprend.
         // Elles ne recevront plus d'images d'ici la.
         if let Some(v) = &self.view {
@@ -1858,6 +1902,7 @@ impl Module for App {
         self.gtab_tick();
         self.ed_tick();
         self.ses_tick();
+        self.fxb_tick();
         self.transport_tick();
         if self.view.is_none() {
             return;
@@ -1884,6 +1929,18 @@ impl Module for App {
     }
 
     fn on_action(&mut self, cmd: i32) -> bool {
+        // Les actions de REAPER que le navigateur d'effets remplace.
+        if let Some(took) = self.fxb_on_action(cmd) {
+            return took;
+        }
+        if cmd == self.cmd_fxb {
+            self.fxb_toggle();
+            return true;
+        }
+        if cmd != 0 && cmd == self.cmd_fxb_test {
+            self.fxb_selftest();
+            return true;
+        }
         if cmd == self.cmd_browser {
             if self.view.is_some() {
                 self.queue(WinOp::Close);
@@ -1989,6 +2046,8 @@ impl Module for App {
             Some(self.ed.win.is_some())
         } else if cmd == self.cmd_session {
             Some(self.ses.win.is_some())
+        } else if cmd == self.cmd_fxb {
+            Some(self.fxb.win.is_some())
         } else {
             None
         }
@@ -2005,6 +2064,9 @@ impl Module for App {
             return Some(r);
         }
         if let Some(r) = self.ses_wnd(m) {
+            return Some(r);
+        }
+        if let Some(r) = self.fxb_wnd(m) {
             return Some(r);
         }
         self.browser_wnd(m)

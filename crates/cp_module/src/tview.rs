@@ -394,6 +394,15 @@ impl App {
                     .as_ref()
                     .is_some_and(|w| w.place != Place::Arrange),
             },
+            ViewTab {
+                name: "FX".into(),
+                active: self.fxb_in_band(),
+                open: self
+                    .fxb
+                    .win
+                    .as_ref()
+                    .is_some_and(|w| w.place != Place::Arrange),
+            },
         ]
     }
 
@@ -763,7 +772,8 @@ impl App {
                 1 => crate::WinOp::ViewBrowser,
                 2 => crate::WinOp::GtabOpen,
                 3 => crate::WinOp::EdOpen,
-                _ => crate::WinOp::SesOpen,
+                4 => crate::WinOp::SesOpen,
+                _ => crate::WinOp::FxbOpen,
             }),
             Act::ViewMenu { i, x, y } => {
                 if i == 1 {
@@ -782,6 +792,11 @@ impl App {
                     if let Some(h) = self.tp.view.as_ref().map(|v| v.hwnd) {
                         let (sx, sy) = ui::client_to_screen(h, x as i32, y as i32);
                         self.ses_place_menu_at(h, sx, sy);
+                    }
+                } else if i == 5 {
+                    if let Some(h) = self.tp.view.as_ref().map(|v| v.hwnd) {
+                        let (sx, sy) = ui::client_to_screen(h, x as i32, y as i32);
+                        self.fxb_place_menu_at(h, sx, sy);
                     }
                 }
             }

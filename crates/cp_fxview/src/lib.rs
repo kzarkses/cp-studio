@@ -13,6 +13,8 @@ mod draw;
 #[cfg(test)]
 mod tests;
 
+pub use draw::fx_label;
+
 use std::collections::BTreeSet;
 
 use cp_fxlist::{Catalog, Src, Store, list};

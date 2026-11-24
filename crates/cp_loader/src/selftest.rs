@@ -53,6 +53,8 @@ pub struct SelfTest {
     probe: Probe,
     ui_at: Option<Instant>,
     keys_step: u8,
+    /// La piste de l'auto-test du navigateur d'effets (effacee a la fin).
+    fxb_track: Option<String>,
     /// La mesure du silence de l'arrangement (lanes fixes) : sa piste, la
     /// crete muette.
     hush: Option<String>,
@@ -186,6 +188,9 @@ enum Phase {
     /// ReaSynth, une case audio dans une autre ; le son mesure dans chaque
     /// piste.
     Session,
+    /// Le navigateur d'effets : ajouter, deplacer, contourner, copier, le de,
+    /// la recherche ; « View: Show FX browser window » passe par lui.
+    FxBrowser,
     /// La poignee native d'un docker : REAPER prend-il un appui envoye par
     /// message (pour qu'une poignee a nous lui passe le glisser) ? Et
     /// l'API des dockers deplace-t-elle une vue d'un docker a l'autre ?
@@ -216,6 +221,7 @@ pub fn requested() -> Option<SelfTest> {
         probe: (0, None, 0.0, 1.0, Vec::new()),
         ui_at: None,
         keys_step: 0,
+        fxb_track: None,
         hush: None,
         hush_peak: 0.0,
         wheels: 0,
@@ -1335,6 +1341,7 @@ impl SelfTest {
             | Phase::Band
             | Phase::GuitarTab
             | Phase::Session
+            | Phase::FxBrowser
             | Phase::DockGrip
             | Phase::Done => {}
         }
@@ -1694,6 +1701,13 @@ impl SelfTest {
                 if self.session_tick(r) {
                     self.keys_step = 0;
                     self.ui_at = Some(Instant::now());
+                    self.phase = Phase::FxBrowser;
+                }
+            }
+            Phase::FxBrowser => {
+                if self.fxb_tick(r) {
+                    self.keys_step = 0;
+                    self.ui_at = Some(Instant::now());
                     self.phase = Phase::DockGrip;
                 }
             }
@@ -1705,6 +1719,120 @@ impl SelfTest {
             }
             Phase::Done => return true,
             _ => {}
+        }
+        false
+    }
+
+    /// Le navigateur d'effets sur une piste neuve : le module fait les gestes
+    /// (pas « run ») et rend la chaine a chaque etape ; puis l'action native
+    /// « View: Show FX browser window » doit fermer et rouvrir NOTRE
+    /// fenetre (le chargeur la passe au module).
+    fn fxb_tick(&mut self, r: &cp_sys::reaper::Reaper) -> bool {
+        let t = self.ui_at.map_or(0.0, |t| t.elapsed().as_secs_f64());
+        let act = |step: &str| {
+            r.ext_set("CP_Studio", "selftest_fxb_step", step, false);
+            r.ext_set("CP_Studio", "selftest_fxb", "", false);
+            let c = r.named_command("_CPSTUDIO_FXB_SELFTEST");
+            if c != 0 {
+                r.main_on_command(c);
+            }
+            c != 0
+        };
+        let out = || r.ext_get("CP_Studio", "selftest_fxb").unwrap_or_default();
+        let field = |st: &str, k: &str| -> String {
+            st.split_whitespace()
+                .find_map(|w| w.strip_prefix(&format!("{k}=")))
+                .unwrap_or("")
+                .to_string()
+        };
+        match self.keys_step {
+            0 => {
+                let n = r.session_tracks(false).len() as i32;
+                let Some(g) = r.insert_track(n, "CPF test") else {
+                    self.say(false, "FX Browser : piste de test non creee".into());
+                    return true;
+                };
+                r.select_only_track(&g);
+                self.fxb_track = Some(g);
+                if !act("run") {
+                    self.say(false, "FX Browser : l'action de test n'existe pas".into());
+                    return true;
+                }
+                let st = out();
+                let ok = st.starts_with("report") && !st.contains("error=");
+                self.say(ok, format!("FX Browser : {st}"));
+                if !ok {
+                    return true;
+                }
+                self.say(
+                    field(&st, "plugins").parse::<usize>().unwrap_or(0) > 10,
+                    "FX Browser : le catalogue lu de REAPER".into(),
+                );
+                self.say(
+                    field(&st, "order1") == "ReaComp|ReaEQ",
+                    "FX Browser : un ajout a la fin, un autre en tete".into(),
+                );
+                self.say(
+                    field(&st, "order2") == "ReaEQ|ReaComp",
+                    "FX Browser : un effet glisse a la fin de la chaine".into(),
+                );
+                self.say(
+                    field(&st, "bypass") == "1",
+                    "FX Browser : contourner un effet".into(),
+                );
+                self.say(
+                    field(&st, "copy") == "ReaEQ|ReaComp|ReaEQ",
+                    "FX Browser : Ctrl+glisser copie".into(),
+                );
+                self.say(
+                    field(&st, "dice") == "2" && field(&st, "replaced") == "1",
+                    "FX Browser : le de ajoute deux effets, puis en remplace la chaine par un"
+                        .into(),
+                );
+                self.say(
+                    field(&st, "search") == "1",
+                    "FX Browser : la recherche a plusieurs mots".into(),
+                );
+                self.say(
+                    field(&st, "stolen") == "1",
+                    "FX Browser : le chargeur prend les actions de REAPER (EXT 2)".into(),
+                );
+                // La fenetre est ouverte : l'action native doit la fermer.
+                r.main_on_command(40271);
+                self.keys_step = 1;
+                self.ui_at = Some(Instant::now());
+            }
+            1 => {
+                if t < 0.8 {
+                    return false;
+                }
+                act("state");
+                let st = out();
+                self.say(
+                    field(&st, "open") == "0",
+                    format!("FX Browser : « View: Show FX browser window » ferme le notre ({st})"),
+                );
+                r.main_on_command(40271);
+                self.keys_step = 2;
+                self.ui_at = Some(Instant::now());
+            }
+            2 => {
+                if t < 0.8 {
+                    return false;
+                }
+                act("state");
+                let st = out();
+                self.say(
+                    field(&st, "open") == "1",
+                    format!("FX Browser : et le rouvre ({st})"),
+                );
+                act("clean");
+                if let Some(g) = self.fxb_track.take() {
+                    r.delete_track(&g);
+                }
+                return true;
+            }
+            _ => return true,
         }
         false
     }

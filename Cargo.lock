@@ -94,6 +94,8 @@ dependencies = [
  "cp_abi",
  "cp_browser",
  "cp_editview",
+ "cp_fxlist",
+ "cp_fxview",
  "cp_gfx",
  "cp_session",
  "cp_sessionview",
