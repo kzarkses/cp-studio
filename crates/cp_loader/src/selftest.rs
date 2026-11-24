@@ -2227,8 +2227,30 @@ impl SelfTest {
                     st.contains("browser=1") && st.contains("grip=1"),
                     format!("poignee du navigateur montree dans son docker ({st})"),
                 );
-                let s = cp_sys::ui::dpi(h) as f32 / 96.0;
-                let (x, y) = ((12.0 * s) as i32, (12.0 * s) as i32);
+                // La petite poignee de REAPER : cachee sous la vue, qui
+                // s'etend sur sa place (cp_module/src/grip.rs).
+                let vr = ui::window_rect(h);
+                let hidden = ui::children(ui::parent(h)).into_iter().find(|&c| {
+                    let g = ui::window_rect(c);
+                    c != h
+                        && ui::class_name(c) == "WDLTabCtrl"
+                        && (1..=10).contains(&(g.bottom - g.top).min(g.right - g.left))
+                });
+                self.say(
+                    hidden.is_some_and(|g| {
+                        let gr = ui::window_rect(g);
+                        !ui::is_visible(g)
+                            && vr.left <= gr.left
+                            && vr.top <= gr.top
+                            && vr.right >= gr.right
+                            && vr.bottom >= gr.bottom
+                    }),
+                    "la petite poignee de REAPER cachee sous la vue".to_string(),
+                );
+                // Le lisere : le bord haut de la vue (ses 4 premiers px), au
+                // milieu de sa largeur.
+                let cr = ui::client_rect(h);
+                let (x, y) = ((cr.right - cr.left) / 2, 1);
                 cp_sys::win::post_message(h, WM_LBUTTONDOWN, MK_LBUTTON, lp(x, y));
                 cp_sys::win::post_message(h, WM_MOUSEMOVE, MK_LBUTTON, lp(x + 30, y + 20));
                 self.keys_step = 7;
