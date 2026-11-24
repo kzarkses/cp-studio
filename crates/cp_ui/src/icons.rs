@@ -82,6 +82,20 @@ pub enum Icon {
     Camera,
     /// La panique : un eclair.
     Zap,
+    /// Le de du navigateur d'effets.
+    Dices,
+    /// Les recents.
+    History,
+    /// Les plus utilises.
+    TrendingUp,
+    /// Allumer, contourner un effet.
+    Power,
+    /// Les reglages d'une vue (trois points).
+    Ellipsis,
+    /// Une chaine d'effets.
+    Link,
+    /// Un onglet, une etiquette.
+    Tag,
 }
 
 impl Icon {
@@ -216,6 +230,25 @@ impl Icon {
             }
             Icon::Isolate => {
                 r#"<path d="M8 3H5v18h3" /><path d="M16 3h3v18h-3" /><rect x="9" y="9" width="6" height="6" rx="1" />"#
+            }
+            Icon::Dices => {
+                r#"<rect width="12" height="12" x="2" y="10" rx="2" ry="2" /><path d="m17.92 14 3.5-3.5a2.24 2.24 0 0 0 0-3l-5-4.92a2.24 2.24 0 0 0-3 0L10 6" /><circle cx="6" cy="18" r="0.9" /><circle cx="10" cy="14" r="0.9" /><circle cx="15" cy="6" r="0.9" /><circle cx="18" cy="9" r="0.9" />"#
+            }
+            Icon::History => {
+                r#"<path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" /><path d="M3 3v5h5" /><path d="M12 7v5l4 2" />"#
+            }
+            Icon::TrendingUp => {
+                r#"<polyline points="22 7 13.5 15.5 8.5 10.5 2 17" /><polyline points="16 7 22 7 22 13" />"#
+            }
+            Icon::Power => r#"<path d="M12 2v10" /><path d="M18.4 6.6a9 9 0 1 1-12.77.04" />"#,
+            Icon::Ellipsis => {
+                r#"<circle cx="12" cy="12" r="1.6" /><circle cx="19" cy="12" r="1.6" /><circle cx="5" cy="12" r="1.6" />"#
+            }
+            Icon::Link => {
+                r#"<path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" /><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" />"#
+            }
+            Icon::Tag => {
+                r#"<path d="M12.586 2.586A2 2 0 0 0 11.172 2H4a2 2 0 0 0-2 2v7.172a2 2 0 0 0 .586 1.414l8.704 8.704a2.426 2.426 0 0 0 3.42 0l6.58-6.58a2.426 2.426 0 0 0 0-3.42z" /><circle cx="7.5" cy="7.5" r="1.2" />"#
             }
         }
     }
@@ -429,6 +462,13 @@ mod tests {
             Icon::CirclePlus,
             Icon::Camera,
             Icon::Zap,
+            Icon::Dices,
+            Icon::History,
+            Icon::TrendingUp,
+            Icon::Power,
+            Icon::Ellipsis,
+            Icon::Link,
+            Icon::Tag,
         ];
         for i in all {
             let (n, m) = c.mask(i, 24, false);

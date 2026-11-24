@@ -214,6 +214,25 @@ impl TextField {
         focused: bool,
         placeholder: &str,
     ) {
+        self.draw_ex(cv, t, th, x, y, w, h, focused, placeholder, 0.0);
+    }
+
+    /// Comme [`TextField::draw`], le texte s'arretant `right` px avant le
+    /// bord droit (une icone y loge).
+    #[allow(clippy::too_many_arguments)]
+    pub fn draw_ex(
+        &mut self,
+        cv: &mut Canvas<'_>,
+        t: &mut TextCache,
+        th: &Theme,
+        x: f32,
+        y: f32,
+        w: f32,
+        h: f32,
+        focused: bool,
+        placeholder: &str,
+        right: f32,
+    ) {
         let f = th.font();
         let r = th.s(4.0);
         cv.fill_round_rect(x, y, w, h, r, th.field);
@@ -221,7 +240,7 @@ impl TextField {
             cv.stroke_round_rect(x, y, w, h, r, th.s(1.0), th.accent.fade(0.7));
         }
         let pad = th.s(6.0);
-        let (ix, iw) = (x + pad, (w - 2.0 * pad).max(0.0));
+        let (ix, iw) = (x + pad, (w - 2.0 * pad - right).max(0.0));
         let m = t.metrics(f);
         let base = y + (h - (m.ascent + m.descent)) * 0.5 + m.ascent;
         // Le curseur reste visible.

@@ -1,0 +1,18 @@
+[package]
+name = "cp_fxview"
+description = "La vue du navigateur d'effets : recherche, listes, onglets, de, chaine de la piste (sans Windows)"
+edition.workspace = true
+version.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+cp_fxlist = { path = "../cp_fxlist" }
+cp_gfx = { path = "../cp_gfx" }
+cp_ui = { path = "../cp_ui" }
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+cp_sys = { path = "../cp_sys" }
