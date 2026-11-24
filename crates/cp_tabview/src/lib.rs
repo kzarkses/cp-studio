@@ -1704,6 +1704,7 @@ impl Arr {
             Some(Drag::TrackMove { moved: true, .. }) => return P::TrackDrag,
             Some(Drag::Range { .. }) => return P::TimeSelEdge,
             Some(Drag::Marquee { moved: true, .. }) => return P::Marquee,
+            Some(Drag::Handle { .. }) => return P::ItemMove,
             Some(_) => return P::Arrow,
             None => {}
         }
@@ -1732,6 +1733,7 @@ impl Arr {
                     P::FadeOut
                 }
             }
+            Hit::DockHandle => P::ItemMove,
             _ => P::Arrow,
         }
     }

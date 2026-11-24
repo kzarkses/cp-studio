@@ -635,3 +635,49 @@ fn beaucoup_de_colonnes_defilent() {
     assert_eq!(v.scroll_col, 21 - l.cols_vis);
     b.shot(&mut v, &ses, &[], 0, "04_defilement");
 }
+
+/// Le lisere de la vue ancree : le bord haut, au-dessus des outils (qui
+/// restent dessous) ; un clic ne fait rien, un glisser passe la main a
+/// REAPER, un clic droit ouvre le menu de la vue.
+#[test]
+fn le_lisere_de_la_vue_ancree() {
+    let mut e = Null { now: 0 };
+    let (ses, strips) = session(&mut e);
+    let mut v = View::new();
+    let mut b = Bench::new(620, 640);
+    let th = Theme::dark(1.0);
+    let m = Mods::default();
+    b.draw(&mut v, &ses, &strips, 0);
+    let (tx, ty) = center(&v, &ses, &th, Hit::Tool(Tool::Clock));
+    assert_ne!(v.hit(&ses, &th, 300.0, 1.0), Hit::DockHandle);
+    v.dock_handle = true;
+    b.draw(&mut v, &ses, &strips, 0);
+    assert_eq!(v.hit(&ses, &th, 300.0, 1.0), Hit::DockHandle);
+    assert!(v.on_grip(1.0) && !v.on_grip(ty));
+    assert_eq!(center(&v, &ses, &th, Hit::Tool(Tool::Clock)).0, tx);
+    assert!(
+        v.label(&ses, Hit::DockHandle)
+            .unwrap()
+            .contains("another docker")
+    );
+    let (x, y) = (300.0, 1.0);
+    // Un clic : rien.
+    assert_eq!(
+        v.event(&ses, &strips, &th, &down(x, y, Button::Left, m)),
+        None
+    );
+    let mv =
+        |v: &mut View, x: f32, y: f32| v.event(&ses, &strips, &th, &Ev::Move { x, y, mods: m });
+    assert_eq!(mv(&mut v, x + 2.0, y), None);
+    assert_eq!(v.event(&ses, &strips, &th, &up(x + 2.0, y)), None);
+    // Un glisser : une fois.
+    v.event(&ses, &strips, &th, &down(x, y, Button::Left, m));
+    assert_eq!(mv(&mut v, x + 12.0, y + 6.0), Some(Act::DockGrab));
+    assert_eq!(mv(&mut v, x + 40.0, y + 30.0), None);
+    assert!(!v.dragging());
+    // Le clic droit : le menu de la vue.
+    assert_eq!(
+        v.event(&ses, &strips, &th, &down(x, y, Button::Right, m)),
+        Some(Act::ViewMenu { x, y })
+    );
+}

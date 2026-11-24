@@ -72,6 +72,8 @@ pub enum Hit {
     Strip(usize, Part),
     /// La barre de defilement des colonnes.
     HScroll,
+    /// Le lisere de la vue ancree (la deplacer d'un docker a l'autre).
+    DockHandle,
 }
 
 /// Une tranche de mixage, lue de REAPER par le module.
@@ -232,6 +234,13 @@ pub enum Act {
         y: f32,
     },
     AddFx(usize),
+    /// Le lisere de la vue est tire : passer le glisser a REAPER.
+    DockGrab,
+    /// Le menu de la vue (ou elle vit), sous la souris.
+    ViewMenu {
+        x: f32,
+        y: f32,
+    },
 }
 
 /// Les mesures de la maquette (a 96 DPI).
@@ -286,6 +295,12 @@ enum Drag {
         x0: f32,
         s0: usize,
     },
+    /// Le lisere, appuye : au-dela de quelques pixels, le glisser passe a
+    /// REAPER.
+    Handle {
+        x0: f32,
+        y0: f32,
+    },
 }
 
 /// L'etat de la vue (ce que le modele ne garde pas).
@@ -310,6 +325,8 @@ pub struct View {
     dirty: bool,
     /// Le nombre d'effets de chaque colonne (la geometrie des tranches).
     fx_counts: Vec<usize>,
+    /// Le lisere de la vue ancree, montre (le module en decide).
+    pub dock_handle: bool,
 }
 
 impl Default for View {
@@ -357,6 +374,7 @@ impl View {
             ctrl: false,
             dirty: true,
             fx_counts: Vec::new(),
+            dock_handle: false,
         }
     }
 
@@ -370,6 +388,16 @@ impl View {
 
     pub fn dragging(&self) -> bool {
         self.drag.is_some()
+    }
+
+    /// Le point est-il sur le lisere de la vue ancree ? (le curseur)
+    pub fn on_grip(&self, y: f32) -> bool {
+        self.dock_handle && cp_ui::handle::over_grip(y, self.scale)
+    }
+
+    /// Le lisere est saisi.
+    pub(crate) fn grabbing_handle(&self) -> bool {
+        matches!(self.drag, Some(Drag::Handle { .. }))
     }
 
     /// Un glisser de case en cours : (colonne, scene, copie).
@@ -473,6 +501,10 @@ impl View {
     pub fn hit(&self, ses: &Session, th: &Theme, x: f32, y: f32) -> Hit {
         let (w, h) = self.size;
         let l = self.layout(th, w, h);
+        // Le lisere passe avant les outils (il est au-dessus d'eux).
+        if self.dock_handle && cp_ui::handle::over_grip(y, th.scale) {
+            return Hit::DockHandle;
+        }
         if y < l.header_y {
             let by = (2.0 * l.s).round();
             for (t, tx, tw) in self.tools(&l) {
@@ -606,6 +638,7 @@ impl View {
     pub fn label(&self, ses: &Session, h: Hit) -> Option<String> {
         Some(match h {
             Hit::None | Hit::HScroll => return None,
+            Hit::DockHandle => cp_ui::handle::HANDLE_TIP.into(),
             Hit::Tool(t) => match t {
                 Tool::Clock => {
                     "Clock: Free (the Session's own) / Follow (REAPER's transport)".into()
@@ -798,6 +831,7 @@ impl View {
                 }),
                 Hit::Tool(Tool::Quant) => Some(Act::QuantMenu { x, y }),
                 Hit::Tool(Tool::Rec) => Some(Act::RecMenu { x, y }),
+                Hit::DockHandle => Some(Act::ViewMenu { x, y }),
                 _ => None,
             };
         }
@@ -805,6 +839,10 @@ impl View {
             return None;
         }
         match hit {
+            Hit::DockHandle => {
+                self.drag = Some(Drag::Handle { x0: x, y0: y });
+                None
+            }
             Hit::Tool(t) => Some(match t {
                 Tool::Clock => Act::ToggleClock,
                 Tool::Quant => Act::QuantMenu { x, y: l.header_y },
@@ -1007,6 +1045,15 @@ impl View {
                     done: false,
                 })
             }
+            Drag::Handle { x0, y0 } => {
+                let far = cp_ui::handle::HANDLE_DRAG_PX * l.s;
+                if (x - *x0).abs() > far || (y - *y0).abs() > far {
+                    self.drag = None;
+                    self.dirty = true;
+                    return Some(Act::DockGrab);
+                }
+                None
+            }
             Drag::HScroll { x0, s0 } => {
                 let per = l.col_w + l.gap;
                 let n = ((x - *x0) / per).round() as i32;
@@ -1081,7 +1128,7 @@ impl View {
                 pan: v0,
                 done: true,
             }),
-            Drag::Seam { .. } | Drag::HScroll { .. } => None,
+            Drag::Seam { .. } | Drag::HScroll { .. } | Drag::Handle { .. } => None,
         }
     }
 

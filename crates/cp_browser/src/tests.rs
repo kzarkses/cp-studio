@@ -961,24 +961,43 @@ fn un_depot_relit_un_dossier_deja_lu_et_ignore_la_casse() {
     let _ = std::fs::remove_file(&txt);
 }
 
-/// La poignee de la vue ancree : a gauche de la barre (la recherche se
-/// pousse), une infobulle ; un clic ne fait rien, un glisser passe la main
-/// a REAPER.
+/// Le lisere de la vue ancree : le bord haut, sans place prise (la
+/// recherche ne bouge pas), allume au survol, une infobulle ; un clic ne
+/// fait rien, un glisser passe la main a REAPER. Sous le lisere, la barre
+/// reste a ses boutons.
 #[test]
-fn la_poignee_de_la_vue_ancree() {
+fn le_lisere_de_la_vue_ancree() {
     let root = library();
     let mut h = Fake::new();
     let mut b = Browser::new(places(&root), Path::new("."), Vec::new());
     b.layout(460.0, 520.0, 1.0);
     let x0 = b.lay.search_x;
-    assert_eq!(b.lay.handle_w, 0.0);
+    let y = 1.0;
+    assert!(
+        b.tip_at(200.0, y)
+            .is_none_or(|t| !t.0.contains("another docker"))
+    );
     b.dock_handle = true;
     b.layout(460.0, 520.0, 1.0);
-    let hw = b.lay.handle_w;
-    assert!(hw > 40.0 && (b.lay.search_x - x0 - hw).abs() < 0.5);
-    let y = b.lay.bar_h * 0.5;
-    assert!(b.tip_at(10.0, y).unwrap().0.contains("another docker"));
+    assert_eq!(b.lay.search_x, x0);
+    assert!(b.tip_at(200.0, y).unwrap().0.contains("another docker"));
+    let mid = b.lay.bar_h * 0.5;
+    assert!(
+        b.tip_at(10.0, mid)
+            .is_none_or(|t| !t.0.contains("another docker"))
+    );
     let mods = Mods::default();
+    b.event(&mut h, &Ev::Move { x: 200.0, y, mods });
+    assert!(b.grip_hover);
+    b.event(
+        &mut h,
+        &Ev::Move {
+            x: 200.0,
+            y: mid,
+            mods,
+        },
+    );
+    assert!(!b.grip_hover);
     let ev = |b: &mut Browser, h: &mut Fake, e: Ev| {
         b.event(h, &e);
     };

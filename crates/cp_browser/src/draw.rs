@@ -70,6 +70,11 @@ impl Browser {
         let l = self.lay;
         cv.clear(th.bg);
         self.draw_bar(cv, g);
+        // Le lisere de la vue ancree, par-dessus le haut de la barre.
+        if self.dock_handle {
+            let hot = self.grip_hover || matches!(self.grab, crate::Grab::Handle { .. });
+            cp_ui::handle::draw_grip(cv, th, l.w, hot);
+        }
         cv.fill_rect(0.0, l.bar_h, l.w, 1.0, th.seam);
         self.thumbs_pending.set(false);
         self.draw_list(cv, g, h);
@@ -102,23 +107,6 @@ impl Browser {
         let th = g.th;
         let l = self.lay;
         cv.fill_rect(0.0, 0.0, l.w, l.bar_h, th.bar);
-        // La poignee de la vue ancree, a gauche de tout.
-        if l.handle_w > 0.0 {
-            let hot = matches!(self.grab, crate::Grab::Handle { .. });
-            cp_ui::handle::draw_handle(
-                cv,
-                g.text,
-                g.icons,
-                th,
-                0.0,
-                0.0,
-                l.handle_w,
-                l.bar_h,
-                Icon::FolderSearch,
-                "Browser",
-                hot,
-            );
-        }
         let fh = th.s(24.0);
         let fy = ((l.bar_h - fh) * 0.5).round();
         // Le champ de recherche, sa loupe a gauche.

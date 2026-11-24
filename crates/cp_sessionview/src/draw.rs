@@ -46,6 +46,11 @@ impl View {
         self.clamp_scroll(ses, &l);
         cv.fill_rect(0.0, 0.0, w, h, th.bg);
         self.draw_toolbar(cv, text, icons, th, ses, &l, t);
+        // Le lisere de la vue ancree, par-dessus le haut de la barre.
+        if self.dock_handle {
+            let hot = self.hover == Hit::DockHandle || self.grabbing_handle();
+            cp_ui::handle::draw_grip(cv, th, w, hot);
+        }
         self.draw_headers(cv, text, th, ses, &l);
         self.draw_grid(cv, text, icons, th, ses, &l, now, t);
         self.draw_stops(cv, icons, th, ses, &l);

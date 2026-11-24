@@ -944,6 +944,17 @@ impl App {
                 self.ses.ses.sel = (col, scene);
             }
             Act::Hint(m) => self.ses_say(m),
+            Act::DockGrab => {
+                if let Some(h) = self.ses.win.as_ref().map(|w| w.hwnd) {
+                    self.dock_grab(h);
+                }
+            }
+            Act::ViewMenu { x, y } => {
+                if let Some(h) = self.ses.win.as_ref().map(|w| w.hwnd) {
+                    let (sx, sy) = ui::client_to_screen(h, x as i32, y as i32);
+                    self.ses_place_menu_at(h, sx, sy);
+                }
+            }
             Act::SetVol { col, vol, done } => {
                 if let Some(g) = self.ses_guid(col) {
                     r.set_track_value(&g, "D_VOL", vol);
@@ -2180,6 +2191,17 @@ impl App {
             }
             msg::ERASEBKGND => Some(1),
             msg::GETDLGCODE => Some(0x0004 | 0x0080 | 0x0001),
+            // Le lisere de la vue ancree : le curseur de REAPER pour
+            // deplacer ; ailleurs, celui de la fenetre.
+            msg::SETCURSOR if (m.lp & 0xFFFF) == 1 => {
+                let (_, cy) = Self::mouse_over(hwnd)?;
+                if self.ses.view.on_grip(cy) {
+                    ui::set_pointer(cp_ui::Pointer::ItemMove);
+                    Some(1)
+                } else {
+                    None
+                }
+            }
             msg::MOUSEMOVE => {
                 if let Some(w) = &mut self.ses.win {
                     if !w.tracking {

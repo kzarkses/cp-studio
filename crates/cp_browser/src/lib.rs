@@ -206,8 +206,6 @@ pub struct Layout {
     pub status_y: f32,
     pub status_h: f32,
     pub scroll_w: f32,
-    /// La poignee de la vue ancree (0 : cachee).
-    pub handle_w: f32,
     pub search_x: f32,
     pub search_w: f32,
     pub btn: f32,
@@ -262,8 +260,10 @@ const CACHE_MAX: usize = 12;
 const CACHE_BYTES: i64 = 1_500_000_000;
 
 pub struct Browser {
-    /// La poignee de la vue ancree, montree (le module en decide).
+    /// Le lisere de la vue ancree, montre (le module en decide).
     pub dock_handle: bool,
+    /// La souris est sur le lisere.
+    pub grip_hover: bool,
     pub tree: Tree,
     pub rows: Vec<Row>,
     pub hits: Vec<Hit>,
@@ -347,6 +347,7 @@ impl Browser {
             hits: Vec::new(),
             search: TextField::default(),
             dock_handle: false,
+            grip_hover: false,
             focus: Focus::List,
             scroll: Scroll::default(),
             sel: None,
@@ -720,12 +721,7 @@ impl Browser {
         let loop_x = play_x - s(2.0) - tw;
         let sync_x = loop_x - s(6.0) - btn;
         let view_x = sync_x - s(4.0) - btn;
-        let handle_w = if self.dock_handle {
-            cp_ui::handle::handle_width("Browser", scale)
-        } else {
-            0.0
-        };
-        let search_x = pad + handle_w;
+        let search_x = pad;
         let search_w = (view_x - s(8.0) - search_x).max(s(40.0));
         let list_y = bar_h + 1.0;
         let wave_y = h - status_h - wave_h;
@@ -741,7 +737,6 @@ impl Browser {
             status_y: h - status_h,
             status_h,
             scroll_w: s(10.0),
-            handle_w,
             search_x,
             search_w,
             btn,
@@ -1479,6 +1474,11 @@ impl Browser {
             && y < self.lay.list_y + self.lay.list_h
     }
 
+    /// Le point est-il sur le lisere de la vue ancree ?
+    pub fn on_grip(&self, y: f32) -> bool {
+        self.dock_handle && cp_ui::handle::over_grip(y, self.scale)
+    }
+
     fn in_search(&self, x: f32, y: f32) -> bool {
         y < self.lay.bar_h && x >= self.lay.search_x && x < self.lay.search_x + self.lay.search_w
     }
@@ -1492,8 +1492,9 @@ impl Browser {
         }
         let b = |bx: f32, w: f32| (bx, 0.0, w, l.bar_h);
         let on = |v: bool| if v { "on" } else { "off" };
-        if x < l.handle_w {
-            return Some((cp_ui::handle::HANDLE_TIP.into(), b(0.0, l.handle_w)));
+        if self.on_grip(y) {
+            let gh = cp_ui::handle::grip_h(self.scale);
+            return Some((cp_ui::handle::HANDLE_TIP.into(), (0.0, 0.0, l.w, gh)));
         }
         if self.btn_hit(x, y, l.view_x) {
             return Some((
@@ -1593,6 +1594,11 @@ impl Browser {
                 self.dirty = true;
             }
             Ev::Move { x, y, .. } => {
+                let on = self.on_grip(y) && self.grab == Grab::None;
+                if on != self.grip_hover {
+                    self.grip_hover = on;
+                    self.dirty = true;
+                }
                 if let Grab::Handle { x0, y0 } = self.grab {
                     let far = cp_ui::handle::HANDLE_DRAG_PX * self.scale;
                     if (x - x0).abs() > far || (y - y0).abs() > far {
@@ -1645,8 +1651,9 @@ impl Browser {
                 self.dirty = true;
             }
             Ev::Leave => {
-                if self.hover.is_some() {
+                if self.hover.is_some() || self.grip_hover {
                     self.hover = None;
+                    self.grip_hover = false;
                     self.dirty = true;
                 }
             }
@@ -1658,6 +1665,10 @@ impl Browser {
 
     fn down(&mut self, h: &mut dyn Host, x: f32, y: f32, b: Button, dbl: bool, mods: Mods) {
         self.dirty = true;
+        if b == Button::Left && self.on_grip(y) {
+            self.grab = Grab::Handle { x0: x, y0: y };
+            return;
+        }
         if self.in_search(x, y) && b == Button::Left {
             self.focus = Focus::Search;
             return;
@@ -1669,10 +1680,6 @@ impl Browser {
                 return;
             }
             if b != Button::Left {
-                return;
-            }
-            if x < self.lay.handle_w {
-                self.grab = Grab::Handle { x0: x, y0: y };
                 return;
             }
             if self.btn_hit(x, y, self.lay.view_x) {

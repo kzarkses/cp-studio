@@ -638,6 +638,20 @@ impl Arr {
         let l = self.lay;
         cv.fill_rect(0.0, 0.0, w, h, th.bg);
         self.draw_bar(cv, text, icons, th, &mut bx);
+        // Le lisere de la vue ancree : par-dessus le haut de la barre, et
+        // pousse apres ses boutons (il l'emporte sur eux dans sa bande).
+        if self.dock_handle {
+            let hot = self.hover == Hit::DockHandle
+                || matches!(self.drag, Some(crate::Drag::Handle { .. }));
+            cp_ui::handle::draw_grip(cv, th, w, hot);
+            bx.push((
+                0.0,
+                0.0,
+                w,
+                cp_ui::handle::grip_h(th.scale),
+                Hit::DockHandle,
+            ));
+        }
         cv.fill_rect(0.0, l.bar_h, w, 1.0, th.seam);
         // L'apercu de la palette : ce que l'operation survolee donnerait.
         self.swap_preview();
@@ -737,34 +751,6 @@ impl Arr {
         let s = |v: f32| th.s(v);
         cv.fill_rect(0.0, 0.0, l.w, l.bar_h, th.bar);
         let mut x = s(10.0);
-        // La poignee de la vue ancree, a gauche de tout.
-        if self.dock_handle {
-            let hw = cp_ui::handle::handle_width("Guitar Tab", th.scale);
-            let hot = self.hover == Hit::DockHandle;
-            cp_ui::handle::draw_handle(
-                cv,
-                text,
-                icons,
-                th,
-                0.0,
-                0.0,
-                hw,
-                l.bar_h,
-                Icon::Guitar,
-                "Guitar Tab",
-                hot,
-            );
-            push(
-                bx,
-                (0.0, 0.0, l.w, l.bar_h),
-                0.0,
-                0.0,
-                hw,
-                l.bar_h,
-                Hit::DockHandle,
-            );
-            x += hw;
-        }
         let isz = s(18.0) as u16;
         icons.draw(
             cv,

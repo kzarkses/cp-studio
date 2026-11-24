@@ -2553,16 +2553,35 @@ fn jeu_libre_le_pdf_va_a_la_ligne_dans_un_silence() {
     assert_eq!(pages, 1);
 }
 
-/// La poignee de la vue ancree : a gauche de la barre ; un glisser passe la
-/// main a REAPER, un clic droit ouvre le menu de la vue.
+/// Le lisere de la vue ancree : le bord haut sur toute la largeur, sans
+/// place prise ; un glisser passe la main a REAPER, un clic droit ouvre le
+/// menu de la vue.
 #[test]
-fn la_poignee_de_la_vue_ancree() {
+fn le_lisere_de_la_vue_ancree() {
     let mut b = Bench::new(1600, 900);
     let mut v = arranger();
+    b.draw(&mut v);
+    let before: Vec<_> = v.boxes.iter().map(|b| (b.0, b.1, b.2, b.3)).collect();
     v.dock_handle = true;
     b.draw(&mut v);
-    let (x, y) = find(&v, |h| *h == Hit::DockHandle).expect("la poignee");
-    assert!(x < 60.0);
+    let r = v
+        .boxes
+        .iter()
+        .find(|b| b.4 == Hit::DockHandle)
+        .expect("le lisere");
+    assert_eq!((r.0, r.1, r.2), (0.0, 0.0, 1600.0));
+    assert!(r.3 >= 3.0 && r.3 <= 6.0);
+    // Rien d'autre n'a bouge.
+    let after: Vec<_> = v
+        .boxes
+        .iter()
+        .filter(|b| b.4 != Hit::DockHandle)
+        .map(|b| (b.0, b.1, b.2, b.3))
+        .collect();
+    assert_eq!(before, after);
+    let (x, y) = (800.0, 1.0);
+    assert_eq!(v.hit(x, y), Hit::DockHandle);
+    assert_eq!(v.pointer(x, y, Mods::default()), cp_ui::Pointer::ItemMove);
     let mods = Mods::default();
     let down = |v: &mut Arr, x: f32, y: f32, b: Button| {
         v.event(&Ev::Down {

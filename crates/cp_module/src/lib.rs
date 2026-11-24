@@ -1085,6 +1085,11 @@ impl App {
         let (x, y) = ui::screen_to_client(hwnd, sx, sy);
         let l = &self.browser.lay;
         let (x, y) = (x as f32, y as f32);
+        // Le lisere de la vue ancree : le curseur de REAPER pour deplacer.
+        if self.browser.on_grip(y) {
+            ui::set_pointer(cp_ui::Pointer::ItemMove);
+            return;
+        }
         let c = if y < l.bar_h && x >= l.search_x && x < l.search_x + l.search_w {
             Cursor::IBeam
         } else if self.browser.over_split(y) {
@@ -1251,12 +1256,16 @@ pub(crate) fn dock_grip(view: Hwnd) -> Option<Hwnd> {
     if b.0 == 0 {
         return None;
     }
+    // Mince dans un sens : en bas dans un docker de cote (444 x 6), a
+    // GAUCHE dans le docker du bas (6 x toute la hauteur : l'Editor, journal
+    // du 2026-11-24, « marges gauche 6 »). La bande d'onglets pleine, elle,
+    // fait 15 px et plus.
     ui::children(b).into_iter().find(|&c| {
         let r = ui::window_rect(c);
         c != view
             && ui::class_name(c) == "WDLTabCtrl"
             && ui::is_visible(c)
-            && r.bottom - r.top <= 10
+            && (1..=10).contains(&(r.bottom - r.top).min(r.right - r.left))
     })
 }
 
@@ -1329,6 +1338,14 @@ impl App {
                 self.gt.arr.dock_handle = want;
                 self.gt.arr.mark();
                 self.gtab_render(true);
+            }
+        }
+        if let Some(h) = self.ses.win.as_ref().map(|w| w.hwnd) {
+            let want = self.handle_wanted(h, mode);
+            if want != self.ses.view.dock_handle {
+                self.ses.view.dock_handle = want;
+                self.ses.view.mark();
+                self.ses_render(true);
             }
         }
     }
