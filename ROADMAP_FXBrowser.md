@@ -88,8 +88,10 @@ défaut)
 - ✅ La boîte « Add FX to Track N » de REAPER (demande de Cedric, le même
   soir) : le bouton « Add » d'une fenêtre de chaîne, un emplacement libre de
   la liste d'effets d'une piste, le clic droit « Add FX »… Tous ouvrent
-  cette boîte. Le crochet d'activation du chargeur la reconnaît à son titre,
-  la ferme comme « Cancel » et ouvre la nôtre pour la même piste. Une chaîne
+  cette boîte. Un crochet WinEvent du chargeur la reconnaît à son titre
+  quand elle se montre, la ferme comme « Cancel » et ouvre la nôtre pour la
+  même piste. Vérifié dans le vrai REAPER : l'auto-test clique le vrai
+  bouton « Add ». Une chaîne
   d'entrée, de monitoring ou de prise reste à REAPER.
 - ✅ Le module rend tout à REAPER en se déchargeant.
 
@@ -127,6 +129,9 @@ FxBrowser) :
 - `Main_OnCommand` lancé par un plugin ne passe pas par les crochets
   d'actions (`hookcommand2`). Un raccourci, un menu ou
   `KBD_OnMainActionEx`, si.
+- La boîte « Add FX to » s'appelle `Add FX to Track 7 "Nom"`. Le crochet
+  d'activation (CBT, `HCBT_ACTIVATE`) ne la voit pas ; un crochet WinEvent
+  (`EVENT_OBJECT_SHOW`, `EVENT_OBJECT_NAMECHANGE`), si.
 - L'ident d'`EnumInstalledFX` est le chemin complet d'un VST (2 et 3) et
   l'identifiant d'un CLAP.
 - Les dossiers de REAPER (`reaper-fxfolders.ini`) :
