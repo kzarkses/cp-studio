@@ -265,6 +265,9 @@ pub struct Catalog {
     pub kinds: Vec<(Kind, Vec<usize>)>,
     /// Le dossier « Favorites » de REAPER.
     pub reaper_favs: Vec<usize>,
+    /// Les elements des dossiers que le catalogue n'a pas trouves :
+    /// « dossier : element » (le journal).
+    pub missing: Vec<String>,
     by_name: HashMap<String, usize>,
     by_label: HashMap<String, usize>,
 }
@@ -275,8 +278,14 @@ impl Catalog {
     pub fn build(installed: &[(String, String)], ini: &IniTexts, chains: &[String]) -> Catalog {
         // Les noms des fichiers, par nom sans prefixe.
         let mut vst_by_name: HashMap<String, (String, bool)> = HashMap::new();
+        // Le nom d'un fichier (un dossier peut nommer un VST2 que REAPER cache
+        // derriere son VST3 : le meme nom le retrouve).
+        let mut name_of_file: HashMap<String, String> = HashMap::new();
         for t in &ini.vst {
             for l in ini::parse_vst_ini(t) {
+                name_of_file
+                    .entry(l.file.clone())
+                    .or_insert_with(|| l.name.to_lowercase());
                 // Le meme nom en VST2 et en VST3 : deux fichiers.
                 let v = if l.file.ends_with(".vst3") { '3' } else { '2' };
                 vst_by_name
@@ -287,13 +296,18 @@ impl Catalog {
         let mut clap_by_name: HashMap<String, (String, bool)> = HashMap::new();
         for t in &ini.clap {
             for l in ini::parse_clap_ini(t) {
+                name_of_file
+                    .entry(l.file.clone())
+                    .or_insert_with(|| l.name.to_lowercase());
                 clap_by_name
                     .entry(l.name.to_lowercase())
                     .or_insert((l.file, l.instrument));
             }
         }
         let mut js_by_name: HashMap<String, String> = HashMap::new();
+        let mut js_name_of: HashMap<String, String> = HashMap::new();
         for (p, n) in ini::parse_jsfx_ini(&ini.jsfx) {
+            js_name_of.entry(p.clone()).or_insert_with(|| n.clone());
             js_by_name.entry(n.to_lowercase()).or_insert(p);
         }
         let mut tags = Tags::default();
@@ -405,10 +419,12 @@ impl Catalog {
             ..Catalog::default()
         };
         cat.reindex();
+        let mut missing = Vec::new();
         cat.folders = ini::parse_folders(&ini.folders)
             .iter()
-            .map(|f| cat.resolve(f))
+            .map(|f| cat.resolve(f, &name_of_file, &js_name_of, &mut missing))
             .collect();
+        cat.missing = missing;
         cat.reaper_favs = cat
             .folders
             .iter()
@@ -454,7 +470,18 @@ impl Catalog {
     }
 
     /// Les effets d'un dossier de REAPER.
-    fn resolve(&self, f: &Folder) -> FolderIdx {
+    fn resolve(
+        &self,
+        f: &Folder,
+        name_of_file: &HashMap<String, String>,
+        js_name_of: &HashMap<String, String>,
+        missing: &mut Vec<String>,
+    ) -> FolderIdx {
+        let by_rest = |n: &str| {
+            self.plugins
+                .iter()
+                .position(|q| q.kind != Kind::Chain && split_name(&q.name).2.to_lowercase() == n)
+        };
         let mut items = Vec::new();
         for it in &f.items {
             let found = match it.kind {
@@ -469,6 +496,7 @@ impl Catalog {
                                 .iter()
                                 .position(|q| q.kind == Kind::Js && js_base(&q.file) == b)
                         })
+                        .or_else(|| js_name_of.get(&p).and_then(|n| self.find(n)))
                 }
                 1000 => {
                     let v = it.value.trim();
@@ -493,12 +521,16 @@ impl Catalog {
                                 .iter()
                                 .position(|q| q.kind == Kind::Js && q.file == p)
                         })
+                        .or_else(|| name_of_file.get(&k).and_then(|n| by_rest(n)))
                 }
             };
-            if let Some(i) = found {
-                if !items.contains(&i) {
-                    items.push(i);
+            match found {
+                Some(i) => {
+                    if !items.contains(&i) {
+                        items.push(i);
+                    }
                 }
+                None => missing.push(format!("{} : {}", f.name, it.value)),
             }
         }
         FolderIdx {

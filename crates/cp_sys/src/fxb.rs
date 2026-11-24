@@ -233,10 +233,11 @@ impl Reaper {
         type Copy = unsafe extern "C" fn(P, i32, P, i32, bool);
         let tr = self.fb_track(guid)?;
         let f: Copy = self.fb(c"TrackFX_CopyToTrack")?;
-        let dest = if !copy && to > from { to - 1 } else { to };
+        // REAPER compte la place d'arrivee AVANT de retirer l'effet (mesure du
+        // 2026-11-24 : 0 vers 1 dans une chaine de deux ne bougeait rien).
         // SAFETY: piste vivante ; indices dans la chaine.
-        unsafe { f(tr, from as i32, tr, dest as i32, !copy) };
-        Some(dest)
+        unsafe { f(tr, from as i32, tr, to as i32, !copy) };
+        Some(if !copy && to > from { to - 1 } else { to })
     }
 
     pub fn fx_set_enabled(&self, guid: &str, fx: usize, on: bool) {
@@ -353,5 +354,19 @@ impl Reaper {
     pub fn below_last_track(&self, x: i32, y: i32) -> bool {
         let (tr, info) = self.thing_at(x, y);
         tr.is_none() && (info == "arrange" || info.starts_with("tcp"))
+    }
+}
+
+impl Reaper {
+    /// Lance une action de la section principale comme un raccourci clavier
+    /// (`KBD_OnMainActionEx`) : les crochets d'actions la voient, ce que
+    /// `Main_OnCommand` ne garantit pas pour une action native.
+    pub fn kbd_main_action(&self, cmd: i32) {
+        type F = unsafe extern "C" fn(i32, i32, i32, i32, P, P) -> i32;
+        if let Some(f) = self.fb::<F>(c"KBD_OnMainActionEx") {
+            let main = self.main_hwnd().0 as P;
+            // SAFETY: fil principal ; fenetre principale ; projet courant.
+            unsafe { f(cmd, 0, 0, 0, main, null_mut()) };
+        }
     }
 }

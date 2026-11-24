@@ -179,6 +179,10 @@ fn le_catalogue_reunit_liste_dossiers_et_etiquettes() {
     );
     // Le dossier « Favorites » : quatre trouves, le cinquieme n'existe plus.
     assert_eq!(c.folders.len(), 2);
+    assert_eq!(
+        c.missing,
+        vec!["Favorites : C:\\nowhere\\Gone.vst3".to_string()]
+    );
     let fav: Vec<&str> = c
         .reaper_favs
         .iter()

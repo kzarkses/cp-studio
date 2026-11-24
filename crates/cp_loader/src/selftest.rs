@@ -1798,7 +1798,7 @@ impl SelfTest {
                     "FX Browser : le chargeur prend les actions de REAPER (EXT 2)".into(),
                 );
                 // La fenetre est ouverte : l'action native doit la fermer.
-                r.main_on_command(40271);
+                r.kbd_main_action(40271);
                 self.keys_step = 1;
                 self.ui_at = Some(Instant::now());
             }
@@ -1809,10 +1809,16 @@ impl SelfTest {
                 act("state");
                 let st = out();
                 self.say(
-                    field(&st, "open") == "0",
-                    format!("FX Browser : « View: Show FX browser window » ferme le notre ({st})"),
+                    field(&st, "taken") == "1",
+                    format!(
+                        "FX Browser : « View: Show FX browser window » passe par CP Studio ({st})"
+                    ),
                 );
-                r.main_on_command(40271);
+                self.say(
+                    field(&st, "open") == "0",
+                    "FX Browser : et ferme le notre".into(),
+                );
+                r.kbd_main_action(40271);
                 self.keys_step = 2;
                 self.ui_at = Some(Instant::now());
             }
@@ -1823,10 +1829,17 @@ impl SelfTest {
                 act("state");
                 let st = out();
                 self.say(
-                    field(&st, "open") == "1",
-                    format!("FX Browser : et le rouvre ({st})"),
+                    field(&st, "open") == "1"
+                        && field(&st, "shown") == "1"
+                        && field(&st, "taken") == "2",
+                    format!("FX Browser : une seconde fois, le rouvre ({st})"),
                 );
                 act("clean");
+                // La fenetre de REAPER ne reste jamais ouverte apres le test
+                // (sa config est celle de Cedric).
+                if r.toggle_state(40271) == 1 {
+                    r.main_on_command(40271);
+                }
                 if let Some(g) = self.fxb_track.take() {
                     r.delete_track(&g);
                 }

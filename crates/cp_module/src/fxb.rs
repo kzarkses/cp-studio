@@ -70,6 +70,8 @@ pub(crate) struct FPart {
     ticks: u32,
     /// Ce que le chargeur a pris pour nous (aucun : pas encore applique).
     stolen: Option<bool>,
+    /// Les actions de REAPER prises depuis le chargement (l'auto-test).
+    taken: u32,
 }
 
 impl FPart {
@@ -99,6 +101,7 @@ impl FPart {
             flash: None,
             ticks: 0,
             stolen: None,
+            taken: 0,
         }
     }
 }
@@ -207,6 +210,14 @@ impl App {
             c.reaper_favs.len(),
             t0.elapsed().as_secs_f64() * 1000.0
         ));
+        if !c.missing.is_empty() {
+            let first: Vec<&str> = c.missing.iter().take(12).map(String::as_str).collect();
+            self.host.info(&format!(
+                "navigateur d'effets : {} elements de dossiers introuvables, dont : {}",
+                c.missing.len(),
+                first.join(" ; ")
+            ));
+        }
     }
 
     fn fxb_reload(&mut self) {
@@ -909,6 +920,7 @@ impl App {
                 if !self.fxb.st.set.steal {
                     return Some(false);
                 }
+                self.fxb.taken += 1;
                 self.fxb_toggle();
                 Some(true)
             }
@@ -1512,8 +1524,10 @@ impl App {
     /// Pour l'auto-test et le journal : ce que montre le navigateur.
     pub(crate) fn fxb_state_line(&self) -> String {
         format!(
-            "open={} src={} rows={} sel={} track={} fx={} steal={:?}",
+            "open={} shown={} taken={} src={} rows={} sel={} track={} fx={} steal={:?}",
             self.fxb.win.is_some() as u8,
+            self.fxb.win.as_ref().is_some_and(|w| ui::is_shown(w.hwnd)) as u8,
+            self.fxb.taken,
             self.fxb.view.src.key(),
             self.fxb.view.rows.len(),
             self.fxb.view.selection().len(),
@@ -1545,6 +1559,10 @@ impl App {
     }
 
     fn fxb_selftest_run(&mut self) -> String {
+        // Flottante : dans un docker, elle pourrait etre l'onglet cache
+        // derriere le navigateur, et l'action la montrerait au lieu de la
+        // fermer.
+        self.fxb.place = Place::Float;
         self.fxb_open();
         self.fxb.st.set.auto_open = false;
         self.fxb_sync_chain();
