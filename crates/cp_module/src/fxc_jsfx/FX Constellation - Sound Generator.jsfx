@@ -1,0 +1,2643 @@
+desc: FX Constellation - Sound Generator
+options:gmem=CP_FXC_FAST maxmem=16777216
+slider1:mode=1<0,1,1{Continuous,Triggered}>Mode
+slider2:osc1_wave=0<0,5,1{Sine,Triangle,Square,Saw,Noise,Click}>Osc1 Wave
+slider3:osc1_freq=440<20,20000,0.001:log>Osc1 Freq (Hz)
+slider4:osc1_width=0<0,100,0.1>Osc1 Width (cents)
+slider5:amplitude=0.5<0,1,0.01>Master Amp
+slider6:osc1_color=0.5<0,1,0.01>Osc1 Noise Color
+slider7:rhythmic=0<0,1,1{Off,On}>Rhythmic
+slider8:tick_rate=4<0.1,20,0.1:log>Tick Rate (Hz)
+slider9:duty_cycle=0.5<0.01,0.99,0.01>Duty Cycle
+slider10:rhythmic_curve=0.01<0,1,0.01>Rhythmic Curve
+slider11:use_adsr=1<0,1,1{Off,On}>ADSR
+slider12:attack=0.01<0.001,2,0.001:sqr>Attack (s)
+slider13:decay=0.1<0.001,2,0.001:sqr>Decay (s)
+slider14:sustain=0.7<0,1,0.01>Sustain
+slider15:release=0.2<0.001,5,0.001:sqr>Release (s)
+slider16:midi_mode=1<0,1,1{Manual,MIDI}>Trigger Mode
+slider17:manual_trigger=0<0,1,1>Manual Trigger
+slider18:osc1_on=1<0,1,1{Off,On}>Osc1 On
+slider19:osc1_vol=1<0,1,0.01>Osc1 Volume
+slider20:osc2_on=0<0,1,1{Off,On}>Osc2 On
+slider21:osc2_wave=3<0,5,1{Sine,Triangle,Square,Saw,Noise,Click}>Osc2 Wave
+slider22:osc2_freq=220<20,20000,0.001:log>Osc2 Freq (Hz)
+slider23:osc2_width=10<0,100,0.1>Osc2 Width (cents)
+slider24:osc2_vol=0.5<0,1,0.01>Osc2 Volume
+slider25:osc2_color=0.5<0,1,0.01>Osc2 Noise Color
+slider26:osc3_on=0<0,1,1{Off,On}>Osc3 On
+slider27:osc3_wave=1<0,5,1{Sine,Triangle,Square,Saw,Noise,Click}>Osc3 Wave
+slider28:osc3_freq=880<20,20000,0.001:log>Osc3 Freq (Hz)
+slider29:osc3_width=10<0,100,0.1>Osc3 Width (cents)
+slider30:osc3_vol=0.5<0,1,0.01>Osc3 Volume
+slider31:osc3_color=0.5<0,1,0.01>Osc3 Noise Color
+slider32:env_out=0<0,1,0.0001>-Env Out (mod source)
+slider33:osc2_rel=0<0,1,1{Free,Relative}>Osc2 Pitch Mode
+slider34:osc2_semi=-12<-48,48,1>Osc2 Detune (st)
+slider35:osc2_cents=0<-100,100,0.1>Osc2 Detune (ct)
+slider36:osc3_rel=0<0,1,1{Free,Relative}>Osc3 Pitch Mode
+slider37:osc3_semi=12<-48,48,1>Osc3 Detune (st)
+slider38:osc3_cents=0<-100,100,0.1>Osc3 Detune (ct)
+slider39:osc1_pan=0<-1,1,0.01>Osc1 Pan
+slider40:osc2_pan=0<-1,1,0.01>Osc2 Pan
+slider41:osc3_pan=0<-1,1,0.01>Osc3 Pan
+slider42:filt_type=0<0,4,1{Off,Low Pass,Band Pass,High Pass,Notch}>Filter Type
+slider43:filt_cutoff=20000<20,20000,1:log>Filter Cutoff (Hz)
+slider44:filt_res=0<0,1,0.01>Filter Resonance
+slider45:filt_env=0<-1,1,0.01>Filter Env Amount
+slider46:filt_key=0<0,1,0.01>Filter Key Track
+slider47:filt_vel=0<-1,1,0.01>Filter Vel Amount
+slider48:glide=0<0,2,0.001:sqr>Glide (s)
+slider49:vel_amp=0<0,1,0.01>Vel to Amp
+slider50:retrig=0<0,1,1{Off,On}>Retrig Phase
+slider51:antialias=0<0,1,1{Off,On}>Anti-Aliasing
+slider52:auto_gain=0<0,1,1{Off,On}>Auto Gain
+slider53:peak_out=0<0,1,0.0001>-Peak Out (meter)
+slider54:legato=1<0,1,1{Off,On}>Legato
+slider55:poly=1<1,8,1>Voices
+// LA BANDE DU CLAVIER. Quatre sliders APPENDUS : aucun index existant ne
+// bouge, et les trois premiers sont caches de l'IHM native (le tiret devant le
+// libelle, comme `env_out` et `peak_out`) parce qu'ils sont un GESTE et non un
+// reglage — les regler a la main dans REAPER n'a aucun sens.
+//
+// ⚠ `kbd_gate` EST L'ARETE, PAS `kbd_note`. Un clic dont l'appui et le
+// relachement tombent dans le meme bloc ne livre que la DERNIERE valeur d'un
+// slider : porter le declenchement par la hauteur perdrait ce clic. Le gate
+// porte le geste, la hauteur porte la note, et la hauteur peut changer sous un
+// gate tenu — c'est ce qui donne le glissando gratuitement.
+slider56:kbd_note=0<0,127,1>-Keyboard Note
+slider57:kbd_gate=0<0,1,1>-Keyboard Gate
+slider58:kbd_vel=100<1,127,1>-Keyboard Velocity
+slider59:cont_note=0<0,1,1{Free,Notes}>Continuous Pitch
+// LA BANDE DES TROIS ENVELOPPES SUPPLEMENTAIRES (sliders 60..74).
+//
+// ⚠ ELLES NE SONNENT PAS. Elles ne touchent ni au gate, ni au filtre, ni au
+// mixage : elles ne font que SORTIR vers le rack de modulation. C'est toute la
+// difference avec l'ADSR du dessus, qui EST l'amplitude — et c'est aussi
+// pourquoi elles ne peuvent pas tuer une voix : V_ACT ne leur appartient pas.
+// Un troisieme proprietaire pour V_ACT est exactement ce qui a fabrique le
+// bourdon.
+//
+// ⚠ APPEND-ONLY, ET LES COURSES SONT CELLES DE L'ADSR MAITRESSE. Aucun index
+// existant ne bouge, donc un projet garde ses valeurs. Et une enveloppe est une
+// enveloppe : deux courses differentes pour la meme chose feraient mentir les
+// cadrans d'une vue a l'autre.
+//
+// La bande est un ENREGISTREMENT a foulee 5 (a, d, s, r, sortie). Les trois
+// sorties portent le tiret devant leur libelle, comme `env_out` et `peak_out` :
+// on ne regle pas une mesure a la main.
+slider60:env2_attack=0.01<0.001,2,0.001:sqr>Env2 Attack (s)
+slider61:env2_decay=0.1<0.001,2,0.001:sqr>Env2 Decay (s)
+slider62:env2_sustain=0.7<0,1,0.01>Env2 Sustain
+slider63:env2_release=0.2<0.001,5,0.001:sqr>Env2 Release (s)
+slider64:env2_out=0<0,1,0.0001>-Env 2 Out (mod source)
+slider65:env3_attack=0.01<0.001,2,0.001:sqr>Env3 Attack (s)
+slider66:env3_decay=0.1<0.001,2,0.001:sqr>Env3 Decay (s)
+slider67:env3_sustain=0.7<0,1,0.01>Env3 Sustain
+slider68:env3_release=0.2<0.001,5,0.001:sqr>Env3 Release (s)
+slider69:env3_out=0<0,1,0.0001>-Env 3 Out (mod source)
+slider70:env4_attack=0.01<0.001,2,0.001:sqr>Env4 Attack (s)
+slider71:env4_decay=0.1<0.001,2,0.001:sqr>Env4 Decay (s)
+slider72:env4_sustain=0.7<0,1,0.01>Env4 Sustain
+slider73:env4_release=0.2<0.001,5,0.001:sqr>Env4 Release (s)
+slider74:env4_out=0<0,1,0.0001>-Env 4 Out (mod source)
+// LA BANDE RETARD / MAINTIEN / SYNCHRO (sliders 75..86), foulee 3.
+//
+// APPEND-ONLY, ET LES QUATRE ENVELOPPES CETTE FOIS. Glisser `env2_delay` a
+// cote de `env2_attack` aurait decale `env2_out`, `env3_*` et `env4_out` —
+// donc `ENV_OUT_OF`, donc les slots 201..204 de LinkEngine, donc les liens de
+// tous les projets. Et ca ne rate pas bruyamment : le lien pointe l'index
+// voisin et le controle « le lien est-il intact » relit la meme absurdite en
+// la declarant saine.
+//
+// UN SEUL INTERRUPTEUR DE SYNCHRO PAR ENVELOPPE, PAS UN PAR ETAGE. Allume, il
+// donne A TOUTE l'enveloppe son unite de temps : chaque etage vaut alors un
+// nombre entier de divisions, et « chaque chute a 1/16 » se regle avec un
+// slider au lieu de six.
+//
+// LA LISTE EST CELLE DE CP_Mod (ModJSFX.lua), PLUS 1/32 A LA FIN. Les sept
+// premieres entrees sont les siennes, mot pour mot : deux listes de divisions
+// qui divergent est exactement la forme de defaut que ce depot passe son temps
+// a fermer — et « Free » a l'index 0 est ce qui rend le defaut silencieux :
+// zero veut dire « en secondes, comme avant ».
+//
+// ⚠ 1/32 EST A L'INDEX 7, PAS A L'INDEX 1, ET C'EST VOULU (2026-10-04). Le
+// projet range la valeur BRUTE du slider : l'inserer avant 1/16 aurait fait
+// jouer chaque enveloppe deja reglee a la division d'en dessous, sans une
+// erreur. Le menu du panneau la montre en tete (`SGPanel.SYNC_MENU`) ; seul le
+// rang interne est a la fin. Et le Lua l'ecrit en BRUT (`raw` dans
+// PARAM_SPEC) : un normalise depend de la course, qui vient de passer de 6 a
+// 7, donc il aurait change de sens sur une instance pas encore rechargee.
+slider75:env1_delay=0<0,2,0.001:sqr>Env1 Delay (s)
+slider76:env1_hold=0<0,2,0.001:sqr>Env1 Hold (s)
+slider77:env1_sync=0<0,7,1{Free,1/16,1/8,1/4,1/2,1 bar,2 bars,1/32}>Env1 Sync
+slider78:env2_delay=0<0,2,0.001:sqr>Env2 Delay (s)
+slider79:env2_hold=0<0,2,0.001:sqr>Env2 Hold (s)
+slider80:env2_sync=0<0,7,1{Free,1/16,1/8,1/4,1/2,1 bar,2 bars,1/32}>Env2 Sync
+slider81:env3_delay=0<0,2,0.001:sqr>Env3 Delay (s)
+slider82:env3_hold=0<0,2,0.001:sqr>Env3 Hold (s)
+slider83:env3_sync=0<0,7,1{Free,1/16,1/8,1/4,1/2,1 bar,2 bars,1/32}>Env3 Sync
+slider84:env4_delay=0<0,2,0.001:sqr>Env4 Delay (s)
+slider85:env4_hold=0<0,2,0.001:sqr>Env4 Hold (s)
+slider86:env4_sync=0<0,7,1{Free,1/16,1/8,1/4,1/2,1 bar,2 bars,1/32}>Env4 Sync
+// LA BANDE PITCH (sliders 87..98). APPEND-ONLY, comme les precedentes.
+//
+// `oscN_pm` EST LA DESTINATION DE PITCH, EN DEMI-TONS. Un lien natif ajoute sa
+// source au normalise du slider : sur les hertz (20..20000) c'etait un
+// balayage en HERTZ, le meme a 110 Hz qu'a 3 kHz, et la base disparaissait
+// sous la modulation. Ici une portee est un intervalle. 127 demi-tons de
+// course : une unite de normalise vaut la course du cadran PITCH.
+//
+// `oscN_fine` : les cents, connus A PART pour que le calage porte sur la note
+// et que le desaccord se rajoute apres. Masques (« - ») : le panneau les
+// possede, personne n'a a les automatiser a la main.
+//
+// `oscN_scale` / `oscN_root` : le calage. Off a l'index 0, donc un patch
+// d'avant sonne au bit pres comme avant.
+slider87:osc1_pm=0<-63.5,63.5,0.001>Osc1 Pitch Mod (st)
+slider88:osc2_pm=0<-63.5,63.5,0.001>Osc2 Pitch Mod (st)
+slider89:osc3_pm=0<-63.5,63.5,0.001>Osc3 Pitch Mod (st)
+slider90:osc1_fine=0<-50,50,0.01>-Osc1 Fine (ct)
+slider91:osc2_fine=0<-50,50,0.01>-Osc2 Fine (ct)
+slider92:osc3_fine=0<-50,50,0.01>-Osc3 Fine (ct)
+slider93:osc1_scale=0<0,16,1{Off,Chromatic,Major,Minor,Dorian,Phrygian,Lydian,Mixolydian,Locrian,Harmonic Minor,Melodic Minor,Major Pentatonic,Minor Pentatonic,Blues,Whole Tone,Fifths,Octaves}>Osc1 Scale
+slider94:osc1_root=0<0,11,1{C,C#,D,D#,E,F,F#,G,G#,A,A#,B}>Osc1 Root
+slider95:osc2_scale=0<0,16,1{Off,Chromatic,Major,Minor,Dorian,Phrygian,Lydian,Mixolydian,Locrian,Harmonic Minor,Melodic Minor,Major Pentatonic,Minor Pentatonic,Blues,Whole Tone,Fifths,Octaves}>Osc2 Scale
+slider96:osc2_root=0<0,11,1{C,C#,D,D#,E,F,F#,G,G#,A,A#,B}>Osc2 Root
+slider97:osc3_scale=0<0,16,1{Off,Chromatic,Major,Minor,Dorian,Phrygian,Lydian,Mixolydian,Locrian,Harmonic Minor,Melodic Minor,Major Pentatonic,Minor Pentatonic,Blues,Whole Tone,Fifths,Octaves}>Osc3 Scale
+slider98:osc3_root=0<0,11,1{C,C#,D,D#,E,F,F#,G,G#,A,A#,B}>Osc3 Root
+// LA BANDE DES FORMES (slider99). Les hauteurs, Tick Rate et la coupure sont
+// `:log`, les durees et le glide `:sqr` : le NORMALISE de REAPER suit la
+// courbe du cadran, donc un lien module en octaves et en racine du temps.
+// `shp` dit que les liens et enveloppes d'hier ont ete convertis (voir
+// `SoundGenerator.migrateShapes`), puis, a 2, que les valeurs brutes sont
+// saines (voir `SoundGenerator.repairRaw`). Cache ; 0 a l'arrivee d'une
+// instance d'hier.
+slider99:shp=0<0,2,1>-Shapes converted (internal)
+// LA BANDE DES ROUTES RAPIDES (sliders 100..132). APPEND-ONLY.
+//
+// Un LFO rapide de la banque CP_Mod, par un lien natif, n'arrive qu'UNE fois
+// par bloc audio : a 512 echantillons, un LFO a 20 Hz a moins de cinq points
+// par cycle, et le motif s'entend (ROADMAP_FXConstellation.md §21.3). Une
+// route RAPIDE lit la valeur du slot dans la memoire partagee, publiee par la
+// banque tous les 32 echantillons (`ModJSFX.FAST_BASE`), et module le
+// parametre ICI : une modulation a 1,5 kHz de controle au lieu de 94 Hz.
+//
+// `fch` : le canal de la piste (0 = aucune route). Huit routes de quatre :
+// destination (0 = eteinte, sinon un code de `SoundGenerator.FAST_DST` ; les
+// codes 16 a 18, les balances, depuis le 2026-10-08 ; le code 19, l'index de
+// modulation de phase, depuis le meme jour -- la course du slider le dit a Lua,
+// `SoundGenerator.fastMaxCode`), slot
+// source (1..8), profondeur en NORMALISE du parametre (celle du lien natif
+// qu'elle remplace), neutre de la source. Caches : la fenetre les pose.
+slider100:fch=0<0,255,1>-Fast channel (internal)
+slider101:fr1_dst=0<0,19,1>-Fast 1 Dest
+slider102:fr1_src=1<1,10,1>-Fast 1 Slot
+slider103:fr1_amt=0<-1,1,0.0001>-Fast 1 Depth
+slider104:fr1_ctr=0.5<0,1,0.0001>-Fast 1 Center
+slider105:fr2_dst=0<0,19,1>-Fast 2 Dest
+slider106:fr2_src=1<1,10,1>-Fast 2 Slot
+slider107:fr2_amt=0<-1,1,0.0001>-Fast 2 Depth
+slider108:fr2_ctr=0.5<0,1,0.0001>-Fast 2 Center
+slider109:fr3_dst=0<0,19,1>-Fast 3 Dest
+slider110:fr3_src=1<1,10,1>-Fast 3 Slot
+slider111:fr3_amt=0<-1,1,0.0001>-Fast 3 Depth
+slider112:fr3_ctr=0.5<0,1,0.0001>-Fast 3 Center
+slider113:fr4_dst=0<0,19,1>-Fast 4 Dest
+slider114:fr4_src=1<1,10,1>-Fast 4 Slot
+slider115:fr4_amt=0<-1,1,0.0001>-Fast 4 Depth
+slider116:fr4_ctr=0.5<0,1,0.0001>-Fast 4 Center
+slider117:fr5_dst=0<0,19,1>-Fast 5 Dest
+slider118:fr5_src=1<1,10,1>-Fast 5 Slot
+slider119:fr5_amt=0<-1,1,0.0001>-Fast 5 Depth
+slider120:fr5_ctr=0.5<0,1,0.0001>-Fast 5 Center
+slider121:fr6_dst=0<0,19,1>-Fast 6 Dest
+slider122:fr6_src=1<1,10,1>-Fast 6 Slot
+slider123:fr6_amt=0<-1,1,0.0001>-Fast 6 Depth
+slider124:fr6_ctr=0.5<0,1,0.0001>-Fast 6 Center
+slider125:fr7_dst=0<0,19,1>-Fast 7 Dest
+slider126:fr7_src=1<1,10,1>-Fast 7 Slot
+slider127:fr7_amt=0<-1,1,0.0001>-Fast 7 Depth
+slider128:fr7_ctr=0.5<0,1,0.0001>-Fast 7 Center
+slider129:fr8_dst=0<0,19,1>-Fast 8 Dest
+slider130:fr8_src=1<1,10,1>-Fast 8 Slot
+slider131:fr8_amt=0<-1,1,0.0001>-Fast 8 Depth
+slider132:fr8_ctr=0.5<0,1,0.0001>-Fast 8 Center
+// LA MODULATION DE PHASE (slider133, index 132). OSC 2 module la PHASE d'OSC 1,
+// a chaque echantillon : c'est la « FM » des DX7 et de Vital, et la seule qui
+// reste juste a frequence audio. Moduler la hauteur (`pm`, en demi-tons) a 100
+// ou 1000 Hz desaccorde la note -- une modulation exponentielle monte la
+// hauteur moyenne avec la profondeur -- et passe par des valeurs de controle
+// (une par bloc, ou tous les 32 echantillons), donc se replie. Ici le
+// modulateur est un OSCILLATEUR, calcule dans la meme boucle que la porteuse.
+// 0 = eteinte, et alors le rendu est celui d'avant au bit pres. L'index suit le
+// CARRE du reglage (jusqu'a FM_MAX tours) : le bas de la course est la qu'on
+// regle finement. OSC 2 tourne meme eteint quand il module : eteint, il ne
+// s'entend pas -- c'est la FM classique, le modulateur muet.
+slider133:osc1_fm=0<0,1,0.001>Osc1 FM (from Osc2)
+// LE SAMPLE (sliders 134..147, 2026-10-10). Chaque oscillateur peut jouer le
+// SAMPLE du generateur a la place de sa forme (`oscN_smp`). Le sample est UN
+// pour tout le generateur, et ses reglages aussi : note de base, region dans le
+// fichier (fractions du fichier ENTIER, comme le Kit Sampler), depart dans la
+// region, boucle et son fondu, sens. Le chemin arrive de Lua par la memoire des
+// routes rapides (canal `smp_ch`, jeton `smp_tok`) et vit dans @serialize : un
+// projet rouvert se recharge sans Lua.
+slider134:osc1_smp=0<0,1,1{Wave,Sample}>Osc1 Source
+slider135:osc2_smp=0<0,1,1{Wave,Sample}>Osc2 Source
+slider136:osc3_smp=0<0,1,1{Wave,Sample}>Osc3 Source
+slider137:smp_root=60<0,127,1>Sample Root
+slider138:smp_rs=0<0,1,0.00001>Sample Region Start
+slider139:smp_re=1<0,1,0.00001>Sample Region End
+slider140:smp_start=0<0,1,0.001>Sample Start
+slider141:smp_loop=0<0,1,1{Off,On}>Sample Loop
+slider142:smp_ls=0<0,1,0.001>Sample Loop Start
+slider143:smp_le=1<0,1,0.001>Sample Loop End
+slider144:smp_xf=10<0,500,0.1>Sample Loop X-Fade (ms)
+slider145:smp_rev=0<0,1,1{Off,On}>Sample Reverse
+slider146:smp_ch=0<0,255,1>-Sample channel (internal)
+slider147:smp_tok=0<0,16777215,1>-Sample token (internal)
+
+@init
+pi2 = $pi * 2;
+dt = 1 / srate;   // @init tourne aussi quand la frequence d'echantillonnage change
+// Le fondu d'une voix qu'une frappe mono remplace (etat 6, voir `v_tail`) :
+// une constante de temps de 1,5 ms, soit une dizaine de millisecondes jusqu'au
+// silence. Assez long pour ne pas cliquer, assez court pour ne pas s'entendre
+// sous l'attaque qui repart.
+fade_k = 1 - exp(-dt / 0.0015);
+note_on = 0;
+last_manual = 0;
+// ⚠ SENTINELLE, PAS UN ETAT VALIDE. `mode_key` vaut 0..7 ; -1 dit « aucune
+// frontiere encore vue ». Sans elle, le premier bloc apres un chargement — ou
+// apres un changement de frequence d'echantillonnage, qui rejoue @init —
+// compterait comme une bascule et couperait un son qui vient de commencer.
+last_mode = -1;
+// Le miroir du clavier de la fenetre. Le gate est un 0/1 deja aplati : la
+// comparaison est alors exacte, la ou `kbd_gate != kbd_pgate` sur un flottant
+// venu d'une ecriture normalisee ne l'est pas toujours.
+kbd_pgate = 0;
+kbd_pnote = -1;   // pas 0 : zero est une note valide (DO -1)
+tick_phase = 0;
+tick_env = 1;
+note_ratio = 1;
+curve_k = 1;
+env_last = 0;
+// LES DUREES EFFECTIVES D'ENV 1, HISSEES AU BLOC. @sample lisait `attack`,
+// `decay` et `release` directement ; il lit maintenant ces trois scalaires,
+// que @block pose. En Free ils valent le slider AU BIT PRES — c'est une copie,
+// pas une conversion — donc rien ne bouge sur un patch existant. Synchronisee,
+// l'enveloppe y trouve la duree deja convertie : le tempo ne descend JAMAIS
+// dans @sample.
+//
+// ⚠ ELLES SONT AUSSI CE QUI PERMET A LA SYNCHRO D'ATTEINDRE ENV 1 SANS
+// TOUCHER AU COUT. Ses deux exponentielles vivent encore par echantillon (ce
+// n'etait pas le sujet du lot precedent et ce n'est pas celui-ci) ; remplacer
+// le slider par un scalaire de module ne change ni leur nombre ni leur prix.
+e1_a = 0.01; e1_d = 0.1; e1_r = 0.2;
+// Le retard et le maintien d'ENV 1, en ECHANTILLONS ENTIERS. Un decrement et
+// une comparaison par echantillon : ni division, ni exponentielle.
+e1_dn = 0; e1_hn = 0;
+// Secondes par noire. Recalcule a chaque bloc — ici, seulement pour qu'un
+// premier bloc anormal ne lise pas zero.
+spb = 0.5;
+auto_g = 1;
+aa = 0;
+peak_run = 0;
+fidx_env = 0;
+fk = 2;
+
+// ---------------------------------------------------------------------------
+// LES ROUTES RAPIDES : la memoire, et la course de chaque destination
+// ---------------------------------------------------------------------------
+// Les VALEURS EFFECTIVES : ce que le rendu lit a la place du slider. Sans
+// route, @block y recopie le slider -- une COPIE, pas une conversion, donc le
+// son est celui d'avant au bit pres. Au-dessus de ftab (1024..2048).
+epm = 2112;  ewid = 2116;  ecol = 2120;  evol = 2124;  evd = 2128;
+f_off = 0; f_off_d = 0; eamp = 0.5; eamp_d = 0;
+// Les routes du bloc (destination, slot 0-base, profondeur, neutre), et ce
+// que chaque destination recoit au tick.
+FRD = 2140; FRS = 2150; FRA = 2160; FRC = 2170;
+FOFF = 2180; FUSE = 2200; FMIN = 2220; FMAX = 2240;
+fnr = 0; fast_on = 0; fpit = 0; fgb = 0; ftl = 0; fkk = 0;
+fseq = -1; fstale = 99;
+// ⚠ `FTICK` ET SURTOUT PAS `FK` : EEL2 IGNORE LA CASSE, et `fk` est
+// l'amortissement du filtre (1,2 a mi-resonance). Le tick tournait tous les
+// deux echantillons, et la rampe de la coupure divisait par l'amortissement.
+FTICK = 32; FVALS = 16; FMAXSUB = 256;
+// La course de chaque code, celle de son slider (SoundGenerator.FAST_DST, dans
+// le meme ordre ; `Tools/fastmod_test.py` confronte les deux). Le code 4, la
+// coupure, est `:log` : il se calcule a part, en octaves.
+FMIN[1] = -63.5; FMAX[1] = 63.5;     // PITCH d'OSC 1 (demi-tons)
+FMIN[2] = -63.5; FMAX[2] = 63.5;     // PITCH d'OSC 2
+FMIN[3] = -63.5; FMAX[3] = 63.5;     // PITCH d'OSC 3
+FMIN[4] = 20;    FMAX[4] = 20000;    // coupure (log)
+FMIN[5] = 0;     FMAX[5] = 1;        // resonance
+FMIN[6] = 0;     FMAX[6] = 1;        // volume d'OSC 1
+FMIN[7] = 0;     FMAX[7] = 1;        // volume d'OSC 2
+FMIN[8] = 0;     FMAX[8] = 1;        // volume d'OSC 3
+FMIN[9] = 0;     FMAX[9] = 1;        // amplitude
+FMIN[10] = 0;    FMAX[10] = 100;     // largeur d'OSC 1 (cents)
+FMIN[11] = 0;    FMAX[11] = 100;     // largeur d'OSC 2
+FMIN[12] = 0;    FMAX[12] = 100;     // largeur d'OSC 3
+FMIN[13] = 0;    FMAX[13] = 1;       // couleur d'OSC 1
+FMIN[14] = 0;    FMAX[14] = 1;       // couleur d'OSC 2
+FMIN[15] = 0;    FMAX[15] = 1;       // couleur d'OSC 3
+FMIN[16] = -1;   FMAX[16] = 1;       // balance d'OSC 1
+FMIN[17] = -1;   FMAX[17] = 1;       // balance d'OSC 2
+FMIN[18] = -1;   FMAX[18] = 1;       // balance d'OSC 3
+FMIN[19] = 0;    FMAX[19] = 1;       // modulation de phase d'OSC 1 (index)
+// ⚠ DIX-NEUF CODES, ET C'EST LE PLAFOND DE CETTE DISPOSITION. FOFF (2180),
+// FUSE (2200), FMIN (2220) et FMAX (2240) ont vingt cases chacun : un code 20
+// ecrirait FUSE[20] dans FMIN[0], et FMAX[20] dans epan[0]. Un code de plus
+// demande de deplacer les tables, pas d'allonger la liste.
+// Les balances EFFECTIVES d'une route : au-dessus de FMAX (2240..2259).
+epan = 2260;
+// L'index de modulation de phase EFFECTIF (sa route RAMPE, comme un volume :
+// il se lit a chaque echantillon) et le plafond de l'index, en TOURS.
+efm = 0; efm_d = 0;
+FM_MAX = 1.5;
+// LES CIBLES DES RAMPES DE BLOC (voir @block, « les gains rejoignent leur
+// valeur ») : la derniere valeur de slider rejointe, par volume et par balance,
+// et les pentes des balances. Au-dessus de epan (2264..2279). -9 = « aucune
+// cible » ; `eprime` fait poser le premier bloc au lieu de le faire rampe
+// depuis zero.
+evt = 2264; ept = 2268; pld = 2272; prd = 2276;
+eamp_t = -9; efm_t = -9; ag_t = -9; ag_d = 0;
+eramp = 0; pramp = 0; einv = 0; eprime = 1;
+// LE LISSAGE A TEMPS FIXE, APRES LES RAMPES (2026-10-10). La rampe de bloc dure
+// ce que dure le bloc : a 64 echantillons, un pas d'index de FM tenait en
+// 1,3 ms -- encore un claquement. Ces valeurs passent donc ENSUITE par deux
+// filtres a un pole en cascade (critiques : pas de depassement, pas d'angle),
+// de constante ZTAU chacun, quelle que soit la taille du bloc et quelle que
+// soit la source (lien natif, route rapide, bouton). A 1,5 ms : 10-90 % en
+// 5 ms, et un LFO a 20 Hz passe a 97 %. Le rendu lit les sorties `z*` ; au
+// repos elles sont POSEES sur leur cible (le son d'avant au bit pres).
+ZTAU = 0.0015;
+zk = 1 - exp(-1 / (ZTAU * srate));
+zvol = 2280; zvol1 = 2284; zpl = 2288; zpl1 = 2292; zpr = 2296; zpr1 = 2300;
+zamp = 0.5; zamp1 = 0.5; zfm = 0; zfm1 = 0; zag = 1; zag1 = 1;
+zon = 0; zpon = 0;
+
+// ---------------------------------------------------------------------------
+// LE SAMPLE : LA MEMOIRE, ET CE QUI SURVIT A UN @init REJOUE
+// ---------------------------------------------------------------------------
+// Le niveau 0 est le fichier tel quel (entrelace, `smp_nch` canaux). Derriere
+// lui, quatre niveaux DECIMES d'une octave chacun (stereo ou mono), batis apres
+// le chargement par un filtre demi-bande : une voix qui monte d'une octave lit
+// le niveau 1, de deux octaves le niveau 2... et ne replie rien. Entre deux
+// niveaux, un fondu selon la fraction d'octave : un glide ne fait pas de
+// marche. Lecture Hermite a quatre points.
+SMP = 65536;            // niveau 0
+SMP_CAP = 4194304;      // echantillons entrelaces au plus (~43 s de stereo a 48 kHz)
+SMP_PATH = 4096;        // le chemin VOULU, en codes de caracteres
+SMP_CUR = 5120;         // le chemin charge (ou en cours de chargement)
+SMP_PLEN = 1024;
+SMP_NL = 4;             // niveaux decimes
+SMP_RDCH = 32768;       // echantillons lus par bloc : le disque ne bloque pas le son
+SMP_MIPCH = 2048;       // trames decimees par bloc
+SLB = 2400; SLN = 2406; SLD = 2412; SLS = 2418;   // base, trames, bati, echelle (niveaux 0..4)
+SMM = 2424;             // l'oscillateur joue-t-il le sample (3)
+HB = 2428;              // les douze prises impaires du demi-bande (2428..2439)
+// Le demi-bande : 47 prises, fenetre de Kaiser (beta 8). Plat a 0,2 fs,
+// -6 dB a 0,25, -56 dB a 0,30, -90 dB au-dela de 0,35. Les prises paires sont
+// nulles (sauf le centre) : douze multiplications par trame et par canal.
+HBC = 0.49999539684182204;
+HB[0] = 0.31606293622138276; HB[1] = -0.099534583629436915;
+HB[2] = 0.053239599217923476; HB[3] = -0.031906212044827471;
+HB[4] = 0.01951168258705124; HB[5] = -0.011685384108269971;
+HB[6] = 0.006670847582056133; HB[7] = -0.0035394678469438641;
+HB[8] = 0.0016906510319408038; HB[9] = -0.00069000360080541043;
+HB[10] = 0.00021460425686417527; HB[11] = -0.000032368087846022732;
+// ⚠ @init SE REJOUE A CHAQUE DEPART DU TRANSPORT (le generateur n'a pas
+// d'ext_noinit) : un sample charge ne doit pas s'y oublier. La memoire survit
+// toute seule ; cet etat ne se pose qu'au premier passage.
+smp_boot < 0.5 ? (
+	smp_boot = 1;
+	smp_state = 0; smp_play = 0; smp_lg = 0; smp_lgd = 0; smp_h = -1;
+	smp_seen = -1; smp_want = 0; smp_status = 0; smp_pv = 1;
+	smp_frames = 0; smp_full = 0; smp_nch = 1; smp_mch = 1; smp_sr = 44100;
+	smp_k = 1; smp_a = 0; smp_b = 0; smp_s0 = 0; smp_dir = 1; smp_lp = 0;
+	smp_la = 0; smp_lb = 0; smp_ll = 1; smp_xn = 0; smp_fn = 1;
+);
+smp_fi = max(1, floor(0.001 * srate));   // fondu d'entree d'une note (echantillons)
+smp_fo = 1 / max(1, floor(0.002 * srate));   // pente du fondu d'une voix volee
+
+// ---------------------------------------------------------------------------
+// LE CALAGE SUR UNE GAMME
+// ---------------------------------------------------------------------------
+// Le masque de douze bits de chaque gamme : le bit k dit « k demi-tons
+// au-dessus de la tonique est dans la gamme ». LA MEME TABLE que
+// `SoundGenerator.SCALE_MASK` en Lua, dans le meme ordre que la liste du
+// slider ; `Tools/sg_test.py` compare les deux.
+function sg_mask(sc) (
+  sc < 1.5 ? 4095 : sc < 2.5 ? 2741 : sc < 3.5 ? 1453 : sc < 4.5 ? 1709 :
+  sc < 5.5 ? 1451 : sc < 6.5 ? 2773 : sc < 7.5 ? 1717 : sc < 8.5 ? 1387 :
+  sc < 9.5 ? 2477 : sc < 10.5 ? 2733 : sc < 11.5 ? 661 : sc < 12.5 ? 1193 :
+  sc < 13.5 ? 1257 : sc < 14.5 ? 1365 : sc < 15.5 ? 129 : 1;
+);
+
+// La note `m` (demi-tons MIDI, flottante) calee sur le degre le plus proche ;
+// a egalite, le plus bas. Treize comparaisons, aucune memoire, au bloc et par
+// voix ACTIVE seulement : rien n'en descend dans @sample.
+function sg_snap(m, sc, rt) local(mask r oc d k best bd dd) (
+  mask = sg_mask(sc);
+  rt = rt | 0;
+  r = m - rt;
+  oc = floor(r / 12);
+  d = r - oc * 12;
+  best = 0; bd = 100;
+  k = 0;
+  loop(13,
+    ((mask >> (k % 12)) & 1) ? (
+      dd = abs(d - k);
+      // Meme marge que le miroir Lua : une note pile entre deux degres
+      // tombe toujours sur le plus bas, pas au hasard des arrondis.
+      dd < bd - 0.000001 ? ( bd = dd; best = k; );
+    );
+    k += 1;
+  );
+  rt + oc * 12 + best;
+);
+
+// ⚠ CE QUI RESTE ICI N'APPARTIENT A AUCUNE NOTE. Phase, bruit, clic, increments
+// et etat de filtre sont descendus DANS la voix — ils etaient indexes par
+// oscillateur, ce qui donnait trois oscillateurs et une seule note. Seule la
+// balance reste au module : elle ne depend que d'un slider.
+panl = 48;   // gain de balance gauche, calcule au bloc
+panr = 52;   // gain de balance droite
+
+// slider numbers per osc (osc1 keeps the legacy slots). La FREQUENCE n'y est
+// plus : elle passe par adl/adr, qui l'ont deja convertie en increment.
+sl_on  = 28; sl_on[0]  = 18; sl_on[1]  = 20; sl_on[2]  = 26;
+sl_wav = 32; sl_wav[0] = 2;  sl_wav[1] = 21; sl_wav[2] = 27;
+sl_wid = 36; sl_wid[0] = 4;  sl_wid[1] = 23; sl_wid[2] = 29;
+sl_vol = 40; sl_vol[0] = 19; sl_vol[1] = 24; sl_vol[2] = 30;
+sl_col = 44; sl_col[0] = 6;  sl_col[1] = 25; sl_col[2] = 31;
+sl_pan = 56; sl_pan[0] = 39; sl_pan[1] = 40; sl_pan[2] = 41;
+
+// ---------------------------------------------------------------------------
+// LES TOUCHES TENUES, ET LA FILE D'EVENEMENTS
+// ---------------------------------------------------------------------------
+// ⚠ LE NOTE-OFF NE REGARDAIT PAS QUELLE NOTE IL ETEIGNAIT. Il ne testait que
+// l'octet de statut : aucune comparaison avec `midi_note`, aucun compte de
+// touches tenues. Joue legato — B enfonce avant que A soit relache — et le flux
+// est NoteOn(B) puis NoteOff(A) ; le NoteOff(A) mettait la note B, qui venait de
+// naitre, en relachement. C'est exactement « enchainer deux notes rapidement
+// casse la note », et ca n'avait rien d'aleatoire.
+//
+// La pile dit QUELLES touches sont tenues. Une note ne relache que lorsqu'il
+// n'en reste aucune ; sinon on revient a la derniere encore enfoncee — priorite
+// a la derniere tenue, la convention de tous les monosynthes.
+NHOLD = 16;
+hold = 64;      // 16 x (note, velocite), 64..95
+nh = 0;
+
+// ---------------------------------------------------------------------------
+// LE BANC DE VOIX
+// ---------------------------------------------------------------------------
+// ⚠ TOUT CE QUI APPARTENAIT A UNE NOTE ETAIT UN SCALAIRE UNIQUE. Hauteur,
+// enveloppe, velocite, phases, filtre : une seule copie de chaque, donc une
+// seule note possible. Les tableaux qui RESSEMBLAIENT a des voix (posl, brnl,
+// clkp...) sont indexes par OSCILLATEUR, 0..2 — trois oscillateurs, une voix.
+// Six touches enfoncees rendaient toutes la hauteur de la derniere.
+//
+// Une voix est maintenant un ENREGISTREMENT a foulee fixe, comme dans le kit
+// sampler : `voice(i) = VOICES + i * VSZ`. Aucune allocation, la carte est
+// posee une fois ici, et le cout par echantillon est proportionnel au nombre de
+// voix ACTIVES et non au nombre de voix possibles.
+//
+// La foulee est une puissance de deux : un enregistrement qui grandit d'un
+// champ ne doit pas obliger a recompter la carte, et la multiplication reste
+// un decalage.
+// ⚠ 128 DEPUIS LE SAMPLE (2026-10-10) : les 64 mots etaient pleins (positions
+// de lecture, age, fondu d'une voix volee). Le banc a quitte 384..895, sous
+// ftab, pour 8192..9215 ; rien ne se sauve de cette memoire, il n'y a donc rien
+// a migrer.
+NVOICES = 8;
+VSZ = 128;
+VOICES = 8192;  // 8 x 128 = 1024 mots, 8192..9215
+
+V_ACT = 0;      // la voix sonne-t-elle
+V_NOTE = 1;
+V_VEL = 2;
+V_AGE = 3;      // ordre d'arrivee : c'est la plus ancienne qu'on vole
+V_HELD = 4;     // la touche est-elle encore enfoncee
+V_ENV = 5;
+V_ST = 6;       // etat d'enveloppe : 0 repos, 1 attaque, 2 chute, 3 relachement
+V_CUR = 7;      // demi-tons courants (le glide y vit)
+V_TGT = 8;
+V_HAVE = 9;     // a-t-elle deja eu une hauteur (sinon elle se pose, elle ne glisse pas)
+V_VG = 10;      // gain de velocite, calcule au bloc
+V_FIDX = 11;    // index de coupure de base, calcule au bloc
+V_IC1A = 12; V_IC2A = 13; V_IC1B = 14; V_IC2B = 15;   // le filtre, PAR VOIX
+V_PL = 16;      // 3 phases gauche  (16..18)
+V_PR = 19;      // 3 phases droite  (19..21)
+V_ADL = 22;     // 3 increments gauche (22..24)
+V_ADR = 25;     // 3 increments droite (25..27)
+V_BNL = 28;     // 3 etats de bruit gauche (28..30)
+V_BNR = 31;     // 3 etats de bruit droite (31..33)
+V_CLK = 34;     // 3 ages de clic (34..36)
+// LES TROIS ENVELOPPES SUPPLEMENTAIRES VIVENT DANS LA VOIX, comme celle du
+// dessus : elles se declenchent A LA NOTE, donc elles sont un fait de note.
+// L'enregistrement passe de 37 a 43 mots sur une foulee de 64 — la marge etait
+// la pour ca, et il n'y a rien a recompter.
+V_XENV = 37;    // 3 niveaux (37..39)
+V_XST  = 40;    // 3 etats   (40..42) : 0 repos, 1 attaque, 2 chute,
+                //                      3 relachement, 4 retard, 5 maintien
+// ⚠ UN SEUL COMPTEUR POUR LE RETARD **ET** LE MAINTIEN. Les deux etats ne
+// coexistent jamais — on traverse 4 puis 1 puis 5 puis 2 — donc un second mot
+// par enveloppe n'aurait porte que du vide. L'enregistrement passe de 43 a 47
+// mots ; VSZ reste 64, la region VOICES ne bouge pas.
+//
+// ⚠ ET LES ETATS S'APPENDENT, ILS NE SE RENUMEROTENT PAS. 0, 1, 2 et 3 sont
+// ecrits en dur a plus de cinq endroits (v_start, v_xrelease, v_xkill,
+// all_voices_off, la frontiere de mode, les note-off de @sample) : un etat
+// renumerote se trompe en silence sur celui qu'on oublie.
+V_XDLY = 43;    // 3 compteurs (43..45) pour ENV 2..4
+V_DLY  = 46;    // le meme, pour ENV 1
+// La phase LUE d'OSC 1 a l'echantillon d'avant, par canal (le pas de la
+// correction anti-repliement sous FM, voir `blep_saw_pm`).
+V_QL = 47; V_QR = 48;
+// LE SAMPLE, par oscillateur : la position de lecture gauche et droite (en
+// trames du fichier ; deux, parce que la largeur desaccorde les canaux), l'age
+// de la note (le fondu d'entree), et l'ancienne position d'une voix VOLEE avec
+// son gain (elle s'eteint en 2 ms pendant que la nouvelle monte).
+V_SPL = 49;     // 3 (49..51)
+V_SPR = 52;     // 3 (52..54)
+V_SAGE = 55;    // 3 (55..57)
+V_SOL = 58;     // 3 (58..60)
+V_SOR = 61;     // 3 (61..63)
+V_SOG = 64;     // 3 (64..66)
+
+age_ctr = 1;
+
+// ---------------------------------------------------------------------------
+// LA SYNCHRO AU TEMPO : DEUX FONCTIONS, ET ELLES NE TOURNENT QU'AU BLOC
+// ---------------------------------------------------------------------------
+// La division choisie, en NOIRES. C'est la table de `ModJSFX.lua` prise a
+// l'envers : elle y compte des CYCLES PAR NOIRE (un LFO a une frequence), une
+// enveloppe veut des NOIRES PAR DIVISION (elle a une duree). La liste est celle
+// de CP_Mod, mot pour mot, et elle suppose le 4/4 comme la sienne — plus 1/32
+// (un huitieme de noire), AJOUTE A LA FIN pour ne rien decaler.
+//
+// ⚠ ZERO EST LE TEST DE « FREE », ET C'EST POUR CA QU'IL EST RENDU TEL QUEL.
+// Aucune duree ne vaut zero noire : un appelant peut donc decider avec
+// `u > 0` au lieu de relire le slider.
+function env_beats(sy) (
+  sy < 0.5 ? 0 : sy < 1.5 ? 0.25 : sy < 2.5 ? 0.5 : sy < 3.5 ? 1
+  : sy < 4.5 ? 2 : sy < 5.5 ? 4 : sy < 6.5 ? 8 : 0.125;
+);
+
+// LE COMPTE DE DIVISIONS D'UN ETAGE — ET IL NE DEPEND NI DU TEMPO NI DE LA
+// DIVISION. Le cadran parcourt sa course entiere en SEIZE pas, quelle que soit
+// la division : c'est ce qui permet au panneau d'afficher « 3 x 1/16 » sans
+// jamais lire le tempo, donc de ne pas pouvoir mentir sur ce que le DSP joue.
+// `SGPanel.envSteps` recopie cette formule, au caractere pres, et
+// `Tools/sg_test.py` verifie que les deux disent la meme chose.
+//
+// `lo` vaut 1 pour l'attaque, la chute et le relachement — un temps nul y
+// diviserait par zero — et 0 pour le retard et le maintien, dont l'absence est
+// le cas NORMAL.
+function env_steps(tv, tmax, lo) (
+  max(lo, min(16, floor(tv * 16 / tmax + 0.5)));
+);
+
+function voice(i) ( VOICES + i * VSZ );
+
+// La voix a prendre. Une libre d'abord ; sinon LA PLUS ANCIENNE. Voler la plus
+// recente ferait disparaitre la note qu'on vient de jouer — le pire choix
+// possible, et celui qu'un simple `i = 0` produirait.
+function find_voice() local(i vb fr old oage) (
+  i = 0; fr = -1; old = 0; oage = -1;
+  while (i < NVOICES) (
+    vb = voice(i);
+    (fr < 0 && vb[V_ACT] < 0.5) ? fr = i;
+    (oage < 0 || vb[V_AGE] < oage) ? ( oage = vb[V_AGE]; old = i; );
+    i += 1;
+  );
+  voice(fr >= 0 ? fr : old);
+);
+
+// La voix qui TIENT cette note. -1 si aucune : un note-off qui ne trouve rien
+// ne doit relacher personne, c'est exactement le defaut d'avant.
+function find_note(n) local(i vb r) (
+  i = 0; r = -1;
+  while (i < NVOICES) (
+    vb = voice(i);
+    (vb[V_ACT] > 0.5 && vb[V_HELD] > 0.5 && vb[V_NOTE] == n) ? ( r = vb; i = NVOICES; );
+    i += 1;
+  );
+  r;
+);
+
+// ⚠ L'ENVELOPPE NE SE REMET PAS A ZERO SUR UNE VOIX VOLEE. Elle sonnait ; la
+// couper net pour repartir de zero fait un clic. L'attaque part du niveau
+// courant, ce qui la raccourcit d'autant et ne s'entend pas comme une rupture.
+// Une voix LIBRE, elle, est deja a zero.
+// ⚠ EN MONO, LA VOIX N'EST PLUS « VOLEE » : `v_tail` (plus bas) emporte d'abord
+// ce qu'elle jouait sur une voix libre, ou ca s'eteint en une dizaine de
+// millisecondes, et la remet a zero. L'attaque repart donc du silence a chaque
+// frappe, toujours par le meme trajet, sans clic.
+function v_start(vb, n, v) local(i xbs was) (
+  // Une voix VOLEE qui sonnait encore : sa lecture de sample s'eteindra en
+  // 2 ms par-dessus la nouvelle (voir `smp_osc`) au lieu de sauter.
+  was = vb[V_ACT] > 0.5 && vb[V_ENV] > 0.001;
+  vb[V_ACT] = 1;
+  vb[V_NOTE] = n;
+  vb[V_VEL] = v;
+  vb[V_HELD] = 1;
+  vb[V_AGE] = age_ctr; age_ctr += 1;
+  // ⚠ LE RETARD SE CHOISIT ICI, EN BRANCHE, ET PAS PAR UN ETAT 4 A COMPTEUR
+  // NUL. Traverser un etat de retard avec zero echantillon a attendre brulerait
+  // UN echantillon avant l'attaque : inaudible, mais ce ne serait plus le meme
+  // rendu au bit pres — et ENV 1 EST le son de tous les patchs deja
+  // enregistres. A zero, le chemin doit etre celui d'hier, pas un chemin
+  // equivalent.
+  //
+  // ⚠ ET LE NIVEAU N'EST PAS REMIS A ZERO PENDANT LE RETARD. C'est la meme
+  // regle que l'attaque juste en dessous : elle part du NIVEAU COURANT pour ne
+  // pas cliquer sur une voix volee. Une voix LIBRE est deja a zero, donc le cas
+  // normal est bien le silence ; une voix VOLEE tient son ancien niveau le
+  // temps du retard, ce qui ne claque pas.
+  e1_dn > 0 ? ( vb[V_DLY] = e1_dn; vb[V_ST] = 4; ) : vb[V_ST] = 1;
+  vb[V_TGT] = n - 69;
+  // Une voix qui n'avait pas de hauteur se POSE. Glisser depuis zero ferait
+  // partir chaque note d'un La 440 imaginaire que personne n'a joue.
+  vb[V_HAVE] < 0.5 ? ( vb[V_CUR] = vb[V_TGT]; vb[V_HAVE] = 1; );
+  i = 0;
+  while (i < 3) ( vb[V_CLK + i] = 0; i += 1; );
+  // Les trois enveloppes supplementaires partent AVEC la note, et depuis leur
+  // NIVEAU COURANT — meme regle que celle du dessus : une voix volee sonnait,
+  // repartir de zero ferait un saut de modulation aussi audible que le clic
+  // qu'on evite sur l'ampli.
+  i = 0;
+  while (i < 3) (
+    xbs = XENV + i * XSZ;
+    xbs[X_DLY] > 0 ? ( vb[V_XDLY + i] = xbs[X_DLY]; vb[V_XST + i] = 4; )
+                   : vb[V_XST + i] = 1;
+    i += 1;
+  );
+  retrig > 0.5 ? (
+    i = 0;
+    while (i < 3) ( vb[V_PL + i] = 0; vb[V_PR + i] = 0; i += 1; );
+  );
+  // LE SAMPLE REPART DE SON DEPART a chaque note (un echantillonneur), avec son
+  // fondu d'entree.
+  i = 0;
+  while (i < 3) (
+    (was && SMM[i] > 0.5 && smp_play > 0.5) ? (
+      vb[V_SOL + i] = vb[V_SPL + i]; vb[V_SOR + i] = vb[V_SPR + i]; vb[V_SOG + i] = 1;
+    ) : (
+      vb[V_SOG + i] = 0;
+    );
+    vb[V_SPL + i] = smp_s0; vb[V_SPR + i] = smp_s0; vb[V_SAGE + i] = 0;
+    i += 1;
+  );
+);
+
+// ⚠ QUATRE SITES ECRIVENT `V_ST] = 3`, ET AUCUN NE PEUT ETRE OUBLIE. Une
+// enveloppe de modulation qu'un chemin de relachement ne relache pas reste
+// figee a son palier POUR TOUJOURS, et le parametre qu'elle module avec elle.
+// Le 3 ne s'ecrit qu'ici, pour les trois.
+function v_xrelease(vb) local(k) (
+  k = 0;
+  while (k < 3) ( vb[V_XST + k] = 3; k += 1; );
+);
+
+// Meme regle dans l'autre sens : une voix qui MEURT rend ses trois enveloppes
+// au repos. La boucle de rendu ne parcourt que les voix ACTIVES — une voix
+// morte garderait son dernier niveau et le poserait tel quel a la prochaine
+// note qui la reprend. « Une voix LIBRE est deja a zero » doit rester vrai pour
+// ces six mots aussi.
+function v_xkill(vb) local(k) (
+  k = 0;
+  while (k < 3) ( vb[V_XENV + k] = 0; vb[V_XST + k] = 0; k += 1; );
+);
+
+// ---------------------------------------------------------------------------
+// EN MONO, CHAQUE FRAPPE REPART DU DEBUT DE L'ENVELOPPE — TOUJOURS LE MEME TRAJET
+// ---------------------------------------------------------------------------
+// « A chaque trigger, l'attaque devrait redecrire exactement le meme trajet et
+// recommencer toujours au debut. Si elle est trop lente pour arriver au bout,
+// elle s'arrete en chemin pour recommencer » (Cedric, 2026-10-04).
+//
+// La voix unique du mode mono repartait de son NIVEAU COURANT, pour ne pas
+// cliquer. Avec une attaque aussi longue qu'un pas et des notes jointives (le
+// sequenceur a 100 % de duree), une note sur deux partait du HAUT : pas
+// d'attaque, une chute ; la suivante repartait du bas. « Une attaque complete
+// sur deux. » Meme chose avec un maintien ou une chute : la note suivante
+// partait d'un niveau deja haut. Mesure par Tools/eel2.py sur le patch de
+// Cedric : cretes 0,55 / 0,54 / 0,70 / 0,65…, et des sauts de 0,5 entre deux
+// echantillons.
+//
+// ⚠ ET LA PREMIERE CORRECTION ETAIT FAUSSE. Elle laissait chaque note finir son
+// relachement ENTIER sous les suivantes : avec un release d'une mesure en
+// doubles croches, sept traines a la meme hauteur et en phase s'additionnaient
+// (somme des enveloppes 2,1) puis se faisaient voler — un son instable. Une
+// voix mono est UN son : son relachement s'entend jusqu'a la frappe suivante,
+// pas par-dessus. Des relachements qui se chevauchent, c'est Voices >= 2 — et
+// la, chaque note a deja sa voix, partie de zero.
+//
+// Donc : ce que la voix 0 jouait part sur une voix libre — l'enregistrement
+// entier, phases et filtre compris, donc sans discontinuite — et s'y eteint en
+// une dizaine de millisecondes (etat 6, `fade_k`). La voix 0 repart du silence.
+// Pas de voix libre : on reprend la plus ancienne. Une voix muette n'a rien a
+// emporter. Sans ADSR (mode porte), il n'y a pas d'enveloppe a reprendre.
+//
+// ⚠ PAS EN LEGATO : une note liee change la HAUTEUR de la voix qui dure, elle
+// ne la reattaque pas (c'est le glisse du sequenceur). L'appelant ne fait donc
+// pas passer la branche legato par ici.
+function v_tail(vb) local(i k tb old oage) (
+  (use_adsr > 0.5 && vb[V_ACT] > 0.5 && vb[V_ENV] > 0.001) ? (
+    tb = -1; old = -1; oage = -1;
+    i = 1;
+    while (i < NVOICES) (
+      k = voice(i);
+      (tb < 0 && k[V_ACT] < 0.5) ? ( tb = k; );
+      (oage < 0 || k[V_AGE] < oage) ? ( oage = k[V_AGE]; old = k; );
+      i += 1;
+    );
+    tb < 0 ? ( tb = old; );
+    k = 0;
+    loop(VSZ, tb[k] = vb[k]; k += 1;);
+    tb[V_HELD] = 0;
+    // Le fondu, et les trois enveloppes de modulation relachees avec lui.
+    tb[V_ST] = 6; v_xrelease(tb);
+    vb[V_ENV] = 0;
+    k = 0;
+    loop(3, vb[V_XENV + k] = 0; k += 1;);
+  );
+);
+
+function all_voices_off() local(i vb) (
+  i = 0;
+  while (i < NVOICES) (
+    vb = voice(i);
+    vb[V_HELD] = 0;
+    vb[V_ACT] > 0.5 ? ( vb[V_ST] = 3; v_xrelease(vb); );
+    i += 1;
+  );
+  nh = 0;
+);
+
+// ⚠ ET TOUT TOMBAIT SUR LA FRONTIERE DU BLOC. `midirecv` rend un `offset` en
+// echantillons ; il n'etait utilise que pour le renvoi `midisend`, jamais pour
+// l'enveloppe. Toutes les frappes d'un bloc s'appliquaient donc au premier
+// echantillon, et la DERNIERE ecrasait les precedentes : deux notes a dix
+// millisecondes d'intervalle, a 1024 echantillons, se reduisaient a une seule.
+// C'est le meme defaut que le kit sampler a deja paye (CP_KitSampler.jsfx,
+// `V_WAIT`) — « le kit sonne mou ».
+//
+// La file garde l'ordre ET la date. Le cout par echantillon est UNE comparaison
+// d'entiers : `ev_next` vaut -1 tant qu'il n'y a rien a faire.
+EVMAX = 64;
+evq = 128;      // 64 x (offset, note, genre+velocite), 128..319
+ev_n = 0; ev_i = 0; ev_next = -1; smp_i = 0;
+
+function note_push(n, v) local(i, f) (
+  // Deja tenue ? On la remonte au sommet au lieu de la dupliquer : un clavier
+  // qui repete sans relacher (aftertouch mal filtre, MIDI dedouble) remplirait
+  // la pile de la meme note et chasserait les autres.
+  f = -1; i = 0;
+  while (i < nh) ( hold[i * 2] == n ? f = i; i += 1; );
+  f >= 0 ? (
+    while (f < nh - 1) (
+      hold[f * 2] = hold[f * 2 + 2]; hold[f * 2 + 1] = hold[f * 2 + 3]; f += 1;
+    );
+    nh -= 1;
+  );
+  // Pile pleine : c'est la PLUS ANCIENNE qui tombe. Elle est la moins probable
+  // d'etre encore sous un doigt, et perdre la plus recente ferait disparaitre
+  // celle qu'on vient de jouer.
+  nh >= NHOLD ? (
+    i = 0;
+    while (i < nh - 1) (
+      hold[i * 2] = hold[i * 2 + 2]; hold[i * 2 + 1] = hold[i * 2 + 3]; i += 1;
+    );
+    nh -= 1;
+  );
+  hold[nh * 2] = n; hold[nh * 2 + 1] = v; nh += 1;
+);
+
+function note_pop(n) local(i, f) (
+  f = -1; i = 0;
+  while (i < nh) ( hold[i * 2] == n ? f = i; i += 1; );
+  f >= 0 ? (
+    while (f < nh - 1) (
+      hold[f * 2] = hold[f * 2 + 2]; hold[f * 2 + 1] = hold[f * 2 + 3]; f += 1;
+    );
+    nh -= 1;
+  );
+);
+
+// LA TABLE DU COEFFICIENT DU FILTRE, et c'est elle qui rend le filtre payable.
+//
+// g = tan(pi * fc / srate) est la SEULE chose chere d'un SVF, et elle ne depend
+// que de la coupure. Mille vingt-cinq entrees couvrent 20 Hz a 20 kHz par pas
+// d'un centieme d'octave — un pas vaut 1,2 centieme de demi-ton, personne ne
+// l'entend. Consequence : l'enveloppe module un INDEX, pas une frequence, donc
+// une ADDITION par echantillon la ou il aurait fallu une puissance et une
+// tangente. C'est ce qui permet a la coupure de suivre l'enveloppe A L'ECHANTILLON
+// au lieu de sauter d'un bloc a l'autre.
+//
+// ⚠ L'index est en OCTAVES, et c'est le point. Une modulation de hauteur ou de
+// coupure s'AJOUTE en octaves et se MULTIPLIE en hertz ; travailler en hertz
+// aurait remis la puissance dans @sample.
+// LES COEFFICIENTS DES TROIS ENVELOPPES SUPPLEMENTAIRES, ET LEUR SORTIE.
+//
+// ⚠ UNE REGION DE MODULE, PAS DE VOIX. Un coefficient ne depend que d'un
+// slider : le ranger dans la voix l'aurait recalcule huit fois pour le meme
+// resultat. La foulee est une puissance de deux, comme VSZ et pour la meme
+// raison — un champ de plus ne doit pas obliger a recompter la carte.
+//
+// ⚠ LES TROIS BASES S'ECRIVENT EN CLAIR, ET ELLES NE SERVENT QU'A @block.
+// `XE0`, `XE1`, `XE2` valent XENV + k * XSZ, posees ici une fois pour toutes :
+// les douze ecritures de coefficients et les trois lectures de sortie nomment
+// leur enveloppe au lieu de la calculer. C'est la meme regle que
+// `sl_on[0] = 18;` — une table de dispatch se remplit au chargement.
+//
+// ⚠ @sample NE LES LIT PAS, et le commentaire d'avant affirmait le contraire.
+// La boucle des voix recalcule `xb = XENV + xk * XSZ` a chaque tour — une
+// multiplication par enveloppe, par voix active et par echantillon — et elle
+// appelle `v_xkill` sur la branche voix-morte. Il n'y a donc PAS d'economie a
+// chercher ici : ne pas « simplifier » les trois constantes en croyant qu'elles
+// remplacent ce calcul, et ne pas croire la boucle deja sans arithmetique
+// d'adresse au moment d'y poser un champ de plus.
+XENV = 896;     // 3 x 8 = 24 mots, 896..919 — le trou entre le banc et ftab
+XSZ = 8;
+XE0 = 896; XE1 = 904; XE2 = 912;
+X_KA   = 0;     // dt / attaque
+X_KD   = 1;     // 1 - exp(-5 dt / chute)
+X_SUS  = 2;     // le palier, relu tel quel
+X_KR   = 3;     // 1 - exp(-5 dt / relachement)
+X_LAST = 4;     // le MAXIMUM sur les voix, a CET echantillon
+// LE RETARD ET LE MAINTIEN, EN ECHANTILLONS ENTIERS. Ils tiennent dans les
+// mots libres de l'enregistrement : la foulee est une puissance de deux « pour
+// qu'un champ de plus n'oblige pas a recompter la carte », et c'est exactement
+// le cas d'usage prevu. La region reste 3 x 8 = 24 mots, 896..919, et le mot 7
+// reste libre.
+X_DLY  = 5;     // duree du retard, en echantillons
+X_HLD  = 6;     // duree du maintien, en echantillons
+
+ftab = 1024;
+ft_per_oct = 1024 / 9.965784;   // log2(20000 / 20) = 9,965784
+i = 0;
+loop(1025,
+  fc = 20 * 2^(i / ft_per_oct);
+  fc > srate * 0.45 ? fc = srate * 0.45;
+  ftab[i] = tan($pi * fc / srate);
+  i += 1;
+);
+
+// Increments de phase d'un oscillateur, en TOURS PAR ECHANTILLON, largeur
+// stereo comprise. Appelee au BLOC : c'est ici que vivent les deux puissances
+// et les deux divisions.
+//
+// ⚠ LA PHASE EST NORMALISEE (0..1), PLUS EN RADIANS. Elle l'etait ; la ramener
+// a 0..1 a SUPPRIME trois divisions par echantillon et par canal — le triangle
+// en payait deux, la dent de scie une — et donne au polyBLEP l'increment
+// normalise dont il a besoin sans rien recalculer. Le sinus paie en echange une
+// multiplication, ce qui n'est rien a cote du cosinus qu'il appelle deja.
+// Les increments vivent DANS la voix : deux notes ont deux hauteurs, donc six
+// increments, et un tableau par oscillateur n'en tenait que trois.
+function osc_phase_inc(vb, idx, freq, width)
+	local(ratio)
+(
+	width <= 0.0 ? (
+		vb[V_ADL + idx] = freq / srate;
+		vb[V_ADR + idx] = vb[V_ADL + idx];
+	) : (
+		ratio = 2^(width / 1200);
+		vb[V_ADL + idx] = (freq / ratio) / srate;
+		vb[V_ADR + idx] = (freq * ratio) / srate;
+	);
+);
+
+// ---------------------------------------------------------------------------
+// CE QU'UNE VOIX CALCULE AU BLOC : SA HAUTEUR, SON GAIN, SA COUPURE
+// ---------------------------------------------------------------------------
+// ⚠ UNE NOTE QUI NAIT AU MILIEU D'UN BLOC NE PEUT PAS ATTENDRE LE SUIVANT. Ce
+// calcul vivait dans la boucle des voix de @block, pour les seules voix DEJA
+// actives : une note demarree dans @sample (une frappe datee par la file
+// d'evenements) jouait jusqu'a la fin du bloc avec ce que la voix avait AVANT
+// — une voix libre, des increments nuls, donc le silence ; une voix volee,
+// la hauteur et le gain de la note precedente. Jusqu'a 11 ms a 512
+// echantillons. Le sequenceur date CHAQUE note a l'echantillon : presque
+// toutes tombaient dans ce trou. Releve par `Tools/eel2.py`, qui execute ce
+// JSFX hors REAPER.
+//
+// La fonction est la MEME pour les deux appelants : @block l'appelle sur
+// chaque voix active avec le pas de glide du bloc ; @sample l'appelle sur la
+// voix qu'une frappe vient de poser, sans avancer le glide (`gl` = 0) — ou en
+// posant la hauteur d'un coup quand il n'y a pas de glide (`gl` = 1), sinon
+// une voix volee garderait l'ancienne note jusqu'au bloc suivant.
+//
+// Elle lit `nb1..nb3` et `kbd_pitch`, poses par @block AVANT tout @sample du
+// meme bloc.
+function v_prep(vb, gl) local(no m1 m2 m3 bf f2 f3 vn) (
+	gl >= 1 ? (
+		vb[V_CUR] = vb[V_TGT];
+	) : (
+		vb[V_CUR] += (vb[V_TGT] - vb[V_CUR]) * gl;
+	);
+	// ⚠ `midi_mode` RESTE DANS LA CONDITION. Le retirer donnerait une hauteur
+	// au mode Triggered + Manual, et ce n'est PAS neutre : rien ne remet V_CUR
+	// a zero quand on repasse de MIDI a Manual, donc un patch existant
+	// garderait la transposition de sa derniere note MIDI. `kbd_pitch` ouvre la
+	// seule porte neuve, et elle est fermee par defaut. La note jouee, en
+	// demi-tons : ce que `note_ratio` multipliait en hertz.
+	no = ((mode > 0.5 && midi_mode > 0.5) || kbd_pitch) ? vb[V_CUR] : 0;
+
+	// OSC 1 : sa note, calee, puis ses cents. La reference des relatifs est la
+	// note CALEE sans ses cents : un relatif tombe sur la gamme d'OSC 1 avant de
+	// se caler sur la sienne, et les cents d'OSC 1 desaccordent toute la pile,
+	// comme le hertz le faisait avant.
+	m1 = nb1 + no;
+	osc1_scale >= 0.5 ? ( m1 = sg_snap(m1, osc1_scale, osc1_root); );
+	bf = 440 * 2^((m1 - 69 + osc1_fine * 0.01) / 12);
+	m2 = osc2_rel > 0.5 ? m1 + osc2_semi + epm[1] : nb2 + no;
+	osc2_scale >= 0.5 ? ( m2 = sg_snap(m2, osc2_scale, osc2_root); );
+	f2 = 440 * 2^((m2 - 69 + (osc2_rel > 0.5 ? (osc1_fine + osc2_cents) : osc2_fine) * 0.01) / 12);
+	m3 = osc3_rel > 0.5 ? m1 + osc3_semi + epm[2] : nb3 + no;
+	osc3_scale >= 0.5 ? ( m3 = sg_snap(m3, osc3_scale, osc3_root); );
+	f3 = 440 * 2^((m3 - 69 + (osc3_rel > 0.5 ? (osc1_fine + osc3_cents) : osc3_fine) * 0.01) / 12);
+	osc_phase_inc(vb, 0, bf, ewid[0]);
+	osc_phase_inc(vb, 1, f2, ewid[1]);
+	osc_phase_inc(vb, 2, f3, ewid[2]);
+
+	// LA VELOCITE ET LE SUIVI DE CLAVIER SONT AUSSI DES FAITS DE VOIX. Un accord
+	// joue en nuances avait un seul gain et une seule coupure — celle de la
+	// derniere note — donc les nuances ne s'entendaient pas.
+	vn = vb[V_VEL] / 127;
+	vb[V_VG] = 1 - vel_amp * (1 - vn * vn);
+	vb[V_FIDX] = (log(max(20, filt_cutoff) / 20) * 1.442695
+	              + filt_key * (vb[V_NOTE] - 69) / 12
+	              + filt_vel * (vn - 1) * 4) * ft_per_oct;
+);
+
+// ---------------------------------------------------------------------------
+// UNE ROUTE DU BLOC, si sa destination est un code connu. Appelee huit fois
+// par @block avec les sliders PAR LEUR NOM -- la regle du fichier : un slider
+// lu par `slider(101 + i * 4)` serait introuvable pour qui cherche « qui lit
+// fr3_amt » (et `Tools/fxc_jsfx_test.py` le refuse).
+function fr_add(d, sl, a, cc) (
+	d = d | 0;
+	d >= 1 && d <= 19 ? (
+		FRD[fnr] = d;
+		// Slots 1..8 : la banque CP_Mod ; 9 et 10 : MOD A et MOD B du sequenceur
+		// (Sequencer.FAST_SLOT), publies dans le meme canal.
+		FRS[fnr] = max(0, min(9, (sl | 0) - 1));
+		FRA[fnr] = a;
+		FRC[fnr] = cc;
+		FUSE[d] = 1;
+		fnr += 1;
+	);
+);
+
+// LE TICK DES ROUTES RAPIDES — tous les FTICK echantillons, depuis @sample
+// ---------------------------------------------------------------------------
+// La valeur d'une destination LINEAIRE, base + ecart, en normalise de son
+// slider et bornee : exactement ce qu'un lien natif aurait fait.
+function fa_lin(c, base) local(nb en) (
+	nb = (base - FMIN[c]) / (FMAX[c] - FMIN[c]);
+	en = nb + FOFF[c];
+	en < 0 ? en = 0 : en > 1 ? en = 1;
+	FMIN[c] + en * (FMAX[c] - FMIN[c]);
+);
+
+// Le sous-pas `k` du bloc : lit chaque route, somme les ecarts par
+// destination, et pose les valeurs effectives. Les destinations qui se lisent
+// a CHAQUE echantillon (coupure, volumes, amplitude) rampent vers leur cible
+// sur le sous-pas ; les autres (hauteur, largeur, couleur, resonance) changent
+// au tick -- un pas de 0,7 ms, et la hauteur a besoin de ses increments.
+//
+// ⚠ UNE BANQUE QUI NE PUBLIE PLUS N'EST PAS UNE BANQUE QUI PUBLIE ZERO. La
+// memoire garde la derniere valeur ecrite pour toujours : sans le compteur de
+// blocs (`fstale`, voir @block), un LFO retire de la chaine laisserait son
+// dernier ecart applique a jamais.
+function fast_tick(k) local(i c n kk v nb en tgt vi2 vb2 pv2) (
+	c = 1;
+	loop(19, FOFF[c] = 0; c += 1;);
+	n = fstale > 4 ? 0 : gmem[fgb];
+	n >= 1 ? (
+		kk = k < n ? k : n - 1;
+		i = 0;
+		loop(fnr,
+			v = gmem[fgb + FVALS + FRS[i] * FMAXSUB + kk];
+			// ⚠ EN DEUX TEMPS : deux crochets fermants a la suite fermeraient
+			// la chaine longue Lua qui porte ce source.
+			c = FRD[i];
+			FOFF[c] += FRA[i] * (v - FRC[i]);
+			i += 1;
+		);
+	);
+	FUSE[1] ? epm[0] = fa_lin(1, osc1_pm);
+	FUSE[2] ? epm[1] = fa_lin(2, osc2_pm);
+	FUSE[3] ? epm[2] = fa_lin(3, osc3_pm);
+	FUSE[4] ? (
+		// La coupure vit en octaves (index de table) : sur un slider `:log`, un
+		// ecart de normalise EST un intervalle, log2(1000) octaves par unite.
+		nb = log(max(filt_cutoff, 20) / 20) / log(1000);
+		en = nb + FOFF[4];
+		en < 0 ? en = 0 : en > 1 ? en = 1;
+		tgt = (en - nb) * 9.965784284662087 * ft_per_oct;
+		f_off_d = (tgt - f_off) / FTICK;
+	);
+	FUSE[5] ? fk = 2 - 1.98 * fa_lin(5, filt_res);
+	FUSE[6] ? evd[0] = (fa_lin(6, osc1_vol) - evol[0]) / FTICK;
+	FUSE[7] ? evd[1] = (fa_lin(7, osc2_vol) - evol[1]) / FTICK;
+	FUSE[8] ? evd[2] = (fa_lin(8, osc3_vol) - evol[2]) / FTICK;
+	FUSE[9] ? eamp_d = (fa_lin(9, amplitude) - eamp) / FTICK;
+	FUSE[19] ? efm_d = (fa_lin(19, osc1_fm) - efm) / FTICK;
+	FUSE[10] ? ewid[0] = fa_lin(10, osc1_width);
+	FUSE[11] ? ewid[1] = fa_lin(11, osc2_width);
+	FUSE[12] ? ewid[2] = fa_lin(12, osc3_width);
+	FUSE[13] ? ecol[0] = fa_lin(13, osc1_color);
+	FUSE[14] ? ecol[1] = fa_lin(14, osc2_color);
+	FUSE[15] ? ecol[2] = fa_lin(15, osc3_color);
+	// LES BALANCES : la meme loi lineaire que @block, sur la valeur modulee. Un
+	// pas par tick (0,7 ms), comme la largeur et la couleur.
+	FUSE[16] || FUSE[17] || FUSE[18] ? (
+		epan[0] = FUSE[16] ? fa_lin(16, osc1_pan) : osc1_pan;
+		epan[1] = FUSE[17] ? fa_lin(17, osc2_pan) : osc2_pan;
+		epan[2] = FUSE[18] ? fa_lin(18, osc3_pan) : osc3_pan;
+		i = 0;
+		loop(3,
+			pv2 = epan[i];
+			panl[i] = pv2 <= 0 ? 1 : 1 - pv2;
+			panr[i] = pv2 >= 0 ? 1 : 1 + pv2;
+			i += 1;
+		);
+	);
+	// La hauteur et la largeur passent par les increments de phase de chaque
+	// voix ACTIVE. Pas de glide ici (gl = 0) : il avance au bloc.
+	fpit ? (
+		nb1 = nb1_0 + epm[0];
+		nb2 = nb2_0 + epm[1];
+		nb3 = nb3_0 + epm[2];
+		vi2 = 0;
+		loop(NVOICES,
+			vb2 = voice(vi2);
+			vb2[V_ACT] > 0.5 ? v_prep(vb2, 0);
+			vi2 += 1;
+		);
+	);
+);
+
+// Residu polyBLEP d'un saut unitaire VERS LE HAUT. `t` est la phase normalisee,
+// `d` l'increment par echantillon. Hors des deux voisinages du saut ca coute
+// deux comparaisons et rien d'autre : l'anti-repliement peut donc rester allume
+// sans qu'on ait a y penser.
+//
+// ⚠ IL NE CORRIGE QUE LES SAUTS. Le carre en a deux, la dent de scie un, et le
+// TRIANGLE AUCUN — sa pente casse mais sa valeur ne saute pas, donc son
+// repliement decroit en 1/n^2 et un BLEP n'y ferait rien. C'est ecrit ici parce
+// que « le triangle n'est pas traite » ressemble a un oubli et n'en est pas un.
+//
+// ⚠ AU-DELA D'UN QUART DE TOUR PAR ECHANTILLON, IL NE CORRIGE PLUS RIEN. Les
+// deux voisinages du saut se recouvrent des que d depasse 0,5, et la correction
+// s'appliquerait alors sur presque tout le cycle au lieu de ses deux bords. A
+// cette hauteur — au-dela d'un huitieme de la frequence d'echantillonnage — une
+// dent de scie n'a de toute facon plus que sa fondamentale d'audible : on rend
+// zero, ce qui est exactement « rien a corriger ».
+function blep(t, d)
+	local(x)
+(
+	d >= 0.25 ? (
+		0;
+	) : t < d ? (
+		x = t / d;
+		x + x - x * x - 1;
+	) : t > 1 - d ? (
+		x = (t - 1) / d;
+		x * x + x + x + 1;
+	) : (
+		0;
+	);
+);
+
+// LE polyBLEP D'UNE PHASE MODULEE (2026-10-10). Sous FM, la phase LUE
+// n'avance pas de son increment : elle fait le pas que la modulation lui donne,
+// et elle peut RECULER. La correction prenait l'increment de la note -- elle
+// tombait a cote des sauts, ou en inventait la ou il n'y en avait pas : une
+// dent de scie modulee sonnait AUSSI crue anti-repliement allume qu'eteint. Elle
+// prend maintenant le pas reellement fait depuis l'echantillon d'avant (ramene
+// a un demi-tour), et le miroir quand il recule : lue a l'envers, la dent de
+// scie saute vers le BAS.
+function blep_saw_pm(q, dq) (
+	dq >= 0 ? blep(q, dq) : -blep(1 - q, -dq);
+);
+function blep_sq_pm(q, dq) local(m) (
+	dq >= 0 ? (
+		blep(q, dq) - blep(q < 0.5 ? q + 0.5 : q - 0.5, dq);
+	) : (
+		m = 1 - q;
+		blep(m < 0.5 ? m + 0.5 : m - 0.5, -dq) - blep(m, -dq);
+	);
+);
+
+// ---------------------------------------------------------------------------
+// LE SAMPLE : LIRE
+// ---------------------------------------------------------------------------
+// Hermite a quatre points (Catmull-Rom) sur le canal c d'un niveau (base `b`,
+// `n` trames, pas `st`), a la position x en trames DE CE NIVEAU. Les bords
+// repetent la premiere et la derniere trame.
+function smp_h4(b, n, st, c, x) local(i f i0 i2 i3 y0 y1 y2 y3) (
+	i = floor(x); f = x - i;
+	i0 = i - 1; i2 = i + 1; i3 = i + 2;
+	i < 0 ? i = 0 : i > n - 1 ? i = n - 1;
+	i0 < 0 ? i0 = 0 : i0 > n - 1 ? i0 = n - 1;
+	i2 < 0 ? i2 = 0 : i2 > n - 1 ? i2 = n - 1;
+	i3 < 0 ? i3 = 0 : i3 > n - 1 ? i3 = n - 1;
+	y0 = b[i0 * st + c]; y1 = b[i * st + c];
+	y2 = b[i2 * st + c]; y3 = b[i3 * st + c];
+	((((y3 - y0) * 0.5 + (y1 - y2) * 1.5) * f
+	  + (y0 - 2.5 * y1 + 2 * y2 - 0.5 * y3)) * f + (y2 - y0) * 0.5) * f + y1;
+);
+
+// Le niveau de detail d'un pas de `rt` trames par echantillon : le niveau lv
+// (2^lv <= rt) et la part smp_lf du niveau du dessus, qui seul ne replie rien
+// (il est lu a moins d'une trame par echantillon).
+// ⚠ LE FONDU NE SUIT PAS LA FRACTION D'OCTAVE. Un fondu lineaire en log2 gardait
+// 12 % du niveau du dessous a +11 demi-tons -- lu a 1,84 trame par echantillon,
+// sa moitie haute revenait en miroir jusqu'a 4 kHz. Le replie d'un niveau lu a r
+// trames par echantillon tombe entre (2 - r) x Nyquist et Nyquist : sous
+// r = 1,1 il reste au-dessus de 21 kHz, a 1,4 au-dessus de 14 kHz. Le niveau du
+// dessous ne sert donc que jusque-la, en fondu de 1,1 a 1,4 ; au-dela, seul le
+// niveau du dessus joue -- un peu moins d'aigu, aucun repli dans le medium.
+// Un niveau pas encore bati laisse la place au meilleur du dessous.
+function smp_lvl(rt) local(l rp) (
+	rt = abs(rt);
+	rt <= 1.1 ? (
+		smp_lv = 0; smp_lf = 0;
+	) : (
+		l = log(rt) * 1.4426950408889634;
+		smp_lv = floor(l);
+		smp_lv >= SMP_NL ? (
+			smp_lv = SMP_NL; smp_lf = 0;
+		) : (
+			rp = rt * SLS[smp_lv];          // le pas au niveau lv, dans [1, 2)
+			smp_lf = (rp - 1.1) * 3.3333333333333335;
+			smp_lf < 0 ? smp_lf = 0;
+			smp_lf >= 1 ? ( smp_lv += 1; smp_lf = 0; );
+		);
+		while (smp_lv > 0 && SLD[smp_lv] < 0.5) ( smp_lv -= 1; smp_lf = 0; );
+		(smp_lf > 0 && SLD[smp_lv + 1] < 0.5) ? smp_lf = 0;
+	);
+);
+
+// La valeur du canal c (0 gauche, 1 droite) a la position x, en trames du
+// niveau 0, au niveau pose par `smp_lvl`. Un fichier mono sert les deux.
+function smp_val(c, x) local(a cc) (
+	smp_lv < 0.5 ? (
+		cc = c < smp_nch ? c : smp_nch - 1;
+		a = smp_h4(SMP, smp_frames, smp_nch, cc, x);
+	) : (
+		cc = c < smp_mch ? c : smp_mch - 1;
+		a = smp_h4(SLB[smp_lv], SLN[smp_lv], smp_mch, cc, x * SLS[smp_lv]);
+	);
+	smp_lf > 0 ? (
+		cc = c < smp_mch ? c : smp_mch - 1;
+		a += (smp_h4(SLB[smp_lv + 1], SLN[smp_lv + 1], smp_mch, cc,
+		             x * SLS[smp_lv + 1]) - a) * smp_lf;
+	);
+	a;
+);
+
+// La valeur a la position p (trames), decalee de `pm` trames par la FM, avec
+// le FONDU DE BOUCLE : sur les `smp_xn` dernieres trames de la boucle (les
+// premieres a l'envers), la matiere de l'autre bout monte pendant que celle-ci
+// descend ; au repli, on repart apres ce bout deja joue (voir `smp_ll`). La
+// periode ne change pas, et la couture disparait -- la regle du Kit Sampler.
+function smp_at(c, p, pm) local(a xs) (
+	a = smp_val(c, p + pm);
+	(smp_lp && smp_xn > 0) ? (
+		xs = smp_dir > 0 ? p - (smp_lb - smp_xn) : (smp_la + smp_xn) - p;
+		(xs > 0 && xs <= smp_xn) ? (
+			a += (smp_val(c, (smp_dir > 0 ? smp_la + xs : smp_lb - xs) + pm) - a) * (xs / smp_xn);
+		);
+	);
+	a;
+);
+
+// Avance une position de `r` trames, avec le repli de la boucle.
+function smp_adv(p, r) (
+	p += r;
+	smp_lp ? (
+		smp_dir > 0 ? (
+			p >= smp_lb ? ( p -= smp_ll; p >= smp_lb ? p = smp_la + smp_xn; );
+		) : (
+			p < smp_la ? ( p += smp_ll; p < smp_la ? p = smp_lb - smp_xn; );
+		);
+	);
+	p;
+);
+
+// UN OSCILLATEUR EN MODE SAMPLE (voix vb, oscillateur idx) : out_l / out_r.
+// Les increments de la voix (adjl / adjr, en cycles par echantillon, largeur,
+// glide et routes compris) deviennent des TRAMES : `smp_k` trames par cycle de
+// la note de base. La FM decale la LECTURE comme pour une forme -- un tour
+// vaut une periode de la note de base.
+// Trois fondus, pour qu'aucun saut ne sorte : l'entree de la note (1 ms), la
+// fin de la region sans boucle (2 ms de matiere), et le chargement (smp_lg).
+// Une voix VOLEE en polyphonie garde 2 ms de son ancienne lecture (V_SO*).
+function smp_osc(vb, idx, adjl, adjr, pml, pmr) local(pl pr rl rr g w ol orr og) (
+	smp_play < 0.5 ? (
+		out_l = 0; out_r = 0;
+	) : (
+		pl = vb[V_SPL + idx]; pr = vb[V_SPR + idx];
+		rl = adjl * smp_k * smp_dir;
+		rr = adjr * smp_k * smp_dir;
+		(!smp_lp && (smp_dir > 0 ? pl >= smp_b : pl <= smp_a)) ? (
+			out_l = 0; out_r = 0;
+		) : (
+			smp_lvl(rl);
+			out_l = smp_at(0, pl, pml * smp_k);
+			(pr == pl && rr == rl && pmr == pml) ? (
+				out_r = smp_nch < 2 ? out_l : smp_at(1, pl, pml * smp_k);
+			) : (
+				smp_lvl(rr);
+				out_r = smp_at(1, pr, pmr * smp_k);
+			);
+			g = 1;
+			vb[V_SAGE + idx] < smp_fi ? (
+				g = vb[V_SAGE + idx] / smp_fi;
+				vb[V_SAGE + idx] += 1;
+			);
+			!smp_lp ? (
+				w = smp_dir > 0 ? (smp_b - pl) / smp_fn : (pl - smp_a) / smp_fn;
+				w < 1 ? g *= max(0, w);
+			);
+			out_l *= g; out_r *= g;
+		);
+		// La voix volee : son ancienne lecture s'eteint par-dessus.
+		og = vb[V_SOG + idx];
+		og > 0 ? (
+			ol = vb[V_SOL + idx]; orr = vb[V_SOR + idx];
+			smp_lvl(rl);
+			out_l += smp_at(0, ol, 0) * og;
+			out_r += smp_at(1, orr, 0) * og;
+			vb[V_SOL + idx] = smp_adv(ol, rl);
+			vb[V_SOR + idx] = smp_adv(orr, rr);
+			og -= smp_fo;
+			vb[V_SOG + idx] = og > 0 ? og : 0;
+		);
+		vb[V_SPL + idx] = smp_adv(pl, rl);
+		vb[V_SPR + idx] = smp_adv(pr, rr);
+		out_l *= smp_lg; out_r *= smp_lg;
+	);
+);
+
+// ---------------------------------------------------------------------------
+// LE SAMPLE : CHARGER (au bloc, par morceaux) ET DECIMER
+// ---------------------------------------------------------------------------
+// Le chemin voulu en chaine EEL -- le seul moyen d'en passer un a file_open.
+// Meme recette que le Kit Sampler (eprouvee dans REAPER) : une chaine
+// temporaire remplie caractere par caractere, puis copiee.
+function smp_str(dst) local(o b) (
+	o = 0; b = #;
+	while (o < SMP_PLEN - 1 && SMP_PATH[o] > 0) ( str_setchar(b, o, SMP_PATH[o]); o += 1; );
+	strcpy_substr(dst, b, 0, o);
+	o;
+);
+
+// Le chemin voulu est-il celui qui est charge (ou en route) ?
+function smp_same() local(i d) (
+	i = 0; d = 0;
+	while (i < SMP_PLEN && d == 0 && (SMP_PATH[i] > 0 || SMP_CUR[i] > 0)) (
+		SMP_PATH[i] != SMP_CUR[i] ? d = 1;
+		i += 1;
+	);
+	d == 0;
+);
+
+// Ouvre le fichier voulu (le son s'est deja eteint, voir @block). Un chemin
+// vide VIDE le sample.
+function smp_begin() local(n h nch sr avail i) (
+	smp_play = 0; smp_frames = 0; smp_full = 0;
+	i = 0; loop(SMP_NL + 1, SLD[i] = 0; i += 1;);
+	i = 0; loop(SMP_PLEN, SMP_CUR[i] = SMP_PATH[i]; i += 1;);
+	smp_pv += 1;
+	n = smp_str(#smp_path);
+	n < 1 ? (
+		smp_state = 0; smp_status = 0;
+	) : (
+		h = file_open(#smp_path);
+		h >= 0 ? (
+			nch = 0; sr = 0;
+			file_riff(h, nch, sr);
+			(nch > 0 && sr > 0) ? (
+				avail = file_avail(h);
+				smp_full = floor(avail / nch);
+				smp_frames = min(smp_full, floor(SMP_CAP / nch));
+				smp_nch = nch; smp_sr = sr; smp_h = h; smp_rd = 0;
+				smp_state = 2; smp_status = 1;
+			) : (
+				file_close(h);
+				smp_state = 0; smp_status = 3;
+			);
+		) : (
+			smp_state = 0; smp_status = 3;
+		);
+	);
+);
+
+// Un morceau du fichier par bloc. Fini, les niveaux se posent, le sample
+// devient jouable (au niveau 0) et le son remonte.
+function smp_rdc() local(n got i) (
+	n = smp_frames * smp_nch - smp_rd;
+	n > SMP_RDCH ? n = SMP_RDCH;
+	got = n > 0 ? file_mem(smp_h, SMP + smp_rd, n) : 0;
+	smp_rd += got;
+	(got < n || smp_rd >= smp_frames * smp_nch) ? (
+		file_close(smp_h); smp_h = -1;
+		smp_frames = floor(smp_rd / smp_nch);
+		smp_frames >= 4 ? (
+			smp_mch = smp_nch < 2 ? 1 : 2;
+			SLB[0] = SMP; SLN[0] = smp_frames; SLD[0] = 1; SLS[0] = 1;
+			i = 1;
+			loop(SMP_NL,
+				SLN[i] = ceil(SLN[i - 1] * 0.5);
+				SLB[i] = i == 1 ? SMP + smp_frames * smp_nch : SLB[i - 1] + SLN[i - 1] * smp_mch;
+				SLS[i] = SLS[i - 1] * 0.5;
+				SLD[i] = 0;
+				i += 1;
+			);
+			smp_ml = 1; smp_mi = 0;
+			smp_state = 3; smp_play = 1;
+			smp_fresh = 1;
+			smp_status = smp_frames < smp_full ? 4 : 2;
+		) : (
+			smp_state = 0; smp_status = 3; smp_play = 0;
+		);
+	);
+);
+
+// Une trame decimee : le demi-bande centre sur la trame 2m de la source (base
+// sb, sn trames, pas st). Zero dephasage : la trame m du niveau L est la trame
+// m x 2^L du fichier.
+function smp_dec(sb, sn, st, c, m) local(i j k a b2 y) (
+	i = 2 * m;
+	y = HBC * sb[(i < sn ? i : sn - 1) * st + c];
+	j = 0;
+	(i >= 23 && i + 23 <= sn - 1) ? (
+		loop(12,
+			k = 2 * j + 1;
+			y += HB[j] * (sb[(i - k) * st + c] + sb[(i + k) * st + c]);
+			j += 1;
+		);
+	) : (
+		loop(12,
+			k = 2 * j + 1;
+			a = i - k; a < 0 ? a = 0; a > sn - 1 ? a = sn - 1;
+			b2 = i + k; b2 > sn - 1 ? b2 = sn - 1;
+			y += HB[j] * (sb[a * st + c] + sb[b2 * st + c]);
+			j += 1;
+		);
+	);
+	y;
+);
+
+// Un morceau du niveau en cours par bloc ; un niveau fini sert aussitot.
+function smp_mipc() local(sb sn st db dn n c) (
+	sb = smp_ml == 1 ? SMP : SLB[smp_ml - 1];
+	sn = SLN[smp_ml - 1];
+	st = smp_ml == 1 ? smp_nch : smp_mch;
+	db = SLB[smp_ml]; dn = SLN[smp_ml];
+	n = dn - smp_mi;
+	n > SMP_MIPCH ? n = SMP_MIPCH;
+	loop(n,
+		c = 0;
+		loop(smp_mch,
+			db[smp_mi * smp_mch + c] = smp_dec(sb, sn, st, c, smp_mi);
+			c += 1;
+		);
+		smp_mi += 1;
+	);
+	smp_mi >= dn ? (
+		SLD[smp_ml] = 1;
+		smp_ml += 1; smp_mi = 0;
+		smp_ml > SMP_NL ? smp_state = 4;
+	);
+);
+
+// One oscillator sample. Writes out_l/out_r (globals). `width` ne sert plus
+// qu'a savoir si les deux canaux sont decorreles (bruit, clic) : la frequence
+// arrive deja desaccordee dans adl/adr.
+//
+// `pml` / `pmr` : la MODULATION DE PHASE, en tours, par canal. La forme se lit
+// a la phase DECALEE (`ql`, `qr`) ; la phase qui AVANCE reste la sienne -- sans
+// quoi la modulation s'accumulerait et la note derivait. A zero, `ql` EST `pl`,
+// au bit pres : le rendu d'avant ne change pas.
+function osc_sample(vb, idx, wave, adjl, adjr, width, color, anti, pml, pmr)
+	local(pl pr ql qr w ce dql dqr)
+(
+	SMM[idx] > 0.5 ? (
+		smp_osc(vb, idx, adjl, adjr, pml, pmr);
+	) : wave < 3.5 ? (
+		pl = vb[V_PL + idx];
+		pr = vb[V_PR + idx];
+		pml != 0 ? ( ql = pl + pml; ql -= floor(ql); ) : ( ql = pl; );
+		pmr != 0 ? ( qr = pr + pmr; qr -= floor(qr); ) : ( qr = pr; );
+		wave < 0.5 ? (
+			out_l = cos(pi2 * ql);
+			out_r = cos(pi2 * qr);
+		) : wave < 1.5 ? (
+			out_l = 4.0 * ql - 1.0;
+			out_l > 1.0 ? out_l = 2.0 - out_l;
+			out_r = 4.0 * qr - 1.0;
+			out_r > 1.0 ? out_r = 2.0 - out_r;
+		) : wave < 2.5 ? (
+			out_l = ql < 0.5 ? 1 : -1;
+			out_r = qr < 0.5 ? 1 : -1;
+			anti ? (
+				(pml != 0 || pmr != 0) ? (
+					dql = ql - vb[V_QL]; dql -= floor(dql + 0.5);
+					dqr = qr - vb[V_QR]; dqr -= floor(dqr + 0.5);
+					out_l += blep_sq_pm(ql, dql);
+					out_r += blep_sq_pm(qr, dqr);
+				) : (
+					out_l += blep(ql, adjl)
+					       - blep(ql < 0.5 ? ql + 0.5 : ql - 0.5, adjl);
+					out_r += blep(qr, adjr)
+					       - blep(qr < 0.5 ? qr + 0.5 : qr - 0.5, adjr);
+				);
+			);
+		) : (
+			out_l = 1.0 - ql - ql;
+			out_r = 1.0 - qr - qr;
+			anti ? (
+				(pml != 0 || pmr != 0) ? (
+					dql = ql - vb[V_QL]; dql -= floor(dql + 0.5);
+					dqr = qr - vb[V_QR]; dqr -= floor(dqr + 0.5);
+					out_l += blep_saw_pm(ql, dql);
+					out_r += blep_saw_pm(qr, dqr);
+				) : (
+					out_l += blep(ql, adjl);
+					out_r += blep(qr, adjr);
+				);
+			);
+		);
+		// La phase LUE d'OSC 1, pour le pas de la correction sous FM : gardee a
+		// chaque echantillon, pour qu'elle soit juste des le premier echantillon
+		// module.
+		idx == 0 ? ( vb[V_QL] = ql; vb[V_QR] = qr; );
+		pl += adjl; pl >= 1.0 ? pl -= 1.0;
+		pr += adjr; pr >= 1.0 ? pr -= 1.0;
+		vb[V_PL + idx] = pl;
+		vb[V_PR + idx] = pr;
+	) : wave < 4.5 ? (
+		w = rand() * 2 - 1;
+		vb[V_BNL + idx] += (w - vb[V_BNL + idx]) * 0.1;
+		vb[V_BNL + idx] = max(-1, min(1, vb[V_BNL + idx]));
+		out_l = w * (1 - color) + vb[V_BNL + idx] * color;
+		width <= 0.0 ? (
+			out_r = out_l;
+		) : (
+			w = rand() * 2 - 1;
+			vb[V_BNR + idx] += (w - vb[V_BNR + idx]) * 0.1;
+			vb[V_BNR + idx] = max(-1, min(1, vb[V_BNR + idx]));
+			out_r = w * (1 - color) + vb[V_BNR + idx] * color;
+		);
+	) : (
+		vb[V_CLK + idx] < 0.005 ? (
+			ce = 1 - vb[V_CLK + idx] / 0.005;
+			ce = ce * ce;
+			out_l = (rand() * 2 - 1) * ce;
+			out_r = width <= 0.0 ? out_l : (rand() * 2 - 1) * ce;
+			vb[V_CLK + idx] += dt;
+		) : (
+			out_l = 0;
+			out_r = 0;
+		);
+	);
+);
+
+// La remise en phase vit maintenant dans `v_start` : elle porte sur LA voix qui
+// demarre, pas sur les trois oscillateurs de tout le monde. Rearmer les phases
+// de toutes les voix a chaque note aurait fait sauter les notes deja tenues —
+// exactement ce que la polyphonie existe pour ne plus faire.
+
+@block
+// LE PIC, POUR LA BARRE D'ETAT. Publie ce qui a ete releve depuis le bloc
+// precedent, puis laisse retomber : un crete-metre qui ne redescend pas ne
+// mesure plus rien apres la premiere note.
+peak_out = min(1, peak_run);
+peak_run *= 0.7;
+
+// ---------------------------------------------------------------------------
+// LES DUREES DES QUATRE ENVELOPPES — RETARD, MAINTIEN, ET SYNCHRO AU TEMPO
+// ---------------------------------------------------------------------------
+// ⚠ EN TETE DE @block, ET PAS EN QUEUE COMME LES COEFFICIENTS L'ETAIENT. Le
+// declenchement manuel appelle `v_start` PLUS BAS dans ce meme bloc, et
+// `v_start` a besoin du compte d'echantillons de retard pour choisir son etat
+// de depart. Calcules apres lui, les retards auraient valu ceux du bloc
+// PRECEDENT — et zero au tout premier.
+//
+// ⚠ `tempo` EST UNE VARIABLE D'EEL2, POSEE PAR REAPER AVANT CHAQUE @block, ET
+// ELLE RESTE VALIDE TRANSPORT ARRETE : c'est le tempo du projet a la position
+// courante. Une enveloppe n'a pas de phase a verrouiller — elle est declenchee
+// A LA NOTE — donc elle n'a besoin que de DUREES, et une note jouee au clavier
+// de la fenetre transport arrete garde les siennes justes. C'est la difference
+// STRUCTURELLE avec les LFO synchronises de CP_Mod, qui verrouillent leur phase
+// sur `beat_position` et GELENT quand le transport s'arrete : eux ont une
+// phase, elles non. La divergence est voulue, ce n'est pas un oubli.
+//
+// ⚠ UN TEMPO NUL N'EST PAS UN TEMPO LENT. L'idiome maison `max(tempo, 1)`
+// rendrait 60 secondes par noire, donc une attaque de 15 s sur un 1/16 :
+// l'instrument se tairait et rien ne le dirait — la panne silencieuse exacte
+// qu'on refuse. On retombe sur 120 BPM, le tempo par defaut d'un projet REAPER.
+// Une valeur absurde donne un resultat AUDIBLE, jamais un silence.
+//
+// ⚠ ET SURTOUT PAS UN @slider : il tourne a chaque bloc pendant un glisser de
+// bouton et sous modulation native. Meme raison que la frontiere de mode.
+//
+// Cout par bloc : UNE division pour `spb`, quatre chaines ternaires, une
+// poignee de multiplications. Cout dans @sample : ZERO division neuve, zero
+// exponentielle neuve — le retard et le maintien sont un decrement d'entier et
+// une comparaison.
+spb = tempo > 1 ? 60 / tempo : 0.5;
+
+// ENV 1. Ses trois durees descendent dans des scalaires de module ; les deux
+// autres deviennent des comptes d'echantillons.
+e1_u = env_beats(env1_sync) * spb;
+e1_u > 0 ? (
+  e1_a = env_steps(attack, 2, 1) * e1_u;
+  e1_d = env_steps(decay, 2, 1) * e1_u;
+  e1_r = env_steps(release, 5, 1) * e1_u;
+  e1_dn = floor(env_steps(env1_delay, 2, 0) * e1_u * srate);
+  e1_hn = floor(env_steps(env1_hold, 2, 0) * e1_u * srate);
+) : (
+  // ⚠ UNE COPIE, PAS UNE CONVERSION. `e1_a = attack` rend le meme flottant au
+  // bit pres : `dt / e1_a` est litteralement `dt / attack`. C'est ce qui
+  // garantit qu'un patch en Free sonne EXACTEMENT comme hier.
+  e1_a = attack; e1_d = decay; e1_r = release;
+  e1_dn = floor(env1_delay * srate);
+  e1_hn = floor(env1_hold * srate);
+);
+
+// LES COEFFICIENTS DES TROIS ENVELOPPES SUPPLEMENTAIRES, AU BLOC — ET C'EST LA
+// RAISON D'ETRE DE LA REGION `XENV`. L'exponentielle de la chute et celle du
+// relachement sont les deux seules choses cheres d'une ADSR ; les laisser dans
+// @sample, comme le fait encore celle du dessus, les paierait TROIS FOIS PAR
+// VOIX ET PAR ECHANTILLON — vingt-quatre exponentielles pour un resultat qui
+// ne change qu'au bloc. Meme regle que les increments de phase et que l'echelle
+// en octaves du filtre : ce qui ne change qu'au bloc se calcule au bloc.
+//
+// ⚠ LES SLIDERS SE LISENT PAR LEUR NOM, PAS PAR `slider(60 + k * 5)`. La foulee
+// de 5 est vraie, et elle est ecrite dans le Lua (EXTRA_ENV_STRIDE) ou elle
+// sert ; ici elle n'economiserait rien et rendrait douze sliders introuvables
+// pour qui cherche « qui lit env3_decay ».
+xu = env_beats(env2_sync) * spb;
+xu > 0 ? (
+  xa = env_steps(env2_attack, 2, 1) * xu;
+  xd = env_steps(env2_decay, 2, 1) * xu;
+  xr = env_steps(env2_release, 5, 1) * xu;
+  xdl = env_steps(env2_delay, 2, 0) * xu;
+  xhl = env_steps(env2_hold, 2, 0) * xu;
+) : (
+  xa = env2_attack; xd = env2_decay; xr = env2_release;
+  xdl = env2_delay; xhl = env2_hold;
+);
+XE0[X_KA]  = dt / xa;
+XE0[X_KD]  = 1 - exp(-5 * dt / xd);
+XE0[X_SUS] = env2_sustain;
+XE0[X_KR]  = 1 - exp(-5 * dt / xr);
+XE0[X_DLY] = floor(xdl * srate);
+XE0[X_HLD] = floor(xhl * srate);
+
+xu = env_beats(env3_sync) * spb;
+xu > 0 ? (
+  xa = env_steps(env3_attack, 2, 1) * xu;
+  xd = env_steps(env3_decay, 2, 1) * xu;
+  xr = env_steps(env3_release, 5, 1) * xu;
+  xdl = env_steps(env3_delay, 2, 0) * xu;
+  xhl = env_steps(env3_hold, 2, 0) * xu;
+) : (
+  xa = env3_attack; xd = env3_decay; xr = env3_release;
+  xdl = env3_delay; xhl = env3_hold;
+);
+XE1[X_KA]  = dt / xa;
+XE1[X_KD]  = 1 - exp(-5 * dt / xd);
+XE1[X_SUS] = env3_sustain;
+XE1[X_KR]  = 1 - exp(-5 * dt / xr);
+XE1[X_DLY] = floor(xdl * srate);
+XE1[X_HLD] = floor(xhl * srate);
+
+xu = env_beats(env4_sync) * spb;
+xu > 0 ? (
+  xa = env_steps(env4_attack, 2, 1) * xu;
+  xd = env_steps(env4_decay, 2, 1) * xu;
+  xr = env_steps(env4_release, 5, 1) * xu;
+  xdl = env_steps(env4_delay, 2, 0) * xu;
+  xhl = env_steps(env4_hold, 2, 0) * xu;
+) : (
+  xa = env4_attack; xd = env4_decay; xr = env4_release;
+  xdl = env4_delay; xhl = env4_hold;
+);
+XE2[X_KA]  = dt / xa;
+XE2[X_KD]  = 1 - exp(-5 * dt / xd);
+XE2[X_SUS] = env4_sustain;
+XE2[X_KR]  = 1 - exp(-5 * dt / xr);
+XE2[X_DLY] = floor(xdl * srate);
+XE2[X_HLD] = floor(xhl * srate);
+
+// ---------------------------------------------------------------------------
+// UN CHANGEMENT DE MODE EST UNE FRONTIERE, PAS UN REGLAGE
+// ---------------------------------------------------------------------------
+// ⚠ LE BANC DE VOIX AVAIT TROIS PROPRIETAIRES QUI NE SE RECONCILIAIENT JAMAIS.
+// Le mode continu force la voix 0 vivante avec V_ST = 0 ; la chaine d'enveloppe
+// du declenche ne connait que 1, 2 et 3 — la voix restait donc active avec son
+// enveloppe GELEE, et le bourdon ne s'arretait plus jamais. Symetriquement,
+// toute cette chaine vit sous `mode > 0.5` : passer en continu figeait les voix
+// 1..7 sans que rien ne puisse plus les eteindre.
+//
+// ⚠ ET CE N'EST PAS `mode` SEUL. Deux autres reglages fabriquent EXACTEMENT la
+// meme fuite :
+//   · `midi_mode` garde le `midirecv` ci-dessous. Sortir du mode MIDI une
+//     touche enfoncee jette son note-off — le filet all-notes-off qui est cense
+//     couvrir ce cas est alimente par ce meme midirecv qu'on vient de couper,
+//     donc il ne peut PAS s'executer. Le commentaire qui le promettait mentait.
+//   · `poly` est une DESTINATION DE MODULATION NATIVE (MOD_P[54]) : un lien
+//     peut le faire traverser 1,5 au bloc, sans que personne ne touche a rien.
+//     Huit notes tenues puis Voices ramene a 1, et le note-off monophonique ne
+//     regarde plus que la voix 0 : les sept autres sont perdues pour toujours.
+//
+// ⚠ ON COMPARE LES DECISIONS, PAS LES VALEURS. `poly` n'est lu que par
+// `poly < 1.5` : sous modulation native il prend des valeurs continues, et une
+// arete sur le nombre brut ferait un all-notes-off A CHAQUE BLOC. La cle porte
+// donc les trois booleens que le DSP consulte vraiment, et rien d'autre.
+//
+// Le cout est UNE comparaison par bloc — le meme idiome que `last_manual`. Et
+// surtout PAS un @slider : il tourne a chaque bloc pendant un glisser de bouton
+// et sous modulation native, ce qui couperait le son a chaque tour de
+// potentiometre.
+mode_key = (mode > 0.5) + (midi_mode > 0.5) * 2 + (poly < 1.5) * 4;
+mode_key != last_mode ? (
+	last_mode >= 0 ? (
+		// V_HELD = 0 partout, V_ST = 3 sur les actives, nh = 0. Le relachement
+		// dure Release : une coupure nette depuis gate = 1 ferait un clic franc.
+		all_voices_off();
+		mode < 0.5 ? (
+			// ⚠ EN CONTINU UNE VOIX NE PEUT PAS MOURIR. La chaine d'enveloppe
+			// n'y tourne pas, donc le relachement que `all_voices_off` vient de
+			// demander ne descendrait jamais. On coupe net 1..7 ; la voix 0 est
+			// reprise par la branche continue, deux lignes plus bas dans @sample.
+			vi = 0;
+			loop(NVOICES,
+				vb = voice(vi);
+				vi > 0 ? ( vb[V_ACT] = 0; vb[V_ENV] = 0; vb[V_ST] = 0; v_xkill(vb); );
+				vi += 1;
+			);
+		);
+		// ⚠ LA HAUTEUR SE REMET A ZERO DANS LES DEUX SENS, ET C'EST LE POINT.
+		// `note_ratio` relit V_CUR au bloc suivant : en ne le reposant que dans
+		// un sens, le bourdon SAUTAIT a la hauteur de la derniere note MIDI
+		// avant de relacher. C'est litteralement le « pas le meme son » qu'on
+		// entendait, et il survivait au correctif.
+		vb = voice(0);
+		vb[V_CUR] = 0; vb[V_TGT] = 0; vb[V_HAVE] = 0;
+		// La voix du bourdon rend elle aussi ses trois enveloppes au repos : la
+		// frontiere vient de la reprendre, elle ne doit pas y arriver avec le
+		// palier de la derniere note jouee.
+		v_xkill(vb);
+		note_on = 0;
+		// ⚠ PAS DE ZERO EN DUR. Le bouton — comme la touche du clavier de la
+		// fenetre — peut etre TENU a travers la bascule : poser 0 ici
+		// fabriquerait une arete montante fantome au bloc suivant, dans un banc
+		// qu'on vient justement de vider. Le geste en cours est donc repute
+		// deja consomme ; il faut relacher et reappuyer.
+		last_manual = manual_trigger;
+	);
+	// ⚠ HORS DU GARDE, ET POUR LA MEME RAISON QUE `last_manual` — mais AUSSI au
+	// tout premier bloc. Un projet enregistre avec une touche verrouillee
+	// recharge `kbd_gate` a 1 : sans cette ligne le premier bloc y verrait une
+	// arete montante et jouerait une note que personne n'a demandee.
+	kbd_pgate = kbd_gate > 0.5;
+	kbd_pnote = kbd_note | 0;
+	last_mode = mode_key;
+);
+
+// LES EVENEMENTS SE RANGENT, ILS NE S'APPLIQUENT PLUS ICI. Voir la file dans
+// @init : `offset` est la date de la frappe DANS le bloc, et l'ignorer collait
+// tout au premier echantillon en ne gardant que le dernier evenement.
+ev_n = 0; ev_i = 0; smp_i = 0;
+
+// ---------------------------------------------------------------------------
+// LE CLAVIER DE LA FENETRE, EN MODE DECLENCHE
+// ---------------------------------------------------------------------------
+// Il passe par `evq` et NON par un chemin a part : il herite alors de tout ce
+// que le MIDI a deja — la pile de touches, le legato, le vol de voix, le glide,
+// la velocite vers l'ampli et vers le filtre. Zero duplication d'ADSR.
+//
+// ⚠ IL SE RANGE AVANT LE `midirecv`, ET L'ORDRE EST LOAD-BEARING. @sample
+// consomme la file en supposant ses offsets CROISSANTS ; le clavier est a
+// l'offset 0, donc le poser en premier garantit l'ordre sans rien trier. Le
+// poser apres ferait attendre le clic jusqu'a l'offset du dernier evenement
+// MIDI du bloc.
+//
+// Le clavier COEXISTE avec le MIDI entrant, il ne le remplace pas : les deux
+// remplissent la meme file, et `midi_mode` ne garde que le second.
+//
+// ⚠ AUCUNE REGION MEMOIRE NEUVE. Le clavier PARTAGE le budget de 64 evenements
+// de `evq` — il ne s'y ajoute pas. C'est le garde `ev_n < EVMAX` qui le tient,
+// exactement comme pour le MIDI : au pire un clic est perdu dans un bloc deja
+// sature, jamais une ecriture hors des 192 mots de la region.
+mode > 0.5 ? (
+	kbd_n = kbd_note | 0;
+	kbd_g = kbd_gate > 0.5;
+	// Une hauteur qui change SOUS un gate tenu est un glissando : on relache
+	// l'ancienne et on frappe la nouvelle, ce que le legato absorbe deja.
+	kbd_g != kbd_pgate || (kbd_g && kbd_n != kbd_pnote) ? (
+		kbd_pgate && kbd_pnote >= 0 && ev_n < EVMAX ? (
+			evq[ev_n * 3] = 0; evq[ev_n * 3 + 1] = kbd_pnote;
+			evq[ev_n * 3 + 2] = 2; ev_n += 1;
+		);
+		kbd_g && ev_n < EVMAX ? (
+			// `genre + velocite * 4`, l'encodage deja en place, relu par
+			// `floor(ev_pk / 4)` dans @sample.
+			evq[ev_n * 3] = 0; evq[ev_n * 3 + 1] = kbd_n;
+			evq[ev_n * 3 + 2] = 1 + max(1, min(127, kbd_vel | 0)) * 4;
+			ev_n += 1;
+		);
+		kbd_pgate = kbd_g; kbd_pnote = kbd_n;
+	);
+);
+
+mode > 0.5 && midi_mode > 0.5 ? (
+	while (midirecv(offset, msg1, msg2, msg3)) (
+		status = msg1 & 0xF0;
+		kind = 0;
+		status == 0x90 && msg3 > 0 ? kind = 1
+		: (status == 0x80 || (status == 0x90 && msg3 == 0)) ? kind = 2
+		: (status == 0xB0 && (msg2 == 120 || msg2 == 123)) ? kind = 3;
+		kind > 0 && ev_n < EVMAX ? (
+			evq[ev_n * 3] = max(0, offset);
+			evq[ev_n * 3 + 1] = msg2;
+			evq[ev_n * 3 + 2] = kind + msg3 * 4;
+			ev_n += 1;
+		);
+		midisend(offset, msg1, msg2, msg3);
+	);
+);
+ev_next = ev_n > 0 ? evq[0] : -1;
+
+mode > 0.5 ? (
+	manual_trigger > 0.5 && last_manual < 0.5 ? (
+		// Le declenchement manuel joue a fond : c'est un bouton, il n'a pas de
+		// velocite, et le prendre pour une note faible ferait baisser le son
+		// sans que rien ne le demande.
+		//
+		// ⚠ IL PREND TOUJOURS LA VOIX 0, jamais une libre. Un bouton n'a pas de
+		// hauteur : lui allouer une voix par appui empilerait huit fois la meme
+		// note. Et il joue le LA de reference, pour que le mode Continuous et le
+		// mode Triggered sans MIDI rendent exactement le meme son.
+		note_on = 1;
+		v_start(voice(0), 69, 127);
+	) : manual_trigger < 0.5 && last_manual > 0.5 ? (
+		// Le bouton ne coupe pas une touche tenue : deux sources de gate qui se
+		// relachent l'une l'autre feraient taire le clavier au lacher du bouton.
+		nh < 1 ? (
+			note_on = 0;
+			vb = voice(0);
+			vb[V_HELD] = 0;
+			vb[V_ACT] > 0.5 ? ( vb[V_ST] = 3; v_xrelease(vb); );
+		);
+	);
+	last_manual = manual_trigger;
+);
+
+// L'ENVELOPPE SORT VERS LE RACK. `gate` est deja calculee — l'ADSR de la note
+// en Triggered, le motif rythmique en Continuous. UNE sortie couvre donc les
+// deux modes, et c'est voulu : dupliquer une ADSR dans le banc de modulation
+// aurait donne deux verites pour un seul fait, et elles auraient diverge le
+// jour ou l'une des deux est reglee.
+//
+// Publiee au bloc et non a l'echantillon : un lien natif lit de toute facon au
+// bloc, et `gate` vit dans @sample. Le retard est d'un bloc — sous la
+// milliseconde en pratique, et sans objet pour une modulation.
+env_out = env_last;
+
+// LES TROIS SORTIES SUPPLEMENTAIRES, MEME REGLE ET MEME RETARD D'UN BLOC. Un
+// lien natif lit de toute facon au bloc ; `X_LAST` vit dans @sample.
+// ⚠ ECRITES PAR LEUR NOM, ET LUES PAR LEUR ADRESSE. `XE0[X_LAST]` est une
+// lecture memoire, pas un appel : le fichier n'indexe jamais le resultat d'une
+// fonction, et il n'y a ici aucune fonction a appeler.
+env2_out = XE0[X_LAST];
+env3_out = XE1[X_LAST];
+env4_out = XE2[X_LAST];
+
+// LES FREQUENCES SE DECIDENT ICI, UNE FOIS PAR BLOC.
+//
+// Le rapport de la note, le desaccord relatif et la largeur stereo ne
+// dependent que de sliders et de la note en cours : trois choses qui ne
+// changent qu'aux frontieres de bloc, y compris quand un lien natif les
+// module. Les calculer par echantillon revenait a recalculer 44100 fois par
+// seconde une valeur constante.
+//
+// OSC 1 EST LA REFERENCE. En mode relatif, OSC 2 et 3 se posent a un intervalle
+// de LUI : bouger OSC 1 les emmene. En mode libre ils gardent leur Hz absolu,
+// et c'est le defaut — un projet enregistre avant le desaccord relatif ne
+// connait que des Hz, il doit sonner pareil.
+//
+// ⚠ LE GLIDE SE LISSE AU BLOC, ET C'EST UNE CONSEQUENCE, PAS UN RACCOURCI. Les
+// increments de phase se calculent ici ; une hauteur qui bougerait entre deux
+// echantillons n'aurait nulle part ou s'ecrire sans redescendre la puissance
+// dans @sample, ce que tout le reste du fichier existe pour eviter. Le pas est
+// celui du bloc — quelques millisecondes, la meme cadence que n'importe quelle
+// modulation native.
+// ⚠ LA HAUTEUR EST UN FAIT DE VOIX, PAS DE MODULE. Elle etait calculee UNE
+// fois ici et posee dans trois increments partages : six touches enfoncees
+// rendaient toutes la hauteur de la derniere, parce qu'il n'y avait
+// litteralement pas de place pour deux. La boucle ne parcourt que les voix
+// ACTIVES ; huit voix au repos coutent huit comparaisons.
+// ---------------------------------------------------------------------------
+// LA HAUTEUR DU BOURDON — LE MODE CONTINU AVEC UNE NOTE
+// ---------------------------------------------------------------------------
+// « Un mode continu, mais ou je choisis la note. » `cont_note` a Free garde
+// EXACTEMENT le son d'avant : `note_ratio` reste 1 et les trois oscillateurs
+// gardent leurs hertz absolus. C'est le defaut, et c'est la regle — un projet
+// ecrit avant aujourd'hui ne doit pas bouger d'un centieme.
+//
+// ⚠ `kbd_gate` EST LE VERROU, PAS UN APPUI. En continu il n'y a rien a tenir :
+// on clique une touche, elle reste, et c'est le gate qui dit qu'une touche a
+// ete choisie. A zero on retombe sur les frequences absolues — donc « deverrouiller »
+// est une sortie evidente, et une bascule vers Notes SANS avoir jamais clique
+// ne fait pas chuter le son de cinq octaves vers le DO -1 que `kbd_note` vaut
+// au repos.
+//
+// ⚠ ELLE PASSE PAR LA VOIX ET NON PAR UNE VARIABLE A PART : le glide est deja
+// calcule sur V_CUR, donc changer de touche GLISSE vers elle sans une ligne de
+// plus. Et la frontiere de mode ci-dessus a remis V_HAVE a zero, donc la
+// premiere touche se POSE au lieu de glisser depuis un LA 440 imaginaire.
+kbd_pitch = mode < 0.5 && cont_note > 0.5 && kbd_gate > 0.5;
+kbd_pitch ? (
+	vb = voice(0);
+	vb[V_TGT] = (kbd_note | 0) - 69;
+	vb[V_HAVE] < 0.5 ? ( vb[V_CUR] = vb[V_TGT]; vb[V_HAVE] = 1; );
+);
+
+// ---------------------------------------------------------------------------
+// LA HAUTEUR SE MODULE EN DEMI-TONS, ET SE CALE APRES LA SOMME
+// ---------------------------------------------------------------------------
+// La note de chaque oscillateur absolu, SANS ses cents, modulation comprise :
+// une fois par bloc, trois logarithmes. Les cents (`oscN_fine`) sont retires
+// ici et rajoutes APRES le calage — ce qui rend le calcul EXACT quand le
+// calage est eteint, meme si `fine` ne decrit plus le hertz : on retire puis on
+// rajoute la meme quantite. 17.3123404906676 = 12 / ln 2.
+//
+// ⚠ EN DEUX TEMPS DEPUIS LES ROUTES RAPIDES : la note SANS modulation
+// (`nbN_0`), puis la modulation. Le tick refait la seconde moitie tous les FTICK
+// echantillons sans repayer les trois logarithmes. L'ordre des operations est
+// celui d'avant (((69 + a) - b) + pm), donc le resultat aussi, au bit pres.
+//
+// LES ROUTES RAPIDES DU BLOC (voir la bande, slider100) : relues ici, une
+// fois, dans des tableaux -- le tick ne lit pas trente-deux sliders.
+fast_on = 0; fpit = 0; fnr = 0;
+c = 1;
+loop(19, FUSE[c] = 0; c += 1;);
+fch >= 1 && fch <= 255 ? (
+	fgb = (fch | 0) * 4096;
+	// La banque publie-t-elle encore ? Son compteur de blocs doit avancer.
+	gmem[fgb + 2] != fseq ? ( fseq = gmem[fgb + 2]; fstale = 0; ) : fstale += 1;
+	fr_add(fr1_dst, fr1_src, fr1_amt, fr1_ctr);
+	fr_add(fr2_dst, fr2_src, fr2_amt, fr2_ctr);
+	fr_add(fr3_dst, fr3_src, fr3_amt, fr3_ctr);
+	fr_add(fr4_dst, fr4_src, fr4_amt, fr4_ctr);
+	fr_add(fr5_dst, fr5_src, fr5_amt, fr5_ctr);
+	fr_add(fr6_dst, fr6_src, fr6_amt, fr6_ctr);
+	fr_add(fr7_dst, fr7_src, fr7_amt, fr7_ctr);
+	fr_add(fr8_dst, fr8_src, fr8_amt, fr8_ctr);
+	fast_on = fnr > 0;
+	fpit = FUSE[1] || FUSE[2] || FUSE[3] || FUSE[10] || FUSE[11] || FUSE[12];
+);
+ftl = 0; fkk = 0;
+// Les valeurs effectives : le slider, recopie. Celles qui RAMPENT gardent leur
+// valeur d'un bloc a l'autre tant qu'une route les tient -- les remettre au
+// slider ici ferait une marche a chaque debut de bloc.
+epm[0] = osc1_pm; epm[1] = osc2_pm; epm[2] = osc3_pm;
+ewid[0] = osc1_width; ewid[1] = osc2_width; ewid[2] = osc3_width;
+ecol[0] = osc1_color; ecol[1] = osc2_color; ecol[2] = osc3_color;
+// LES GAINS REJOIGNENT LEUR VALEUR EN LIGNE DROITE SUR LE BLOC (2026-10-08).
+// Volumes, amplitude, gain auto, index de FM et balances se lisent a CHAQUE
+// echantillon. Arrives par un lien natif ou un bouton -- une valeur par bloc --,
+// ils SAUTAIENT au debut du bloc, et un saut de gain ou d'index de FM est un
+// saut de la forme d'onde : « le SEQ sur le FM d'OSC 1 : clic et pop ». Chacun
+// part de sa valeur a la fin du bloc d'avant et atteint le slider au dernier
+// echantillon de celui-ci (la pente s'ajoute en tete de @sample). Un slider qui
+// n'a pas bouge est RECOPIE -- le son d'avant au bit pres, et une rampe finie
+// se pose pile sur sa cible --, et le premier bloc apres @init recopie tout.
+// Une route rapide garde la main sur sa valeur (sa rampe a elle dure FTICK) ;
+// sa cible est oubliee (-9), pour que la valeur REJOIGNE le slider quand la
+// route s'en va.
+eramp = fast_on;
+einv = 1 / max(samplesblock, 1);
+i = 0;
+loop(3,
+	gtv = slider(sl_vol[i]);
+	FUSE[6 + i] ? evt[i] = -9 : (eprime || gtv == evt[i]) ? (
+		evol[i] = gtv; evd[i] = 0; evt[i] = gtv;
+	) : (
+		evd[i] = (gtv - evol[i]) * einv; evt[i] = gtv; eramp = 1;
+	);
+	i += 1;
+);
+FUSE[9] ? eamp_t = -9 : (eprime || amplitude == eamp_t) ? (
+	eamp = amplitude; eamp_d = 0; eamp_t = amplitude;
+) : (
+	eamp_d = (amplitude - eamp) * einv; eamp_t = amplitude; eramp = 1;
+);
+FUSE[19] ? efm_t = -9 : (eprime || osc1_fm == efm_t) ? (
+	efm = osc1_fm; efm_d = 0; efm_t = osc1_fm;
+) : (
+	efm_d = (osc1_fm - efm) * einv; efm_t = osc1_fm; eramp = 1;
+);
+FUSE[4] ? 0 : ( f_off = 0; f_off_d = 0; );
+nb1_0 = 69 + 17.3123404906676 * log(max(osc1_freq, 1) / 440) - osc1_fine * 0.01;
+nb2_0 = 69 + 17.3123404906676 * log(max(osc2_freq, 1) / 440) - osc2_fine * 0.01;
+nb3_0 = 69 + 17.3123404906676 * log(max(osc3_freq, 1) / 440) - osc3_fine * 0.01;
+nb1 = nb1_0 + epm[0];
+nb2 = nb2_0 + epm[1];
+nb3 = nb3_0 + epm[2];
+
+gl_c = glide > 0.0005 ? (1 - exp(-samplesblock / (glide * srate))) : 1;
+// Le pas de glide d'une note qui nait DANS le bloc : aucun s'il y a un glide
+// (il avance au bloc suivant, comme pour toute note), la hauteur d'un coup
+// sinon. Voir `v_prep`.
+gl_now = glide > 0.0005 ? 0 : 1;
+vi = 0;
+loop(NVOICES,
+	vb = voice(vi);
+	vb[V_ACT] > 0.5 ? v_prep(vb, gl_c);
+	vi += 1;
+);
+
+// Meme raison pour le lissage du gate rythmique : la constante de temps ne
+// depend que d'un slider. Une courbe a zero veut dire « pas de lissage »,
+// c'est-a-dire un coefficient de 1.
+curve_k = rhythmic_curve > 0.001 ? min(1, dt / (rhythmic_curve * 0.1)) : 1;
+
+// LA BALANCE PAR OSCILLATEUR. Loi LINEAIRE, pas de puissance constante : au
+// centre elle rend 1 sur les deux canaux, donc un projet d'avant sonne
+// exactement pareil. Et c'est la bonne semantique ici — chaque oscillateur est
+// deja STEREO par sa largeur ; on dose deux canaux qui existent, on ne place
+// pas une source mono dans un champ.
+// Elle REJOINT sa valeur sur le bloc, comme les gains plus haut. Une route
+// rapide sur l'une des trois les recalcule TOUTES au tick : alors elles se
+// posent ici comme avant.
+fpan = FUSE[16] || FUSE[17] || FUSE[18];
+pramp = 0;
+i = 0;
+loop(3,
+	pv = slider(sl_pan[i]);
+	ptl = pv <= 0 ? 1 : 1 - pv;
+	ptr = pv >= 0 ? 1 : 1 + pv;
+	(fpan || eprime || pv == ept[i]) ? (
+		panl[i] = ptl; panr[i] = ptr; pld[i] = 0; prd[i] = 0;
+		ept[i] = fpan ? -9 : pv;
+	) : (
+		pld[i] = (ptl - panl[i]) * einv; prd[i] = (ptr - panr[i]) * einv;
+		ept[i] = pv; pramp = 1;
+	);
+	i += 1;
+);
+
+// ⚠ ELLE ATTENUE, ELLE N'AMPLIFIE PAS. A 127 les deux effets valent zero : un
+// projet sans MIDI, ou le mode Continuous ou aucune note n'arrive jamais, ne
+// bouge pas d'un decibel quand on tourne ces deux boutons. Le calcul est monte
+// dans la boucle des voix, plus haut — c'est la que la velocite existe.
+
+// GAIN AUTOMATIQUE. Trois oscillateurs a plein volume font trois fois trop, et
+// « j'allume OSC 2 » ne doit pas ecreter. On divise par la somme des volumes
+// ALLUMES, et seulement si elle depasse 1 : baisser un oscillateur seul ne doit
+// pas remonter les autres.
+vsum = (osc1_on > 0.5 ? osc1_vol : 0) + (osc2_on > 0.5 ? osc2_vol : 0)
+     + (osc3_on > 0.5 ? osc3_vol : 0);
+// Il suit les volumes : il rejoint donc sa valeur sur le bloc, comme eux.
+agn = (auto_gain > 0.5 && vsum > 1) ? 1 / vsum : 1;
+(eprime || agn == ag_t) ? (
+	auto_g = agn; ag_d = 0;
+) : (
+	ag_d = (agn - auto_g) * einv; eramp = 1;
+);
+ag_t = agn;
+// LE LISSAGE A TEMPS FIXE (voir ZTAU) : il tourne tant qu'une rampe court,
+// qu'une route tient une valeur, ou qu'une sortie n'a pas rejoint sa cible ;
+// sinon ses sorties sont POSEES sur leur cible, et il ne coute plus rien. Le
+// premier bloc apres @init pose tout.
+zc = eramp;
+i = 0;
+loop(3,
+	(abs(zvol[i] - evol[i]) > 0.0000001 || abs(zvol1[i] - evol[i]) > 0.0000001) ? zc = 1;
+	i += 1;
+);
+(abs(zamp - eamp) > 0.0000001 || abs(zamp1 - eamp) > 0.0000001) ? zc = 1;
+(abs(zfm - efm) > 0.0000001 || abs(zfm1 - efm) > 0.0000001) ? zc = 1;
+(abs(zag - auto_g) > 0.0000001 || abs(zag1 - auto_g) > 0.0000001) ? zc = 1;
+(eprime || !zc) ? (
+	i = 0;
+	loop(3, zvol[i] = evol[i]; zvol1[i] = evol[i]; i += 1;);
+	zamp = eamp; zamp1 = eamp; zfm = efm; zfm1 = efm; zag = auto_g; zag1 = auto_g;
+	zon = 0;
+) : (
+	zon = 1;
+);
+zc = pramp || fpan;
+i = 0;
+loop(3,
+	(abs(zpl[i] - panl[i]) > 0.0000001 || abs(zpl1[i] - panl[i]) > 0.0000001
+	 || abs(zpr[i] - panr[i]) > 0.0000001 || abs(zpr1[i] - panr[i]) > 0.0000001) ? zc = 1;
+	i += 1;
+);
+(eprime || !zc) ? (
+	i = 0;
+	loop(3,
+		zpl[i] = panl[i]; zpl1[i] = panl[i]; zpr[i] = panr[i]; zpr1[i] = panr[i];
+		i += 1;
+	);
+	zpon = 0;
+) : (
+	zpon = 1;
+);
+eprime = 0;
+
+// ---------------------------------------------------------------------------
+// LE SAMPLE, AU BLOC : la demande de Lua, le chargement par morceaux, les
+// niveaux decimes, et la geometrie de lecture
+// ---------------------------------------------------------------------------
+SMM[0] = osc1_smp > 0.5; SMM[1] = osc2_smp > 0.5; SMM[2] = osc3_smp > 0.5;
+// LA BOITE AUX LETTRES : dans le canal de la piste (memoire des routes
+// rapides), a 3072 (SoundGenerator.SMP_MB). Lua y ecrit [0] le numero de
+// demande, [1] le jeton, [2] la longueur et [8..502] le chemin ; le generateur
+// y publie [3] l'etat (0 vide, 1 en route, 2 pret, 3 echec, 4 tronque), [4]
+// les trames chargees, [5] la frequence, [6] les canaux, [7] les trames du
+// fichier entier, et LE CHEMIN QU'IL JOUE : [504] sa version, [505] sa
+// longueur, [506..1000] ses caracteres. C'est le generateur qui fait foi (son
+// chemin est dans le projet) : la fenetre le relit, elle ne le devine pas.
+// Le JETON doit etre celui du slider : un autre projet ouvert peut ecrire dans
+// le meme canal, et son sample n'est pas le notre.
+(smp_ch >= 1 && smp_ch <= 255) ? (
+	sgb = (smp_ch | 0) * 4096 + 3072;
+	(smp_tok > 0 && gmem[sgb] != smp_seen && gmem[sgb + 1] == smp_tok) ? (
+		smp_seen = gmem[sgb];
+		smp_n = gmem[sgb + 2] | 0;
+		smp_n < 0 ? smp_n = 0;
+		smp_n > 495 ? smp_n = 495;
+		smp_i = 0;
+		loop(smp_n, SMP_PATH[smp_i] = gmem[sgb + 8 + smp_i]; smp_i += 1;);
+		SMP_PATH[smp_n] = 0;
+		// Le meme fichier deja la, ou en route : rien a refaire.
+		(smp_state >= 2 && smp_same()) ? 0 : smp_want = 1;
+	);
+	gmem[sgb + 3] = smp_status; gmem[sgb + 4] = smp_frames; gmem[sgb + 5] = smp_sr;
+	gmem[sgb + 6] = smp_nch; gmem[sgb + 7] = smp_full;
+	gmem[sgb + 504] != smp_pv ? (
+		smp_i = 0;
+		while (smp_i < 495 && SMP_CUR[smp_i] > 0) ( gmem[sgb + 506 + smp_i] = SMP_CUR[smp_i]; smp_i += 1; );
+		gmem[sgb + 505] = smp_i;
+		gmem[sgb + 504] = smp_pv;
+	);
+);
+// UN CHARGEMENT COMMENCE PAR SE TAIRE : 5 ms de fondu, puis le fichier. Un
+// chargement en cours finit d'abord (la demande attend).
+(smp_want && smp_state != 1 && smp_state != 2) ? ( smp_state = 1; smp_want = 0; );
+smp_state == 1 ? (
+	smp_lg <= 0 ? smp_begin() : smp_lgd = -1 / max(1, 0.005 * srate);
+);
+smp_state == 2 ? smp_rdc();
+smp_state == 3 ? smp_mipc();
+(smp_play && smp_state >= 3 && smp_lg < 1) ? smp_lgd = 1 / max(1, 0.005 * srate);
+// La geometrie : la note de base en trames par cycle, la region (fractions du
+// fichier ENTIER, bornees a ce qui est charge), le depart, la boucle.
+smp_play ? (
+	smp_k = smp_sr / (440 * 2 ^ ((smp_root - 69) / 12));
+	smp_a = min(smp_rs, smp_re) * smp_full;
+	smp_b = max(smp_rs, smp_re) * smp_full;
+	smp_b > smp_frames ? smp_b = smp_frames;
+	smp_a > smp_b - 2 ? smp_a = max(0, smp_b - 2);
+	smp_dir = smp_rev > 0.5 ? -1 : 1;
+	smp_s0 = smp_dir > 0 ? smp_a + smp_start * (smp_b - smp_a)
+	                     : smp_b - smp_start * (smp_b - smp_a);
+	smp_la = smp_a + min(smp_ls, smp_le) * (smp_b - smp_a);
+	smp_lb = smp_a + max(smp_ls, smp_le) * (smp_b - smp_a);
+	smp_xn = smp_xf * 0.001 * smp_sr;
+	smp_xn > (smp_lb - smp_la) * 0.5 ? smp_xn = (smp_lb - smp_la) * 0.5;
+	smp_lp = smp_loop > 0.5 && smp_lb - smp_la >= 32;
+	smp_ll = smp_lb - smp_la - smp_xn;
+	smp_fn = max(1, 0.002 * smp_sr);
+	// UN SAMPLE QUI ARRIVE PART DE SON DEPART, MEME SOUS UNE VOIX QUI SONNE
+	// DEJA. Le bourdon du mode continu (la voix 0) est ne avant le chargement,
+	// a la trame 0 : le depart etait ignore, et a l'envers le sample etait
+	// « deja fini » -- muet. Les voix actives repartent donc du depart, avec
+	// leur fondu d'entree.
+	smp_fresh ? (
+		smp_i = 0;
+		loop(NVOICES,
+			smp_vb = voice(smp_i);
+			smp_vb[V_ACT] > 0.5 ? (
+				smp_n = 0;
+				loop(3,
+					smp_vb[V_SPL + smp_n] = smp_s0; smp_vb[V_SPR + smp_n] = smp_s0;
+					smp_vb[V_SAGE + smp_n] = 0; smp_vb[V_SOG + smp_n] = 0;
+					smp_n += 1;
+				);
+			);
+			smp_i += 1;
+		);
+		smp_fresh = 0;
+	);
+);
+
+aa = antialias > 0.5;
+
+// LE FILTRE : TOUT CE QUI NE DEPEND PAS DE L'ENVELOPPE SE CALCULE ICI.
+//
+// La coupure vit en INDEX DE TABLE, c'est-a-dire en octaves. Le suivi de
+// clavier et la velocite s'y ajoutent, l'enveloppe s'y ajoutera par echantillon,
+// et la table rendra la tangente. La reference du suivi est LA 440 (note 69),
+// la meme que celle des oscillateurs : deux references auraient fait deriver le
+// filtre de la hauteur qu'il filtre.
+// `fidx_base` est monte dans la boucle des voix : il depend de la note. Seule
+// la PROFONDEUR d'enveloppe reste commune — c'est un reglage, pas une note.
+fidx_env = filt_env * 6 * ft_per_oct;
+// Amortissement : 2 (Q = 0,5, plat) a 0,02 (Q = 50, au bord de l'auto-oscillation).
+fk = 2 - 1.98 * filt_res;
+
+@sample
+// LES ROUTES RAPIDES, EN TETE : une frappe de cet echantillon doit naitre avec
+// la hauteur du tick, pas celle du bloc. Sans route, une comparaison.
+fast_on ? (
+	ftl <= 0 ? ( fast_tick(fkk); fkk += 1; ftl = FTICK; );
+	ftl -= 1;
+	f_off += f_off_d;
+);
+// Les rampes des gains : celles des routes (FTICK) et celles du bloc. Sans
+// route ni slider qui bouge, une comparaison.
+eramp ? (
+	evol[0] += evd[0]; evol[1] += evd[1]; evol[2] += evd[2];
+	eamp += eamp_d;
+	efm += efm_d;
+	auto_g += ag_d;
+);
+pramp ? (
+	panl[0] += pld[0]; panl[1] += pld[1]; panl[2] += pld[2];
+	panr[0] += prd[0]; panr[1] += prd[1]; panr[2] += prd[2];
+);
+// Le fondu du chargement d'un sample (5 ms).
+smp_lgd != 0 ? (
+	smp_lg += smp_lgd;
+	smp_lg <= 0 ? ( smp_lg = 0; smp_lgd = 0; ) : smp_lg >= 1 ? ( smp_lg = 1; smp_lgd = 0; );
+);
+// Le lissage a temps fixe : deux poles par valeur, et le rendu lit `z*`.
+zon ? (
+	zvol1[0] += (evol[0] - zvol1[0]) * zk; zvol[0] += (zvol1[0] - zvol[0]) * zk;
+	zvol1[1] += (evol[1] - zvol1[1]) * zk; zvol[1] += (zvol1[1] - zvol[1]) * zk;
+	zvol1[2] += (evol[2] - zvol1[2]) * zk; zvol[2] += (zvol1[2] - zvol[2]) * zk;
+	zamp1 += (eamp - zamp1) * zk; zamp += (zamp1 - zamp) * zk;
+	zfm1 += (efm - zfm1) * zk; zfm += (zfm1 - zfm) * zk;
+	zag1 += (auto_g - zag1) * zk; zag += (zag1 - zag) * zk;
+);
+zpon ? (
+	zpl1[0] += (panl[0] - zpl1[0]) * zk; zpl[0] += (zpl1[0] - zpl[0]) * zk;
+	zpl1[1] += (panl[1] - zpl1[1]) * zk; zpl[1] += (zpl1[1] - zpl[1]) * zk;
+	zpl1[2] += (panl[2] - zpl1[2]) * zk; zpl[2] += (zpl1[2] - zpl[2]) * zk;
+	zpr1[0] += (panr[0] - zpr1[0]) * zk; zpr[0] += (zpr1[0] - zpr[0]) * zk;
+	zpr1[1] += (panr[1] - zpr1[1]) * zk; zpr[1] += (zpr1[1] - zpr[1]) * zk;
+	zpr1[2] += (panr[2] - zpr1[2]) * zk; zpr[2] += (zpr1[2] - zpr[2]) * zk;
+);
+// LES FRAPPES TOMBENT A LEUR DATE. Une comparaison d'entiers par echantillon
+// quand il n'y a rien a faire — `ev_next` vaut -1 — et la boucle ne s'ouvre
+// qu'aux echantillons ou quelque chose arrive vraiment.
+smp_i == ev_next ? (
+	while (ev_i < ev_n && evq[ev_i * 3] <= smp_i) (
+		ev_note = evq[ev_i * 3 + 1];
+		ev_pk = evq[ev_i * 3 + 2];
+		ev_kind = ev_pk & 3;
+		// ⚠ `floor`, ET CE N'EST PAS UNE PRECAUTION. `/` rend un flottant en
+		// EEL2 : `(genre + velocite * 4) / 4` vaut `velocite + 0,25` pour un
+		// note-on. Une velocite de 100,25 ne casse rien de visible — elle
+		// decale le gain et le suivi de velocite du filtre, en silence.
+		ev_vel = floor(ev_pk / 4);
+		ev_kind == 1 ? (
+			// ⚠ L'ENVELOPPE NE REPART PLUS DE ZERO. `env = 0` etait ecrit a
+			// chaque note : une note qui arrivait pendant le relachement de la
+			// precedente faisait tomber la sortie a zero en UN echantillon —
+			// un clic — puis reattaquait depuis le silence. L'attaque part
+			// maintenant du niveau courant, ce qui la raccourcit d'autant et
+			// ne s'entend pas comme une rupture.
+			//
+			// ⚠ ET EN LEGATO, ELLE NE REATTAQUE PAS DU TOUT. Une deuxieme
+			// touche enfoncee pendant qu'une premiere tient change la HAUTEUR,
+			// pas l'enveloppe — c'est ce que legato veut dire, et c'est aussi
+			// ce qui rend une phrase rapide continue au lieu de hachee. Les
+			// clics et les phases ne se rearment pas non plus : ils sont le
+			// debut d'un son, et il n'y en a pas de nouveau.
+			// ⚠ LEGATO N'A DE SENS QU'A UNE VOIX. Au-dela, une deuxieme
+			// touche ne PROLONGE rien : elle demarre sa propre voix, et
+			// prolonger la premiere reviendrait a refuser la polyphonie qu'on
+			// vient de demander. Le drapeau est donc lu avec `poly < 1.5`.
+			ev_leg = legato > 0.5 && poly < 1.5 && nh > 0;
+			note_push(ev_note, ev_vel);
+			note_on = 1;
+			ev_leg ? (
+				// La meme voix change de HAUTEUR. Ni enveloppe, ni clics, ni
+				// phases : il n'y a pas de nouveau son, seulement une nouvelle
+				// note sur celui qui dure.
+				vb = voice(0);
+				vb[V_ACT] < 0.5 ? v_start(vb, ev_note, ev_vel) : (
+					vb[V_NOTE] = ev_note;
+					vb[V_VEL] = ev_vel;
+					vb[V_TGT] = ev_note - 69;
+					vb[V_HELD] = 1;
+				);
+			) : (
+				vb = poly < 1.5 ? voice(0) : find_voice();
+				// Mono : ce que la voix jouait finit sur une traine, elle
+				// repart du silence (voir `v_tail`).
+				poly < 1.5 ? v_tail(vb);
+				v_start(vb, ev_note, ev_vel);
+			);
+			// La note sonne A SA DATE, pas au bloc suivant : voir `v_prep`.
+			v_prep(vb, gl_now);
+		) : ev_kind == 2 ? (
+			// ⚠ ON RETIRE CETTE NOTE-LA, ET ON NE RELACHE QUE S'IL N'EN RESTE
+			// AUCUNE. C'est tout le defaut : le note-off ne comparait rien et
+			// eteignait la note qui venait de naitre.
+			note_pop(ev_note);
+			poly < 1.5 ? (
+				// MONOPHONIE : priorite a la derniere tenue. Il reste une
+				// touche → la voix unique y revient ; plus aucune → elle
+				// relache.
+				vb = voice(0);
+				nh > 0 ? (
+					vb[V_NOTE] = hold[(nh - 1) * 2];
+					vb[V_VEL] = hold[(nh - 1) * 2 + 1];
+					vb[V_TGT] = vb[V_NOTE] - 69;
+					// Le retour a la touche encore tenue s'entend a sa date aussi.
+					vb[V_ACT] > 0.5 ? v_prep(vb, gl_now);
+				) : (
+					note_on = 0;
+					vb[V_HELD] = 0;
+					vb[V_ACT] > 0.5 ? ( vb[V_ST] = 3; v_xrelease(vb); );
+				);
+			) : (
+				// POLYPHONIE : on relache LA voix qui tient cette note-la, et
+				// elle seule. C'est tout le defaut d'avant, a l'echelle du banc.
+				vb = find_note(ev_note);
+				vb >= 0 ? ( vb[V_HELD] = 0; vb[V_ST] = 3; v_xrelease(vb); );
+				nh < 1 ? note_on = 0;
+			);
+		) : (
+			// All notes off / all sound off. Sans ce filet, sortir du mode MIDI
+			// une touche enfoncee laissait `note_on` a 1 pour toujours.
+			all_voices_off(); note_on = 0;
+		);
+		ev_i += 1;
+	);
+	ev_next = ev_i < ev_n ? evq[ev_i * 3] : -1;
+);
+smp_i += 1;
+
+// ---------------------------------------------------------------------------
+// LE RENDU, VOIX PAR VOIX
+// ---------------------------------------------------------------------------
+// ⚠ LE MODE CONTINU N'A PAS DE NOTE, ET IL LUI FAUT QUAND MEME UNE VOIX. Il
+// bourdonne : pas d'ADSR, pas de hauteur MIDI, juste un gate rythmique. On le
+// fait donc porter par la voix 0, forcee active, avec son enveloppe posee a la
+// main. Un deuxieme chemin de rendu aurait double les oscillateurs, le filtre et
+// le mixage pour la seule difference d'ou vient le gate.
+mode < 0.5 ? (
+	rhythmic > 0.5 ? (
+		tick_phase += tick_rate * dt;
+		tick_phase >= 1 ? (
+			tick_phase -= 1;
+			vb = voice(0);
+			vb[V_CLK] = 0; vb[V_CLK + 1] = 0; vb[V_CLK + 2] = 0;
+		);
+		target_env = tick_phase < duty_cycle ? 1 : 0;
+		tick_env += (target_env - tick_env) * curve_k;
+	) : (
+		tick_env = 1;
+	);
+	vb = voice(0);
+	vb[V_ACT] = 1;
+	vb[V_ENV] = tick_env;
+	vb[V_ST] = 0;
+	vb[V_VG] = 1;
+	env_last = tick_env;
+) : (
+	env_last = 0;
+);
+
+// ⚠ AU MEME ENDROIT QUE `env_last`, ET POUR LA MEME RAISON : c'est un MAXIMUM
+// SUR LES VOIX DE CET ECHANTILLON, pas un accumulateur. Une sortie remise a
+// zero seulement au bloc ne redescendrait jamais — un crete-metre deguise en
+// enveloppe.
+//
+// Inconditionnel, et c'est la reponse a « que font-elles en Continuous ». En
+// mode continu la boucle des voix ne les touche pas : elles restent donc a
+// ZERO. Ce sont des enveloppes de NOTE, et il n'y a pas de note — recopier le
+// gate rythmique aurait donne quatre sorties identiques, c'est-a-dire deux
+// verites pour un fait, et un patch bourdon existant se serait mis a moduler.
+XE0[X_LAST] = 0; XE1[X_LAST] = 0; XE2[X_LAST] = 0;
+
+mix_l = 0;
+mix_r = 0;
+vi = 0;
+loop(NVOICES,
+	vb = voice(vi);
+	vb[V_ACT] > 0.5 ? (
+		// L'ENVELOPPE DE CETTE VOIX. En mode declenche seulement : le mode
+		// continu vient de poser la sienne.
+		mode > 0.5 ? (
+			use_adsr > 0.5 ? (
+				vb[V_ST] == 1 ? (
+					vb[V_ENV] += dt / e1_a;
+					// ⚠ ET LE MAINTIEN SE CHOISIT ICI, EN BRANCHE. A zero on passe
+					// DIRECTEMENT a la chute, comme hier : traverser un etat 5 a
+					// compteur nul brulerait un echantillon de plus.
+					vb[V_ENV] >= 1 ? ( vb[V_ENV] = 1;
+						e1_hn > 0 ? ( vb[V_DLY] = e1_hn; vb[V_ST] = 5; ) : vb[V_ST] = 2; );
+				) : vb[V_ST] == 2 ? (
+					vb[V_ENV] -= (vb[V_ENV] - sustain) * (1 - exp(-5 * dt / e1_d));
+					abs(vb[V_ENV] - sustain) < 0.001 ? vb[V_ENV] = sustain;
+				) : vb[V_ST] == 3 ? (
+					vb[V_ENV] -= vb[V_ENV] * (1 - exp(-5 * dt / e1_r));
+					// ⚠ LA VOIX SE REND ELLE-MEME. Sans ca, huit notes jouees
+					// une fois laissent huit voix « actives » a jamais : le vol
+					// prendrait toujours la plus ancienne au lieu d'une libre, et
+					// le cout par echantillon resterait au maximum pour du
+					// silence.
+					vb[V_ENV] <= 0.001 ? (
+						vb[V_ENV] = 0; vb[V_ST] = 0; vb[V_ACT] = 0;
+					);
+				) : vb[V_ST] == 4 ? (
+					// LE RETARD. Un decrement d'entier et une comparaison : rien de
+					// plus cher que ce que couterait de ne pas l'avoir.
+					//
+					// ⚠ ET LES DEUX ETATS NEUFS SONT CABLES DANS LES DEUX CHAINES, DANS
+					// LE MEME CHANGEMENT. La branche par defaut juste en dessous TUE la
+					// voix : un etat 4 non cable couperait la note a l'echantillon meme,
+					// sur TOUS les patchs, des que quelqu'un met un retard. C'est le pire
+					// mode de panne de ce fichier et il est audible immediatement.
+					//
+					// ⚠ LE NIVEAU N'EST PAS TOUCHE. Une voix libre est deja a zero ; une
+					// voix volee tient son ancien niveau, ce qui ne claque pas — meme
+					// regle que « l'attaque part du niveau courant ». Et un relachement
+					// recu PENDANT le retard reste juste : depuis zero, il atteint
+					// 0,001 au premier echantillon et la voix meurt, ce qui est ce
+					// qu'on veut d'une note relachee avant d'avoir commence.
+					vb[V_DLY] -= 1;
+					vb[V_DLY] <= 0 ? vb[V_ST] = 1;
+				) : vb[V_ST] == 5 ? (
+					// LE MAINTIEN, sur le MEME compteur : les deux etats ne coexistent
+					// jamais, un second mot par voix n'aurait porte que du vide.
+					vb[V_DLY] -= 1;
+					vb[V_DLY] <= 0 ? vb[V_ST] = 2;
+				) : vb[V_ST] == 6 ? (
+					// LE FONDU d'une voix qu'une frappe mono vient de remplacer
+					// (`v_tail`). ⚠ CABLE AVANT LA BRANCHE PAR DEFAUT, qui TUE la
+					// voix : un etat 6 non cable couperait net — le clic exact que
+					// le fondu existe pour eviter.
+					vb[V_ENV] -= vb[V_ENV] * fade_k;
+					vb[V_ENV] <= 0.001 ? (
+						vb[V_ENV] = 0; vb[V_ST] = 0; vb[V_ACT] = 0;
+					);
+				) : (
+					// ⚠ ACTIVE ET AU REPOS N'EXISTE PAS EN DECLENCHE. Les trois
+					// tests ci-dessus ne connaissent que 1, 2 et 3 : sans cette
+					// branche, une voix a V_ST = 0 garde son enveloppe gelee
+					// pour toujours et le bourdon ne s'arrete plus jamais. C'est
+					// le FILET, pas le correctif — l'arete de mode en tete de
+					// @block est censee ne jamais le laisser se declencher.
+					vb[V_ENV] = 0; vb[V_ACT] = 0;
+				);
+			) : (
+				vb[V_ENV] = vb[V_HELD] > 0.5 ? 1 : 0;
+				vb[V_ENV] <= 0 ? vb[V_ACT] = 0;
+				// ⚠ LA CONTREPARTIE, ET ELLE N'EST PAS REDONDANTE. Le filet
+				// ci-dessus vit DANS `use_adsr > 0.5` ; cette branche-ci ne
+				// teste jamais V_ST. Une touche tenue a travers une bascule
+				// laissait V_HELD a 1 pour toujours — son note-off est jete par
+				// le garde du midirecv — et V_ENV repartait alors a 1 : un
+				// bourdon PLEIN NIVEAU, par le seul chemin que l'autre filet ne
+				// couvre pas.
+				vb[V_ST] == 0 ? vb[V_ACT] = 0;
+			);
+			// La sortie vers le rack : la voix la PLUS forte. « Combien fort
+			// l'instrument sonne-t-il » est la question a laquelle `env_out`
+			// repond depuis toujours ; la somme aurait rendu 8 sur un accord.
+			vb[V_ENV] > env_last ? env_last = vb[V_ENV];
+
+			// -----------------------------------------------------------------
+			// LES TROIS ENVELOPPES SUPPLEMENTAIRES
+			// -----------------------------------------------------------------
+			// Meme machine a etats que celle du dessus, MOINS les exponentielles :
+			// ses quatre coefficients ont ete calcules au bloc. Elle n'ecrit que
+			// dans V_XENV, V_XST et X_LAST — ni gate, ni filtre, ni mixage, ni
+			// V_ACT. Le chemin audio est litteralement le meme qu'avant.
+			//
+			// ⚠ ELLE NE TUE PAS LA VOIX, ET ELLE NE LUI SURVIT PAS NON PLUS. La
+			// chaine du dessus pose V_ACT = 0 quand l'enveloppe d'AMPLI est
+			// finie ; celles-ci meurent avec elle, parce que la boucle de rendu ne
+			// parcourt que les voix ACTIVES. Un relachement de modulation plus long
+			// que celui de l'ampli est donc coupe a la mort de la voix — c'est le
+			// prix a payer pour ne pas garder une voix allouee (et volable) juste
+			// pour une valeur qui ne s'entend plus. Il est ecrit ici pour qu'on ne
+			// le decouvre pas a l'oreille.
+			//
+			// ⚠ ON TESTE LE RESULTAT, PAS LE GESTE. Cinq branches de la chaine
+			// ci-dessus peuvent avoir tue la voix ; au lieu de recopier `v_xkill`
+			// dans les cinq — et d'en oublier une le jour ou une sixieme arrive —
+			// on demande simplement si la voix est ENCORE vivante.
+			vb[V_ACT] > 0.5 ? (
+				xk = 0;
+				loop(3,
+					xb = XENV + xk * XSZ;
+					xs = vb[V_XST + xk];
+					// Au repos, UNE comparaison et une remise a zero : une enveloppe
+					// finie ne doit pas couter la chaine entiere a chaque echantillon.
+					//
+					// ⚠ ET « AU REPOS » N'EST PAS LE CAS NORMAL. `v_start` remet les
+					// trois a l'etat 1 a CHAQUE note-on : tant qu'une note tient, les
+					// TROIS chaines completes tournent, par voix active et par
+					// echantillon, que quelque chose lise ENV 2..4 ou non — il n'y a
+					// aucun garde « cette bande est-elle lue ». L'etat 0 n'est atteint
+					// qu'apres un relachement termine, et `v_xkill` l'efface si l'ampli
+					// meurt avant. Rien de tout ca n'est mesure : `sg_test.py` verifie
+					// seulement qu'aucun coefficient ne redescend ici.
+					xs > 0 ? (
+						xs == 1 ? (
+							vb[V_XENV + xk] += xb[X_KA];
+							vb[V_XENV + xk] >= 1 ? ( vb[V_XENV + xk] = 1;
+								xb[X_HLD] > 0 ? ( vb[V_XDLY + xk] = xb[X_HLD]; vb[V_XST + xk] = 5; )
+								              : vb[V_XST + xk] = 2; );
+						) : xs == 2 ? (
+							vb[V_XENV + xk] -= (vb[V_XENV + xk] - xb[X_SUS]) * xb[X_KD];
+							abs(vb[V_XENV + xk] - xb[X_SUS]) < 0.001 ? vb[V_XENV + xk] = xb[X_SUS];
+						) : xs == 3 ? (
+							vb[V_XENV + xk] -= vb[V_XENV + xk] * xb[X_KR];
+							vb[V_XENV + xk] <= 0.001 ? ( vb[V_XENV + xk] = 0; vb[V_XST + xk] = 0; );
+						) : xs == 4 ? (
+							// LE RETARD ET LE MAINTIEN DES TROIS ENVELOPPES DE MODULATION.
+							// ⚠ SYMETRIQUE DU DEFAUT D'ENV 1, ET AUSSI MUET QUE L'AUTRE EST
+							// BRUYANT : la branche par defaut juste en dessous remet le
+							// niveau a ZERO. Un etat 4 non cable y ferait une modulation qui
+							// ne monte jamais — pas une erreur, rien du tout. Les deux
+							// chaines gagnent donc leurs branches dans LE MEME changement.
+							vb[V_XDLY + xk] -= 1;
+							vb[V_XDLY + xk] <= 0 ? vb[V_XST + xk] = 1;
+						) : xs == 5 ? (
+							vb[V_XDLY + xk] -= 1;
+							vb[V_XDLY + xk] <= 0 ? vb[V_XST + xk] = 2;
+						) : (
+							// ⚠ LA BRANCHE PAR DEFAUT EXISTE, ET ELLE ETEINT. Une chaine
+							// sans defaut laisse l'etat TEL QUEL : une enveloppe figee a
+							// 0,7 pour toujours est exactement le bourdon, transpose dans
+							// le rack de modulation.
+							vb[V_XENV + xk] = 0;
+						);
+						// La sortie vers le rack : la voix la PLUS forte, comme env_last.
+						// La somme aurait rendu 8 sur un accord.
+						vb[V_XENV + xk] > xb[X_LAST] ? xb[X_LAST] = vb[V_XENV + xk];
+					) : (
+						vb[V_XENV + xk] = 0;
+					);
+					xk += 1;
+				);
+			) : (
+				v_xkill(vb);
+			);
+		) : (
+			// ⚠ ET LE VRAI FILET EST ICI, SUR LA CHAINE DU MODE. En continu,
+			// seule la voix 0 a un proprietaire — la branche `mode < 0.5` la
+			// force active a chaque echantillon. Toute AUTRE voix encore active
+			// n'a plus personne pour avancer son enveloppe, puisque la chaine
+			// entiere ci-dessus vit sous `mode > 0.5` : elle bourdonnerait sans
+			// fin, a note_ratio = 1, jusqu'a huit fois par-dessus le bourdon.
+			// Celui de la chaine des V_ST ne couvre qu'UN sens ; celui-ci couvre
+			// les deux.
+			vi > 0 ? ( vb[V_ENV] = 0; vb[V_ACT] = 0; v_xkill(vb); );
+		);
+
+		vb[V_ACT] > 0.5 ? (
+			gate = vb[V_ENV];
+			vl = 0; vr = 0;
+			zfm > 0.000001 ? (
+				// LA MODULATION DE PHASE : le MODULATEUR d'abord. OSC 2 tourne
+				// meme eteint (alors il ne s'entend pas), et sa sortie decale la
+				// phase d'OSC 1 dans le meme echantillon. L'index suit le CARRE du
+				// reglage. Hors de cette branche, rien ne change -- ni l'ordre des
+				// oscillateurs, ni leurs tirages au hasard : le son d'avant au bit
+				// pres.
+				osc_sample(vb, 1, osc2_wave, vb[V_ADL + 1], vb[V_ADR + 1],
+				           ewid[1], ecol[1], aa, 0, 0);
+				fml = out_l; fmr = out_r;
+				fmk = zfm * zfm * FM_MAX;
+				osc1_on > 0.5 ? (
+					osc_sample(vb, 0, osc1_wave, vb[V_ADL], vb[V_ADR],
+					           ewid[0], ecol[0], aa, fmk * fml, fmk * fmr);
+					v = zvol[0];
+					vl += out_l * v * zpl[0];
+					vr += out_r * v * zpr[0];
+				);
+				osc2_on > 0.5 ? (
+					v = zvol[1];
+					vl += fml * v * zpl[1];
+					vr += fmr * v * zpr[1];
+				);
+				osc3_on > 0.5 ? (
+					osc_sample(vb, 2, osc3_wave, vb[V_ADL + 2], vb[V_ADR + 2],
+					           ewid[2], ecol[2], aa, 0, 0);
+					v = zvol[2];
+					vl += out_l * v * zpl[2];
+					vr += out_r * v * zpr[2];
+				);
+			) : (
+				i = 0;
+				loop(3,
+					slider(sl_on[i]) > 0.5 ? (
+						osc_sample(vb, i, slider(sl_wav[i]), vb[V_ADL + i], vb[V_ADR + i],
+						           ewid[i], ecol[i], aa, 0, 0);
+						v = zvol[i];
+						vl += out_l * v * zpl[i];
+						vr += out_r * v * zpr[i];
+					);
+					i += 1;
+				);
+			);
+
+			// LE FILTRE, PAR VOIX. SVF a integrateurs trapezoidaux : stable a
+			// toute coupure, y compris quand l'enveloppe la balaie d'un bout a
+			// l'autre, ce qu'un Chamberlin ne tient pas.
+			//
+			// ⚠ UN SEUL FILTRE POUR TOUT LE BANC AURAIT MENTI SUR DEUX
+			// REGLAGES. Le suivi de clavier et la velocite du filtre sont des
+			// faits de NOTE : partager l'etat, c'est filtrer un accord a la
+			// coupure de sa derniere note, et c'est aussi laisser la resonance
+			// d'une voix sonner dans une autre.
+			filt_type > 0.5 ? (
+				fi = vb[V_FIDX] + fidx_env * gate + f_off;
+				fi < 0 ? fi = 0 : fi > 1024 ? fi = 1024;
+				g = ftab[fi | 0];
+				a1 = 1 / (1 + g * (g + fk));
+				a2 = g * a1;
+				a3 = g * a2;
+
+				v3 = vl - vb[V_IC2A];
+				v1 = a1 * vb[V_IC1A] + a2 * v3;
+				v2 = vb[V_IC2A] + a2 * vb[V_IC1A] + a3 * v3;
+				vb[V_IC1A] = v1 + v1 - vb[V_IC1A];
+				vb[V_IC2A] = v2 + v2 - vb[V_IC2A];
+				filt_type < 1.5 ? ( vl = v2; )
+				: filt_type < 2.5 ? ( vl = v1; )
+				: filt_type < 3.5 ? ( vl = vl - fk * v1 - v2; )
+				: ( vl = vl - fk * v1; );
+
+				v3 = vr - vb[V_IC2B];
+				v1 = a1 * vb[V_IC1B] + a2 * v3;
+				v2 = vb[V_IC2B] + a2 * vb[V_IC1B] + a3 * v3;
+				vb[V_IC1B] = v1 + v1 - vb[V_IC1B];
+				vb[V_IC2B] = v2 + v2 - vb[V_IC2B];
+				filt_type < 1.5 ? ( vr = v2; )
+				: filt_type < 2.5 ? ( vr = v1; )
+				: filt_type < 3.5 ? ( vr = vr - fk * v1 - v2; )
+				: ( vr = vr - fk * v1; );
+			);
+
+			ag = gate * vb[V_VG];
+			mix_l += vl * ag;
+			mix_r += vr * ag;
+		);
+	);
+	vi += 1;
+);
+
+// ⚠ LE GAIN AUTOMATIQUE NE COMPTE PAS LES VOIX. Il divise par la somme des
+// volumes d'OSCILLATEURS allumes, et c'est deja ce qu'il faisait : « j'allume
+// OSC 2 » ne doit pas ecreter. Un accord, lui, DOIT etre plus fort qu'une note —
+// diviser par le nombre de voix ferait baisser le son quand on ajoute une note,
+// ce qu'aucun instrument ne fait.
+amp_g = zamp * zag;
+spl0 = mix_l * amp_g;
+spl1 = mix_r * amp_g;
+
+// Le releve du pic. Deux valeurs absolues et deux comparaisons : une mesure ne
+// doit pas couter plus cher que ce qu'elle mesure.
+pk = abs(spl0); pk > peak_run ? peak_run = pk;
+pk = abs(spl1); pk > peak_run ? peak_run = pk;
+
+@serialize
+// LE CHEMIN DU SAMPLE VIT DANS LE PROJET : un .RPP rouvert, rendu hors ligne ou
+// joue sans FX Constellation se recharge seul. La matiere ne se sauve pas (un
+// .RPP de cent megaoctets serait un defaut), seulement le chemin.
+// ⚠ REAPER RELIT AUSSI CET ETAT A CHAQUE ANNULATION ET A CHAQUE PRESET : le
+// meme chemin deja charge ne se recharge pas (`smp_same`), sinon chaque Ctrl+Z
+// sur la piste ferait taire le sample cinq millisecondes.
+file_avail(0) < 0 ? smp_ser = 1;
+file_var(0, smp_ser);
+smp_ser >= 1 ? file_mem(0, SMP_PATH, SMP_PLEN);
+(file_avail(0) >= 0 && smp_ser >= 1) ? (
+	SMP_PATH[SMP_PLEN - 1] = 0;
+	(smp_state >= 2 && smp_same()) ? 0 : smp_want = 1;
+);

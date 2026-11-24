@@ -1,0 +1,198 @@
+desc: FX Constellation Bridge
+slider1:x_pos=0.5<0,1,0.001>X Position
+slider2:y_pos=0.5<0,1,0.001>Y Position
+slider3:slew=0<0,2,0.01>Slew (s)
+slider4:x_out=0.5<0,1,0.0001>-X Out (link source)
+slider5:y_out=0.5<0,1,0.0001>-Y Out (link source)
+slider6:xy_mix=0.5<0,1,0.0001>-XY Mix (link source)
+slider7:macro1=0<0,1,0.001>Macro 1
+slider8:macro2=0<0,1,0.001>Macro 2
+slider9:macro3=0<0,1,0.001>Macro 3
+slider10:macro4=0<0,1,0.001>Macro 4
+slider11:macro5=0<0,1,0.001>Macro 5
+slider12:macro6=0<0,1,0.001>Macro 6
+slider13:macro7=0<0,1,0.001>Macro 7
+slider14:macro8=0<0,1,0.001>Macro 8
+slider15:macro1_out=0<0,1,0.0001>-Macro 1 Out (link source)
+slider16:macro2_out=0<0,1,0.0001>-Macro 2 Out (link source)
+slider17:macro3_out=0<0,1,0.0001>-Macro 3 Out (link source)
+slider18:macro4_out=0<0,1,0.0001>-Macro 4 Out (link source)
+slider19:macro5_out=0<0,1,0.0001>-Macro 5 Out (link source)
+slider20:macro6_out=0<0,1,0.0001>-Macro 6 Out (link source)
+slider21:macro7_out=0<0,1,0.0001>-Macro 7 Out (link source)
+slider22:macro8_out=0<0,1,0.0001>-Macro 8 Out (link source)
+slider23:eng_mode=0<0,2,1>-Engine (0 off, 1 walk, 2 figures)
+slider24:eng_mask=0<0,3,1>-Engine axes (1 X, 2 Y, 3 both)
+slider25:walk_rate=0.5<0,20,0.001>-Walk rate (Hz)
+slider26:walk_jit=0<0,1,0.001>-Walk jitter
+slider27:walk_jump=0<0,1,1>-Walk jumps
+slider28:walk_sync=0<0,5,1>-Walk sync (0 free)
+slider29:fig_mode=0<0,5,1>-Figure
+slider30:fig_rate=0.2<0,10,0.001>-Figure rate (Hz)
+slider31:fig_size=0.8<0,1,0.001>-Figure size
+slider32:zone_x0=0<0,1,0.0001>-Zone X min
+slider33:zone_x1=1<0,1,0.0001>-Zone X max
+slider34:zone_y0=0<0,1,0.0001>-Zone Y min
+slider35:zone_y1=1<0,1,0.0001>-Zone Y max
+
+@init
+x_out = x_pos;
+y_out = y_pos;
+xy_mix = (x_out + y_out) * 0.5;
+macro1_out = macro1; macro2_out = macro2;
+macro3_out = macro3; macro4_out = macro4;
+macro5_out = macro5; macro6_out = macro6;
+macro7_out = macro7; macro8_out = macro8;
+pe_wx = x_pos; pe_wy = y_pos;
+pe_p0x = pe_wx; pe_p0y = pe_wy;
+pe_p1x = pe_wx; pe_p1y = pe_wy;
+pe_p2x = pe_wx; pe_p2y = pe_wy;
+pe_p3x = pe_wx; pe_p3y = pe_wy;
+pe_t = 1000000; pe_dur = 1; pe_slot = -1000000; pe_fg = 0;
+pe_lr = 0; pe_l0 = -1; pe_l1 = -1; pe_l2 = -1; pe_l3 = -1;
+
+@block
+// La zone, ordonnee : une zone saisie a l'envers reste une zone.
+pe_zx0 = min(zone_x0, zone_x1); pe_zx1 = max(zone_x0, zone_x1);
+pe_zy0 = min(zone_y0, zone_y1); pe_zy1 = max(zone_y0, zone_y1);
+pe_zw = pe_zx1 - pe_zx0; pe_zh = pe_zy1 - pe_zy0;
+pe_run = (eng_mode > 0.5) && (eng_mask > 0.5);
+pe_run ? (
+  pe_dt = samplesblock / srate;
+  eng_mode < 1.5 ? (
+    pe_due = 0;
+    // Une zone qui change relance un segment : la cible tiree dans l'ancienne
+    // zone peut etre hors de la nouvelle, et le point s'y collerait au bord.
+    pe_zx0 != pe_l0 || pe_zx1 != pe_l1 || pe_zy0 != pe_l2 || pe_zy1 != pe_l3 ? (
+      pe_l0 = pe_zx0; pe_l1 = pe_zx1; pe_l2 = pe_zy0; pe_l3 = pe_zy1;
+      pe_due = 1;
+    );
+    // UN TAUX QUI CHANGE PREND EFFET TOUT DE SUITE. La duree d'un segment se
+    // fixe a son depart : passer de 0,1 a 10 Hz laissait le segment en cours
+    // finir ses dix secondes. On met le segment a l'echelle en gardant sa
+    // progression, donc sans saut du point.
+    walk_sync < 0.5 && walk_rate != pe_lr ? (
+      pe_lr > 0 && pe_t < pe_dur ? (
+        pe_rr = pe_lr / max(0.01, walk_rate);
+        pe_t *= pe_rr; pe_dur *= pe_rr;
+      );
+      pe_lr = walk_rate;
+    );
+    walk_sync > 0.5 ? (
+      pe_qn = walk_sync < 1.5 ? 0.25 : walk_sync < 2.5 ? 0.5 : walk_sync < 3.5 ? 1 : walk_sync < 4.5 ? 2 : 4;
+      pe_dur = pe_qn * 60 / (tempo > 0 ? tempo : 120);
+      (play_state & 1) ? (
+        pe_sl = floor(beat_position / pe_qn + 0.000000001);
+        pe_sl != pe_slot ? ( pe_slot = pe_sl; pe_due = 1; );
+      ) : (
+        pe_t >= pe_dur ? pe_due = 1;
+      );
+    ) : (
+      pe_t >= pe_dur ? pe_due = 1;
+    );
+    pe_due ? (
+      // Le depart est ramene DANS la zone : une zone posee pendant la marche
+      // laisse le point dehors, et le segment suivant doit l'y faire rentrer.
+      pe_p0x = max(pe_zx0, min(pe_zx1, pe_wx));
+      pe_p0y = max(pe_zy0, min(pe_zy1, pe_wy));
+      pe_p3x = pe_zx0 + rand() * pe_zw; pe_p3y = pe_zy0 + rand() * pe_zh;
+      pe_ddx = pe_p3x - pe_p0x; pe_ddy = pe_p3y - pe_p0y;
+      // Le trace a la meme forme qu'avant, a l'echelle de la zone : un ecart
+      // de 0,2 du pad entier deviendrait un saut d'un bord a l'autre d'une
+      // petite zone.
+      pe_p1x = max(pe_zx0, min(pe_zx1, pe_p0x + pe_ddx * 0.3 + (rand() - 0.5) * 0.2 * pe_zw));
+      pe_p1y = max(pe_zy0, min(pe_zy1, pe_p0y + pe_ddy * 0.3 + (rand() - 0.5) * 0.2 * pe_zh));
+      pe_p2x = max(pe_zx0, min(pe_zx1, pe_p0x + pe_ddx * 0.7 + (rand() - 0.5) * 0.2 * pe_zw));
+      pe_p2y = max(pe_zy0, min(pe_zy1, pe_p0y + pe_ddy * 0.7 + (rand() - 0.5) * 0.2 * pe_zh));
+      walk_sync < 0.5 ? (
+        pe_bi = 1 / max(0.01, walk_rate);
+        pe_dur = max(0.05, pe_bi + (rand() * 2 - 1) * pe_bi * walk_jit);
+      );
+      pe_t = 0;
+      walk_jump > 0.5 ? ( pe_wx = pe_p3x; pe_wy = pe_p3y; );
+    );
+    pe_t += pe_dt;
+    walk_jump < 0.5 ? (
+      pe_u = pe_dur > 0 ? min(1, pe_t / pe_dur) : 1;
+      pe_v = 1 - pe_u;
+      pe_ca = pe_v * pe_v * pe_v;
+      pe_cb = 3 * pe_v * pe_v * pe_u;
+      pe_cc = 3 * pe_v * pe_u * pe_u;
+      pe_cd = pe_u * pe_u * pe_u;
+      pe_wx = pe_ca * pe_p0x + pe_cb * pe_p1x + pe_cc * pe_p2x + pe_cd * pe_p3x;
+      pe_wy = pe_ca * pe_p0y + pe_cb * pe_p1y + pe_cc * pe_p2y + pe_cd * pe_p3y;
+    );
+  ) : (
+    pe_fg += pe_dt * fig_rate;
+    pe_fg -= floor(pe_fg);
+    pe_an = pe_fg * 2 * $pi;
+    pe_hs = fig_size * 0.5;
+    fig_mode < 0.5 ? (
+      pe_wx = 0.5 + pe_hs * cos(pe_an);
+      pe_wy = 0.5 + pe_hs * sin(pe_an);
+    ) : fig_mode < 1.5 ? (
+      pe_fg < 0.25 ? ( pe_k = pe_fg * 4; pe_wx = 0.5 - pe_hs + pe_k * fig_size; pe_wy = 0.5 - pe_hs; )
+      : pe_fg < 0.5 ? ( pe_k = (pe_fg - 0.25) * 4; pe_wx = 0.5 + pe_hs; pe_wy = 0.5 - pe_hs + pe_k * fig_size; )
+      : pe_fg < 0.75 ? ( pe_k = (pe_fg - 0.5) * 4; pe_wx = 0.5 + pe_hs - pe_k * fig_size; pe_wy = 0.5 + pe_hs; )
+      : ( pe_k = (pe_fg - 0.75) * 4; pe_wx = 0.5 - pe_hs; pe_wy = 0.5 + pe_hs - pe_k * fig_size; );
+    ) : fig_mode < 2.5 ? (
+      pe_fg < 0.33 ? ( pe_k = pe_fg * 3; pe_wx = 0.5; pe_wy = 0.5 - pe_hs + pe_k * pe_hs; )
+      : pe_fg < 0.66 ? ( pe_k = (pe_fg - 0.33) * 3; pe_wx = 0.5 - pe_k * fig_size; pe_wy = 0.5 + pe_hs; )
+      : ( pe_k = (pe_fg - 0.66) * 3; pe_wx = 0.5 - pe_hs + pe_k * fig_size; pe_wy = 0.5 + pe_hs - pe_k * pe_hs; );
+    ) : fig_mode < 3.5 ? (
+      pe_fg < 0.25 ? ( pe_k = pe_fg * 4; pe_wx = 0.5 - pe_hs + pe_k * pe_hs; pe_wy = 0.5 + pe_k * pe_hs; )
+      : pe_fg < 0.5 ? ( pe_k = (pe_fg - 0.25) * 4; pe_wx = 0.5 + pe_k * pe_hs; pe_wy = 0.5 + pe_hs - pe_k * pe_hs; )
+      : pe_fg < 0.75 ? ( pe_k = (pe_fg - 0.5) * 4; pe_wx = 0.5 + pe_hs - pe_k * pe_hs; pe_wy = 0.5 - pe_k * pe_hs; )
+      : ( pe_k = (pe_fg - 0.75) * 4; pe_wx = 0.5 - pe_k * pe_hs; pe_wy = 0.5 - pe_hs + pe_k * pe_hs; );
+    ) : fig_mode < 4.5 ? (
+      pe_fg < 0.25 ? ( pe_k = pe_fg * 4; pe_wx = 0.5 - pe_hs + pe_k * fig_size; pe_wy = 0.5 + pe_hs; )
+      : pe_fg < 0.5 ? ( pe_k = (pe_fg - 0.25) * 4; pe_wx = 0.5 + pe_hs - pe_k * fig_size; pe_wy = 0.5 + pe_hs - pe_k * fig_size; )
+      : pe_fg < 0.75 ? ( pe_k = (pe_fg - 0.5) * 4; pe_wx = 0.5 - pe_hs + pe_k * fig_size; pe_wy = 0.5 - pe_hs; )
+      : ( pe_k = (pe_fg - 0.75) * 4; pe_wx = 0.5 + pe_hs - pe_k * fig_size; pe_wy = 0.5 - pe_hs + pe_k * fig_size; );
+    ) : (
+      pe_sc = fig_size * 0.4;
+      pe_cs = cos(pe_an);
+      pe_dn = 1 + pe_cs * pe_cs;
+      pe_wx = 0.5 + pe_sc * sin(pe_an) / pe_dn;
+      pe_wy = 0.5 + pe_sc * sin(pe_an) * pe_cs / pe_dn;
+    );
+    // La figure se dessine dans le carre unite puis s'inscrit dans la zone :
+    // elle y reste centree, et sa taille devient relative a la zone.
+    pe_wx = pe_zx0 + max(0, min(1, pe_wx)) * pe_zw;
+    pe_wy = pe_zy0 + max(0, min(1, pe_wy)) * pe_zh;
+  );
+  pe_wx = max(pe_zx0, min(pe_zx1, pe_wx));
+  pe_wy = max(pe_zy0, min(pe_zy1, pe_wy));
+) : (
+  pe_wx = x_pos; pe_wy = y_pos;
+  pe_t = 1000000; pe_slot = -1000000;
+);
+
+pe_tx = ((eng_mask & 1) && pe_run) ? pe_wx : x_pos;
+pe_ty = ((eng_mask & 2) && pe_run) ? pe_wy : y_pos;
+// La zone borne la SORTIE, quel que soit l'auteur de l'entree : la souris
+// (deja bornee par le script), une enveloppe, ou une source qui pilote l'axe.
+pe_tx = max(pe_zx0, min(pe_zx1, pe_tx));
+pe_ty = max(pe_zy0, min(pe_zy1, pe_ty));
+
+slew > 0.001 ? (
+  coef = 1 - exp(-samplesblock / (srate * slew));
+  x_out += (pe_tx - x_out) * coef;
+  y_out += (pe_ty - y_out) * coef;
+  macro1_out += (macro1 - macro1_out) * coef;
+  macro2_out += (macro2 - macro2_out) * coef;
+  macro3_out += (macro3 - macro3_out) * coef;
+  macro4_out += (macro4 - macro4_out) * coef;
+  macro5_out += (macro5 - macro5_out) * coef;
+  macro6_out += (macro6 - macro6_out) * coef;
+  macro7_out += (macro7 - macro7_out) * coef;
+  macro8_out += (macro8 - macro8_out) * coef;
+) : (
+  x_out = pe_tx;
+  y_out = pe_ty;
+  macro1_out = macro1; macro2_out = macro2;
+  macro3_out = macro3; macro4_out = macro4;
+  macro5_out = macro5; macro6_out = macro6;
+  macro7_out = macro7; macro8_out = macro8;
+);
+xy_mix = (x_out + y_out) * 0.5;

@@ -1,0 +1,1305 @@
+desc: FX Constellation - Sequencer
+// Genere par FX Constellation/Modules/Sequencer.lua -- ne pas editer a la main.
+slider1:seq_on=1<0,1,1{Off,On}>Sequencer
+slider2:seq_run=0<0,1,1{Stop,Play}>Run (transport stopped)
+slider3:seq_clock=0<0,2,1{Auto,Transport,Free}>Clock
+slider4:seq_rate=2<0,8,1{1/32,1/16T,1/16,1/8T,1/8,1/4T,1/4,1/2,1 bar}>Step
+slider5:seq_swing=0<0,100,1>Swing (%)
+slider6:seq_dir=0<0,3,1{Forward,Backward,Ping-Pong,Random}>Direction
+slider7:seq_root=0<0,11,1{C,C#,D,D#,E,F,F#,G,G#,A,A#,B}>Root
+slider8:seq_scale=2<0,15,1{Chromatic,Major,Minor,Dorian,Phrygian,Lydian,Mixolydian,Locrian,Harmonic Minor,Melodic Minor,Major Pentatonic,Minor Pentatonic,Blues,Whole Tone,Fifths,Octaves}>Scale
+slider9:seq_oct=4<0,8,1>Octave
+slider10:seq_transp=0<-24,24,1>Transpose (st)
+slider11:seq_notein=0<0,2,1{Thru,Transpose,Arp}>Incoming Notes
+slider12:seq_chan=1<1,16,1>MIDI Channel
+slider13:seq_rev=0<0,1000000,1>-Revision
+slider14:seq_pha=0<0,1048575,1>-Playheads A
+slider15:seq_phb=0<0,65535,1>-Playheads B
+slider16:seq_state=0<0,7,1>-State
+slider17:seq_moda=0.5<0,1,0.001>-Mod A Out
+slider18:seq_modb=0.5<0,1,0.001>-Mod B Out
+slider19:seq_note=-1<-1,127,1>-Last Note
+slider20:seq_roll=0<0,524287,1>-Roll Request
+slider21:l0_s0=1<0,1,1{Off,On}>Trig 1
+slider22:l0_s1=1<0,1,1{Off,On}>Trig 2
+slider23:l0_s2=1<0,1,1{Off,On}>Trig 3
+slider24:l0_s3=1<0,1,1{Off,On}>Trig 4
+slider25:l0_s4=1<0,1,1{Off,On}>Trig 5
+slider26:l0_s5=1<0,1,1{Off,On}>Trig 6
+slider27:l0_s6=1<0,1,1{Off,On}>Trig 7
+slider28:l0_s7=1<0,1,1{Off,On}>Trig 8
+slider29:l0_s8=1<0,1,1{Off,On}>Trig 9
+slider30:l0_s9=1<0,1,1{Off,On}>Trig 10
+slider31:l0_s10=1<0,1,1{Off,On}>Trig 11
+slider32:l0_s11=1<0,1,1{Off,On}>Trig 12
+slider33:l0_s12=1<0,1,1{Off,On}>Trig 13
+slider34:l0_s13=1<0,1,1{Off,On}>Trig 14
+slider35:l0_s14=1<0,1,1{Off,On}>Trig 15
+slider36:l0_s15=1<0,1,1{Off,On}>Trig 16
+slider37:l0_len=16<1,16,1>Trig Length
+slider38:l0_spd=4<0,8,1{1/4x,1/3x,1/2x,2/3x,1x,3/2x,2x,3x,4x}>Trig Rate
+slider39:l0_mut=0<0,100,1>Trig Mutation (%)
+slider40:l0_dice=50<0,100,1>Trig Dice (%)
+slider41:l0_lo=0<0,1,0.01>-Trig Range Low
+slider42:l0_hi=0.75<0,1,0.01>Trig Density
+slider43:l1_s0=0<-7,14,1>Pitch 1
+slider44:l1_s1=0<-7,14,1>Pitch 2
+slider45:l1_s2=0<-7,14,1>Pitch 3
+slider46:l1_s3=0<-7,14,1>Pitch 4
+slider47:l1_s4=0<-7,14,1>Pitch 5
+slider48:l1_s5=0<-7,14,1>Pitch 6
+slider49:l1_s6=0<-7,14,1>Pitch 7
+slider50:l1_s7=0<-7,14,1>Pitch 8
+slider51:l1_s8=0<-7,14,1>Pitch 9
+slider52:l1_s9=0<-7,14,1>Pitch 10
+slider53:l1_s10=0<-7,14,1>Pitch 11
+slider54:l1_s11=0<-7,14,1>Pitch 12
+slider55:l1_s12=0<-7,14,1>Pitch 13
+slider56:l1_s13=0<-7,14,1>Pitch 14
+slider57:l1_s14=0<-7,14,1>Pitch 15
+slider58:l1_s15=0<-7,14,1>Pitch 16
+slider59:l1_len=16<1,16,1>Pitch Length
+slider60:l1_spd=4<0,8,1{1/4x,1/3x,1/2x,2/3x,1x,3/2x,2x,3x,4x}>Pitch Rate
+slider61:l1_mut=0<0,100,1>Pitch Mutation (%)
+slider62:l1_dice=50<0,100,1>Pitch Dice (%)
+slider63:l1_lo=0<-7,14,1>Pitch Range Low
+slider64:l1_hi=7<-7,14,1>Pitch Range High
+slider65:l2_s0=0<-2,2,1>Octave 1
+slider66:l2_s1=0<-2,2,1>Octave 2
+slider67:l2_s2=0<-2,2,1>Octave 3
+slider68:l2_s3=0<-2,2,1>Octave 4
+slider69:l2_s4=0<-2,2,1>Octave 5
+slider70:l2_s5=0<-2,2,1>Octave 6
+slider71:l2_s6=0<-2,2,1>Octave 7
+slider72:l2_s7=0<-2,2,1>Octave 8
+slider73:l2_s8=0<-2,2,1>Octave 9
+slider74:l2_s9=0<-2,2,1>Octave 10
+slider75:l2_s10=0<-2,2,1>Octave 11
+slider76:l2_s11=0<-2,2,1>Octave 12
+slider77:l2_s12=0<-2,2,1>Octave 13
+slider78:l2_s13=0<-2,2,1>Octave 14
+slider79:l2_s14=0<-2,2,1>Octave 15
+slider80:l2_s15=0<-2,2,1>Octave 16
+slider81:l2_len=16<1,16,1>Octave Length
+slider82:l2_spd=4<0,8,1{1/4x,1/3x,1/2x,2/3x,1x,3/2x,2x,3x,4x}>Octave Rate
+slider83:l2_mut=0<0,100,1>Octave Mutation (%)
+slider84:l2_dice=50<0,100,1>Octave Dice (%)
+slider85:l2_lo=0<-2,2,1>Octave Range Low
+slider86:l2_hi=1<-2,2,1>Octave Range High
+slider87:l3_s0=100<1,127,1>Velocity 1
+slider88:l3_s1=100<1,127,1>Velocity 2
+slider89:l3_s2=100<1,127,1>Velocity 3
+slider90:l3_s3=100<1,127,1>Velocity 4
+slider91:l3_s4=100<1,127,1>Velocity 5
+slider92:l3_s5=100<1,127,1>Velocity 6
+slider93:l3_s6=100<1,127,1>Velocity 7
+slider94:l3_s7=100<1,127,1>Velocity 8
+slider95:l3_s8=100<1,127,1>Velocity 9
+slider96:l3_s9=100<1,127,1>Velocity 10
+slider97:l3_s10=100<1,127,1>Velocity 11
+slider98:l3_s11=100<1,127,1>Velocity 12
+slider99:l3_s12=100<1,127,1>Velocity 13
+slider100:l3_s13=100<1,127,1>Velocity 14
+slider101:l3_s14=100<1,127,1>Velocity 15
+slider102:l3_s15=100<1,127,1>Velocity 16
+slider103:l3_len=16<1,16,1>Velocity Length
+slider104:l3_spd=4<0,8,1{1/4x,1/3x,1/2x,2/3x,1x,3/2x,2x,3x,4x}>Velocity Rate
+slider105:l3_mut=0<0,100,1>Velocity Mutation (%)
+slider106:l3_dice=50<0,100,1>Velocity Dice (%)
+slider107:l3_lo=70<1,127,1>Velocity Range Low
+slider108:l3_hi=127<1,127,1>Velocity Range High
+slider109:l4_s0=50<1,100,1>Gate 1
+slider110:l4_s1=50<1,100,1>Gate 2
+slider111:l4_s2=50<1,100,1>Gate 3
+slider112:l4_s3=50<1,100,1>Gate 4
+slider113:l4_s4=50<1,100,1>Gate 5
+slider114:l4_s5=50<1,100,1>Gate 6
+slider115:l4_s6=50<1,100,1>Gate 7
+slider116:l4_s7=50<1,100,1>Gate 8
+slider117:l4_s8=50<1,100,1>Gate 9
+slider118:l4_s9=50<1,100,1>Gate 10
+slider119:l4_s10=50<1,100,1>Gate 11
+slider120:l4_s11=50<1,100,1>Gate 12
+slider121:l4_s12=50<1,100,1>Gate 13
+slider122:l4_s13=50<1,100,1>Gate 14
+slider123:l4_s14=50<1,100,1>Gate 15
+slider124:l4_s15=50<1,100,1>Gate 16
+slider125:l4_len=16<1,16,1>Gate Length
+slider126:l4_spd=4<0,8,1{1/4x,1/3x,1/2x,2/3x,1x,3/2x,2x,3x,4x}>Gate Rate
+slider127:l4_mut=0<0,100,1>Gate Mutation (%)
+slider128:l4_dice=50<0,100,1>Gate Dice (%)
+slider129:l4_lo=25<1,100,1>Gate Range Low
+slider130:l4_hi=90<1,100,1>Gate Range High
+slider131:l5_s0=100<0,100,1>Chance 1
+slider132:l5_s1=100<0,100,1>Chance 2
+slider133:l5_s2=100<0,100,1>Chance 3
+slider134:l5_s3=100<0,100,1>Chance 4
+slider135:l5_s4=100<0,100,1>Chance 5
+slider136:l5_s5=100<0,100,1>Chance 6
+slider137:l5_s6=100<0,100,1>Chance 7
+slider138:l5_s7=100<0,100,1>Chance 8
+slider139:l5_s8=100<0,100,1>Chance 9
+slider140:l5_s9=100<0,100,1>Chance 10
+slider141:l5_s10=100<0,100,1>Chance 11
+slider142:l5_s11=100<0,100,1>Chance 12
+slider143:l5_s12=100<0,100,1>Chance 13
+slider144:l5_s13=100<0,100,1>Chance 14
+slider145:l5_s14=100<0,100,1>Chance 15
+slider146:l5_s15=100<0,100,1>Chance 16
+slider147:l5_len=16<1,16,1>Chance Length
+slider148:l5_spd=4<0,8,1{1/4x,1/3x,1/2x,2/3x,1x,3/2x,2x,3x,4x}>Chance Rate
+slider149:l5_mut=0<0,100,1>Chance Mutation (%)
+slider150:l5_dice=50<0,100,1>Chance Dice (%)
+slider151:l5_lo=50<0,100,1>Chance Range Low
+slider152:l5_hi=100<0,100,1>Chance Range High
+slider153:l6_s0=0<0,1,1{Off,On}>Slide 1
+slider154:l6_s1=0<0,1,1{Off,On}>Slide 2
+slider155:l6_s2=0<0,1,1{Off,On}>Slide 3
+slider156:l6_s3=0<0,1,1{Off,On}>Slide 4
+slider157:l6_s4=0<0,1,1{Off,On}>Slide 5
+slider158:l6_s5=0<0,1,1{Off,On}>Slide 6
+slider159:l6_s6=0<0,1,1{Off,On}>Slide 7
+slider160:l6_s7=0<0,1,1{Off,On}>Slide 8
+slider161:l6_s8=0<0,1,1{Off,On}>Slide 9
+slider162:l6_s9=0<0,1,1{Off,On}>Slide 10
+slider163:l6_s10=0<0,1,1{Off,On}>Slide 11
+slider164:l6_s11=0<0,1,1{Off,On}>Slide 12
+slider165:l6_s12=0<0,1,1{Off,On}>Slide 13
+slider166:l6_s13=0<0,1,1{Off,On}>Slide 14
+slider167:l6_s14=0<0,1,1{Off,On}>Slide 15
+slider168:l6_s15=0<0,1,1{Off,On}>Slide 16
+slider169:l6_len=16<1,16,1>Slide Length
+slider170:l6_spd=4<0,8,1{1/4x,1/3x,1/2x,2/3x,1x,3/2x,2x,3x,4x}>Slide Rate
+slider171:l6_mut=0<0,100,1>Slide Mutation (%)
+slider172:l6_dice=50<0,100,1>Slide Dice (%)
+slider173:l6_lo=0<0,1,0.01>-Slide Range Low
+slider174:l6_hi=0.2<0,1,0.01>Slide Density
+slider175:l7_s0=0.5<0,1,0.001>Mod A 1
+slider176:l7_s1=0.5<0,1,0.001>Mod A 2
+slider177:l7_s2=0.5<0,1,0.001>Mod A 3
+slider178:l7_s3=0.5<0,1,0.001>Mod A 4
+slider179:l7_s4=0.5<0,1,0.001>Mod A 5
+slider180:l7_s5=0.5<0,1,0.001>Mod A 6
+slider181:l7_s6=0.5<0,1,0.001>Mod A 7
+slider182:l7_s7=0.5<0,1,0.001>Mod A 8
+slider183:l7_s8=0.5<0,1,0.001>Mod A 9
+slider184:l7_s9=0.5<0,1,0.001>Mod A 10
+slider185:l7_s10=0.5<0,1,0.001>Mod A 11
+slider186:l7_s11=0.5<0,1,0.001>Mod A 12
+slider187:l7_s12=0.5<0,1,0.001>Mod A 13
+slider188:l7_s13=0.5<0,1,0.001>Mod A 14
+slider189:l7_s14=0.5<0,1,0.001>Mod A 15
+slider190:l7_s15=0.5<0,1,0.001>Mod A 16
+slider191:l7_len=16<1,16,1>Mod A Length
+slider192:l7_spd=4<0,8,1{1/4x,1/3x,1/2x,2/3x,1x,3/2x,2x,3x,4x}>Mod A Rate
+slider193:l7_mut=0<0,100,1>Mod A Mutation (%)
+slider194:l7_dice=50<0,100,1>Mod A Dice (%)
+slider195:l7_lo=0<0,1,0.001>Mod A Range Low
+slider196:l7_hi=1<0,1,0.001>Mod A Range High
+slider197:l8_s0=0.5<0,1,0.001>Mod B 1
+slider198:l8_s1=0.5<0,1,0.001>Mod B 2
+slider199:l8_s2=0.5<0,1,0.001>Mod B 3
+slider200:l8_s3=0.5<0,1,0.001>Mod B 4
+slider201:l8_s4=0.5<0,1,0.001>Mod B 5
+slider202:l8_s5=0.5<0,1,0.001>Mod B 6
+slider203:l8_s6=0.5<0,1,0.001>Mod B 7
+slider204:l8_s7=0.5<0,1,0.001>Mod B 8
+slider205:l8_s8=0.5<0,1,0.001>Mod B 9
+slider206:l8_s9=0.5<0,1,0.001>Mod B 10
+slider207:l8_s10=0.5<0,1,0.001>Mod B 11
+slider208:l8_s11=0.5<0,1,0.001>Mod B 12
+slider209:l8_s12=0.5<0,1,0.001>Mod B 13
+slider210:l8_s13=0.5<0,1,0.001>Mod B 14
+slider211:l8_s14=0.5<0,1,0.001>Mod B 15
+slider212:l8_s15=0.5<0,1,0.001>Mod B 16
+slider213:l8_len=16<1,16,1>Mod B Length
+slider214:l8_spd=4<0,8,1{1/4x,1/3x,1/2x,2/3x,1x,3/2x,2x,3x,4x}>Mod B Rate
+slider215:l8_mut=0<0,100,1>Mod B Mutation (%)
+slider216:l8_dice=50<0,100,1>Mod B Dice (%)
+slider217:l8_lo=0<0,1,0.001>Mod B Range Low
+slider218:l8_hi=1<0,1,0.001>Mod B Range High
+slider219:seq_fch=0<0,255,1>-Fast channel (internal)
+slider220:seq_pat=0<0,15,1>-Pattern
+slider221:seq_pmask=1<0,65535,1>-Pattern Mask
+slider222:seq_pnext=-1<-1,15,1>-Pattern Next
+slider223:seq_preq=0<0,4194303,1>-Pattern Request
+slider224:seq_pnote=1<0,10,1{Off,C-1,C0,C1,C2,C3,C4,C5,C6,C7,C8}>Pattern Notes
+slider225:seq_pq=0<0,3,1{Now,Next Beat,Next Bar,Pattern End}>Pattern Change
+slider226:seq_pch=0<0,255,1>-Pattern Channel (internal)
+slider227:seq_ptok=0<0,16777215,1>-Pattern Token (internal)
+slider228:seq_arpm=0<0,5,1{Up,Down,Up/Down,Down/Up,As Played,Random}>Arp Order
+slider229:seq_arpo=1<1,4,1>Arp Octaves
+slider230:seq_arpl=0<0,1,1{Off,On}>Arp Latch
+options:no_meter gmem=CP_FXC_FAST
+
+@init
+// Pas de @init au lancement du transport : sans ca REAPER le rejoue a chaque
+// Play, et l'horloge libre, la note qui sonne et le tirage deja consomme
+// repartiraient de zero sous les doigts.
+ext_noinit = 1;
+NL = 9; NS = 16;
+GB = 20; LS = 22;
+O_LEN = 16; O_SPD = 17; O_MUT = 18; O_DICE = 19; O_LO = 20; O_HI = 21;
+
+// LA MEMOIRE : des regions a plat, posees une fois.
+DEG   = 0;     // 12 : demi-tons de chaque degre de la gamme courante
+SPDF  = 16;    // 9  : facteur de vitesse de chaque ligne (relu au bloc)
+LENA  = 32;    // 9  : longueur de chaque ligne (relue au bloc)
+PCYC  = 48;    // 9  : dernier tour vu par ligne (la mutation)
+POS   = 64;    // 9  : le pas courant de chaque ligne
+LMIN  = 80;    // 9  : la course de chaque ligne
+LMAX  = 96;
+LINT  = 112;   // 9  : la ligne est-elle entiere
+LBOOL = 128;   // 9  : la ligne est-elle un interrupteur
+PPER  = 144;   // 9  : periode vue au bloc precedent
+PSPD  = 160;   // 9  : vitesse vue au bloc precedent
+SPDT  = 176;   // 9  : la table des vitesses
+RATEB = 192;   // 9  : la table des divisions, en noires
+EVQ   = 256;   // 64 x 4 : nos evenements du bloc, dans l'ordre des dates
+INQ   = 512;   // 256 x 4 : les evenements recus, dans leur ordre
+SNAP  = 1536;  // 2 x 16 : les pas des deux lignes libres avant les mutations du bloc
+PC0   = 1568;  // 2 : leur tour au debut du bloc
+PATM  = 4096;  // 16 x 256 : les seize patterns (Sequencer.PAT_STRIDE)
+PATP  = 8192;  // NPV : le slider (1-base) de chaque valeur d'un pattern
+PDEF  = 8448;  // NPV : son defaut (un pattern efface)
+ARH   = 8704;  // 32 : les notes tenues, dans l'ordre ou elles ont ete jouees
+ARS   = 8736;  // 32 : les memes, triees
+ARK   = 8768;  // 128 : les touches baissees (le loquet compte les doigts)
+ARQ   = 8896;  // 256 x 4 : les notes recues du bloc, pour l'arpege
+LMIN[0] = 0; LMAX[0] = 1; LINT[0] = 1; LBOOL[0] = 1;
+LMIN[1] = -7; LMAX[1] = 14; LINT[1] = 1; LBOOL[1] = 0;
+LMIN[2] = -2; LMAX[2] = 2; LINT[2] = 1; LBOOL[2] = 0;
+LMIN[3] = 1; LMAX[3] = 127; LINT[3] = 1; LBOOL[3] = 0;
+LMIN[4] = 1; LMAX[4] = 100; LINT[4] = 1; LBOOL[4] = 0;
+LMIN[5] = 0; LMAX[5] = 100; LINT[5] = 1; LBOOL[5] = 0;
+LMIN[6] = 0; LMAX[6] = 1; LINT[6] = 1; LBOOL[6] = 1;
+LMIN[7] = 0; LMAX[7] = 1; LINT[7] = 0; LBOOL[7] = 0;
+LMIN[8] = 0; LMAX[8] = 1; LINT[8] = 0; LBOOL[8] = 0;
+SPDT[0] = 0.25; RATEB[0] = 0.125;
+SPDT[1] = 0.33333333333333331; RATEB[1] = 0.16666666666666666;
+SPDT[2] = 0.5; RATEB[2] = 0.25;
+SPDT[3] = 0.66666666666666663; RATEB[3] = 0.33333333333333331;
+SPDT[4] = 1; RATEB[4] = 0.5;
+SPDT[5] = 1.5; RATEB[5] = 0.66666666666666663;
+SPDT[6] = 2; RATEB[6] = 1;
+SPDT[7] = 3; RATEB[7] = 2;
+SPDT[8] = 4; RATEB[8] = 4;
+NPV = 207; PATG = 2097152; PGS = 8192; PIN = 4096; PHD = 16;
+PATP[0] = 4; PDEF[0] = 2;
+PATP[1] = 5; PDEF[1] = 0;
+PATP[2] = 6; PDEF[2] = 0;
+PATP[3] = 7; PDEF[3] = 0;
+PATP[4] = 8; PDEF[4] = 2;
+PATP[5] = 9; PDEF[5] = 4;
+PATP[6] = 10; PDEF[6] = 0;
+PATP[7] = 21; PDEF[7] = 1;
+PATP[8] = 22; PDEF[8] = 1;
+PATP[9] = 23; PDEF[9] = 1;
+PATP[10] = 24; PDEF[10] = 1;
+PATP[11] = 25; PDEF[11] = 1;
+PATP[12] = 26; PDEF[12] = 1;
+PATP[13] = 27; PDEF[13] = 1;
+PATP[14] = 28; PDEF[14] = 1;
+PATP[15] = 29; PDEF[15] = 1;
+PATP[16] = 30; PDEF[16] = 1;
+PATP[17] = 31; PDEF[17] = 1;
+PATP[18] = 32; PDEF[18] = 1;
+PATP[19] = 33; PDEF[19] = 1;
+PATP[20] = 34; PDEF[20] = 1;
+PATP[21] = 35; PDEF[21] = 1;
+PATP[22] = 36; PDEF[22] = 1;
+PATP[23] = 37; PDEF[23] = 16;
+PATP[24] = 38; PDEF[24] = 4;
+PATP[25] = 39; PDEF[25] = 0;
+PATP[26] = 40; PDEF[26] = 50;
+PATP[27] = 41; PDEF[27] = 0;
+PATP[28] = 42; PDEF[28] = 0.75;
+PATP[29] = 43; PDEF[29] = 0;
+PATP[30] = 44; PDEF[30] = 0;
+PATP[31] = 45; PDEF[31] = 0;
+PATP[32] = 46; PDEF[32] = 0;
+PATP[33] = 47; PDEF[33] = 0;
+PATP[34] = 48; PDEF[34] = 0;
+PATP[35] = 49; PDEF[35] = 0;
+PATP[36] = 50; PDEF[36] = 0;
+PATP[37] = 51; PDEF[37] = 0;
+PATP[38] = 52; PDEF[38] = 0;
+PATP[39] = 53; PDEF[39] = 0;
+PATP[40] = 54; PDEF[40] = 0;
+PATP[41] = 55; PDEF[41] = 0;
+PATP[42] = 56; PDEF[42] = 0;
+PATP[43] = 57; PDEF[43] = 0;
+PATP[44] = 58; PDEF[44] = 0;
+PATP[45] = 59; PDEF[45] = 16;
+PATP[46] = 60; PDEF[46] = 4;
+PATP[47] = 61; PDEF[47] = 0;
+PATP[48] = 62; PDEF[48] = 50;
+PATP[49] = 63; PDEF[49] = 0;
+PATP[50] = 64; PDEF[50] = 7;
+PATP[51] = 65; PDEF[51] = 0;
+PATP[52] = 66; PDEF[52] = 0;
+PATP[53] = 67; PDEF[53] = 0;
+PATP[54] = 68; PDEF[54] = 0;
+PATP[55] = 69; PDEF[55] = 0;
+PATP[56] = 70; PDEF[56] = 0;
+PATP[57] = 71; PDEF[57] = 0;
+PATP[58] = 72; PDEF[58] = 0;
+PATP[59] = 73; PDEF[59] = 0;
+PATP[60] = 74; PDEF[60] = 0;
+PATP[61] = 75; PDEF[61] = 0;
+PATP[62] = 76; PDEF[62] = 0;
+PATP[63] = 77; PDEF[63] = 0;
+PATP[64] = 78; PDEF[64] = 0;
+PATP[65] = 79; PDEF[65] = 0;
+PATP[66] = 80; PDEF[66] = 0;
+PATP[67] = 81; PDEF[67] = 16;
+PATP[68] = 82; PDEF[68] = 4;
+PATP[69] = 83; PDEF[69] = 0;
+PATP[70] = 84; PDEF[70] = 50;
+PATP[71] = 85; PDEF[71] = 0;
+PATP[72] = 86; PDEF[72] = 1;
+PATP[73] = 87; PDEF[73] = 100;
+PATP[74] = 88; PDEF[74] = 100;
+PATP[75] = 89; PDEF[75] = 100;
+PATP[76] = 90; PDEF[76] = 100;
+PATP[77] = 91; PDEF[77] = 100;
+PATP[78] = 92; PDEF[78] = 100;
+PATP[79] = 93; PDEF[79] = 100;
+PATP[80] = 94; PDEF[80] = 100;
+PATP[81] = 95; PDEF[81] = 100;
+PATP[82] = 96; PDEF[82] = 100;
+PATP[83] = 97; PDEF[83] = 100;
+PATP[84] = 98; PDEF[84] = 100;
+PATP[85] = 99; PDEF[85] = 100;
+PATP[86] = 100; PDEF[86] = 100;
+PATP[87] = 101; PDEF[87] = 100;
+PATP[88] = 102; PDEF[88] = 100;
+PATP[89] = 103; PDEF[89] = 16;
+PATP[90] = 104; PDEF[90] = 4;
+PATP[91] = 105; PDEF[91] = 0;
+PATP[92] = 106; PDEF[92] = 50;
+PATP[93] = 107; PDEF[93] = 70;
+PATP[94] = 108; PDEF[94] = 127;
+PATP[95] = 109; PDEF[95] = 50;
+PATP[96] = 110; PDEF[96] = 50;
+PATP[97] = 111; PDEF[97] = 50;
+PATP[98] = 112; PDEF[98] = 50;
+PATP[99] = 113; PDEF[99] = 50;
+PATP[100] = 114; PDEF[100] = 50;
+PATP[101] = 115; PDEF[101] = 50;
+PATP[102] = 116; PDEF[102] = 50;
+PATP[103] = 117; PDEF[103] = 50;
+PATP[104] = 118; PDEF[104] = 50;
+PATP[105] = 119; PDEF[105] = 50;
+PATP[106] = 120; PDEF[106] = 50;
+PATP[107] = 121; PDEF[107] = 50;
+PATP[108] = 122; PDEF[108] = 50;
+PATP[109] = 123; PDEF[109] = 50;
+PATP[110] = 124; PDEF[110] = 50;
+PATP[111] = 125; PDEF[111] = 16;
+PATP[112] = 126; PDEF[112] = 4;
+PATP[113] = 127; PDEF[113] = 0;
+PATP[114] = 128; PDEF[114] = 50;
+PATP[115] = 129; PDEF[115] = 25;
+PATP[116] = 130; PDEF[116] = 90;
+PATP[117] = 131; PDEF[117] = 100;
+PATP[118] = 132; PDEF[118] = 100;
+PATP[119] = 133; PDEF[119] = 100;
+PATP[120] = 134; PDEF[120] = 100;
+PATP[121] = 135; PDEF[121] = 100;
+PATP[122] = 136; PDEF[122] = 100;
+PATP[123] = 137; PDEF[123] = 100;
+PATP[124] = 138; PDEF[124] = 100;
+PATP[125] = 139; PDEF[125] = 100;
+PATP[126] = 140; PDEF[126] = 100;
+PATP[127] = 141; PDEF[127] = 100;
+PATP[128] = 142; PDEF[128] = 100;
+PATP[129] = 143; PDEF[129] = 100;
+PATP[130] = 144; PDEF[130] = 100;
+PATP[131] = 145; PDEF[131] = 100;
+PATP[132] = 146; PDEF[132] = 100;
+PATP[133] = 147; PDEF[133] = 16;
+PATP[134] = 148; PDEF[134] = 4;
+PATP[135] = 149; PDEF[135] = 0;
+PATP[136] = 150; PDEF[136] = 50;
+PATP[137] = 151; PDEF[137] = 50;
+PATP[138] = 152; PDEF[138] = 100;
+PATP[139] = 153; PDEF[139] = 0;
+PATP[140] = 154; PDEF[140] = 0;
+PATP[141] = 155; PDEF[141] = 0;
+PATP[142] = 156; PDEF[142] = 0;
+PATP[143] = 157; PDEF[143] = 0;
+PATP[144] = 158; PDEF[144] = 0;
+PATP[145] = 159; PDEF[145] = 0;
+PATP[146] = 160; PDEF[146] = 0;
+PATP[147] = 161; PDEF[147] = 0;
+PATP[148] = 162; PDEF[148] = 0;
+PATP[149] = 163; PDEF[149] = 0;
+PATP[150] = 164; PDEF[150] = 0;
+PATP[151] = 165; PDEF[151] = 0;
+PATP[152] = 166; PDEF[152] = 0;
+PATP[153] = 167; PDEF[153] = 0;
+PATP[154] = 168; PDEF[154] = 0;
+PATP[155] = 169; PDEF[155] = 16;
+PATP[156] = 170; PDEF[156] = 4;
+PATP[157] = 171; PDEF[157] = 0;
+PATP[158] = 172; PDEF[158] = 50;
+PATP[159] = 173; PDEF[159] = 0;
+PATP[160] = 174; PDEF[160] = 0.2;
+PATP[161] = 175; PDEF[161] = 0.5;
+PATP[162] = 176; PDEF[162] = 0.5;
+PATP[163] = 177; PDEF[163] = 0.5;
+PATP[164] = 178; PDEF[164] = 0.5;
+PATP[165] = 179; PDEF[165] = 0.5;
+PATP[166] = 180; PDEF[166] = 0.5;
+PATP[167] = 181; PDEF[167] = 0.5;
+PATP[168] = 182; PDEF[168] = 0.5;
+PATP[169] = 183; PDEF[169] = 0.5;
+PATP[170] = 184; PDEF[170] = 0.5;
+PATP[171] = 185; PDEF[171] = 0.5;
+PATP[172] = 186; PDEF[172] = 0.5;
+PATP[173] = 187; PDEF[173] = 0.5;
+PATP[174] = 188; PDEF[174] = 0.5;
+PATP[175] = 189; PDEF[175] = 0.5;
+PATP[176] = 190; PDEF[176] = 0.5;
+PATP[177] = 191; PDEF[177] = 16;
+PATP[178] = 192; PDEF[178] = 4;
+PATP[179] = 193; PDEF[179] = 0;
+PATP[180] = 194; PDEF[180] = 50;
+PATP[181] = 195; PDEF[181] = 0;
+PATP[182] = 196; PDEF[182] = 1;
+PATP[183] = 197; PDEF[183] = 0.5;
+PATP[184] = 198; PDEF[184] = 0.5;
+PATP[185] = 199; PDEF[185] = 0.5;
+PATP[186] = 200; PDEF[186] = 0.5;
+PATP[187] = 201; PDEF[187] = 0.5;
+PATP[188] = 202; PDEF[188] = 0.5;
+PATP[189] = 203; PDEF[189] = 0.5;
+PATP[190] = 204; PDEF[190] = 0.5;
+PATP[191] = 205; PDEF[191] = 0.5;
+PATP[192] = 206; PDEF[192] = 0.5;
+PATP[193] = 207; PDEF[193] = 0.5;
+PATP[194] = 208; PDEF[194] = 0.5;
+PATP[195] = 209; PDEF[195] = 0.5;
+PATP[196] = 210; PDEF[196] = 0.5;
+PATP[197] = 211; PDEF[197] = 0.5;
+PATP[198] = 212; PDEF[198] = 0.5;
+PATP[199] = 213; PDEF[199] = 16;
+PATP[200] = 214; PDEF[200] = 4;
+PATP[201] = 215; PDEF[201] = 0;
+PATP[202] = 216; PDEF[202] = 50;
+PATP[203] = 217; PDEF[203] = 0;
+PATP[204] = 218; PDEF[204] = 1;
+PATP[205] = 228; PDEF[205] = 0;
+PATP[206] = 229; PDEF[206] = 1;
+function seq_mask(sc) (
+  sc < 0.5 ? 4095 :
+  sc < 1.5 ? 2741 :
+  sc < 2.5 ? 1453 :
+  sc < 3.5 ? 1709 :
+  sc < 4.5 ? 1451 :
+  sc < 5.5 ? 2773 :
+  sc < 6.5 ? 1717 :
+  sc < 7.5 ? 1387 :
+  sc < 8.5 ? 2477 :
+  sc < 9.5 ? 2733 :
+  sc < 10.5 ? 661 :
+  sc < 11.5 ? 1193 :
+  sc < 12.5 ? 1257 :
+  sc < 13.5 ? 1365 :
+  sc < 14.5 ? 129 :
+  1;
+);
+snd = -1; snd_ch = 0; off_at = -1;
+abs_s = 0; fb = 0; last_src = 0; last_b1 = 0; k_last = -1; last_stepT = 0;
+rev = 0; booted = 0; last_roll = 0; in_tr = 0; last_sc = -1; NDEG = 12;
+note_last = -1; evn = 0; inn = 0; stepT = 0.25; stepB = 0.25; swd = 0; dir = 0;
+spb_s = 24000;
+i = 0;
+loop(NL, PCYC[i] = 0; PPER[i] = -1; PSPD[i] = -1; POS[i] = 0; i += 1;);
+i = 0;
+loop(12, DEG[i] = i; i += 1;);
+
+// L'ETAT DES PATTERNS ET DE L'ARPEGE NE NAIT QU'UNE FOIS. @init peut repasser
+// (une autre frequence d'echantillonnage) et ne doit pas effacer seize
+// patterns ; un projet rouvert les pose par @serialize, qui passe APRES @init.
+pt_boot < 0.5 ? (
+  pt_cur = 0; pt_mask = 1; pt_pend = -1; pt_at = -1; pt_g = 0;
+  pt_rq = -1; pt_rqo = 0; pt_lreq = 0; pt_ser = 0; pt_dirty = 1; pt_lch = -1;
+  ar_n = 0; ar_phys = 0; ar_i = 0; ar_srt = 0; ar_lat = 0; ar_qn = 0; ar_qi = 0; ar_lnm = -1;
+  i = 0;
+  loop(128, ARK[i] = 0; i += 1;);
+  pt_boot = 1;
+);
+
+function m_mod(x, n) ( x - floor(x / n) * n );
+
+// LES DEGRES DE LA GAMME COURANTE. Le masque vient de `seq_mask`, generee
+// depuis la table du Sound Gen.
+function seq_degs(sc) local(mask k) (
+  mask = seq_mask(sc);
+  NDEG = 0; k = 0;
+  loop(12,
+    ((mask >> k) & 1) ? ( DEG[NDEG] = k; NDEG += 1; );
+    k += 1;
+  );
+  NDEG < 1 ? ( DEG[0] = 0; NDEG = 1; );
+);
+
+// Les demi-tons du degre `d` (entier, negatif permis). Miroir de
+// `Sequencer.degSemi`.
+function deg_semi(d) local(oc i) (
+  d = floor(d + 0.5);
+  oc = floor(d / NDEG);
+  i = d - oc * NDEG;
+  oc * 12 + DEG[i];
+);
+
+// La valeur du slider (ligne L, decalage j).
+function sp(L, j) ( slider(GB + L * LS + j + 1) );
+
+// LA PERIODE d'une ligne de n pas : n en avant, en arriere et au hasard ;
+// 2n - 2 en aller-retour (les deux bouts ne se repetent pas).
+function lane_per(n) (
+  (dir > 1.5 && dir < 2.5) ? ( n > 1 ? 2 * n - 2 : 1 ) : n;
+);
+
+// LE HASARD DU SENS « RANDOM » EST UNE FONCTION DE LA POSITION, PAS UN TIRAGE.
+// Un saut de tete, une boucle de l'arrangeur, un rendu hors ligne rejouent donc
+// le meme ordre : rien n'est a rattraper. Des entiers sous 2^31, rien de plus.
+function seq_hash(k, L) local(a h) (
+  a = m_mod(k, 32768);
+  h = m_mod(a * 1103 + L * 7919 + 12345, 32749);
+  h = m_mod(h * h + 1013, 32749);
+  floor(h / 7);
+);
+
+function lane_pos(L, k, n) local(i) (
+  dir < 0.5 ? m_mod(k, n)
+  : dir < 1.5 ? n - 1 - m_mod(k, n)
+  : dir < 2.5 ? ( n < 2 ? 0 : ( i = m_mod(k, 2 * n - 2); i < n ? i : 2 * n - 2 - i ) )
+  : m_mod(seq_hash(k, L), n);
+);
+
+// L'index de pas ABSOLU de la ligne L au temps t (en noires). La place d'une
+// ligne se DEDUIT de la position : c'est ce qui rend la polyrythmie juste
+// apres n'importe quel saut.
+function lane_k(L, t) ( floor(t * SPDF[L] / stepB + 0.000001) );
+
+// LE TIRAGE D'UN PAS. `a` = la quantite : 1 tire dans toute la plage, 0 ne
+// change rien, entre les deux le pas va plus ou moins loin vers le tirage. Un
+// interrupteur, lui, est retire avec la probabilite `a`, et s'allume avec la
+// densite `hi`.
+function roll_step(L, j, a) local(p lo hi r v t) (
+  p = GB + L * LS + j + 1;
+  lo = slider(GB + L * LS + O_LO + 1);
+  hi = slider(GB + L * LS + O_HI + 1);
+  LBOOL[L] > 0.5 ? (
+    rand(1) < a ? ( slider(p) = (rand(1) < hi) ? 1 : 0; );
+  ) : (
+    lo > hi ? ( t = lo; lo = hi; hi = t; );
+    LINT[L] > 0.5 ? (
+      r = floor(lo + rand(1) * (hi - lo + 1));
+      r > hi ? ( r = hi; );
+    ) : (
+      r = lo + rand(1) * (hi - lo);
+    );
+    v = slider(p);
+    v = v + (r - v) * a;
+    LINT[L] > 0.5 ? ( v = floor(v + 0.5); );
+    v < LMIN[L] ? ( v = LMIN[L]; );
+    v > LMAX[L] ? ( v = LMAX[L]; );
+    slider(p) = v;
+  );
+);
+
+// Le de d'une ligne : ses pas QUI JOUENT. Ceux d'apres la longueur sont gardes
+// pour le jour ou on rallonge, comme dans le sequenceur de CP_Mod.
+function dice_lane(L) local(a j) (
+  a = slider(GB + L * LS + O_DICE + 1) * 0.01;
+  j = 0;
+  loop(LENA[L], roll_step(L, j, a); j += 1;);
+);
+
+// LA MUTATION (Turing Machine) : a chaque tour de la ligne, chacun de ses pas a
+// `mut` % de chances d'etre retire dans sa plage. 0 % = boucle figee.
+function mutate_lane(L) local(m j ch) (
+  m = slider(GB + L * LS + O_MUT + 1) * 0.01;
+  m > 0.0001 ? (
+    j = 0; ch = 0;
+    loop(LENA[L],
+      rand(1) < m ? ( roll_step(L, j, 1); ch = 1; );
+      j += 1;
+    );
+    ch ? ( rev += 1; sliderchange(-1); );
+  );
+);
+
+// Pose le tour et le pas d'une ligne SANS muter : apres un saut, un depart, un
+// changement de longueur ou de vitesse.
+function lane_sync(L, t) local(k n) (
+  n = LENA[L]; k = lane_k(L, t);
+  PCYC[L] = floor(k / lane_per(n));
+  POS[L] = lane_pos(L, k, n);
+);
+
+// Avance une ligne au temps t. ⚠ LE TOUR NE RECULE JAMAIS : une note retardee
+// par le swing peut etre datee un peu avant la fin du bloc precedent, et un
+// tour qui reculerait puis repasserait muterait deux fois.
+function lane_tick(L, t) local(k n c) (
+  n = LENA[L]; k = lane_k(L, t);
+  c = floor(k / lane_per(n));
+  c > PCYC[L] ? ( mutate_lane(L); PCYC[L] = c; );
+  POS[L] = lane_pos(L, k, n);
+);
+
+function ev_push(o, a, b, c) local(e) (
+  evn < 64 ? (
+    e = EVQ + evn * 4;
+    e[0] = o; e[1] = a; e[2] = b; e[3] = c;
+    evn += 1;
+  );
+);
+
+// ⚠ LA NOTE-OFF EST GARANTIE. Une note pendue est le pire defaut d'un
+// sequenceur : toute coupure (arret, saut, changement de mode, extinction)
+// passe par ici.
+function note_kill(o) (
+  snd >= 0 ? (
+    ev_push(o, 0x80 + snd_ch, snd, 0);
+    snd = -1; off_at = -1;
+  );
+);
+
+// La date d'un pas de TRIG, swing compris : les pas IMPAIRS sont retardes, de
+// une demi-case au plus (le 75 % d'une MPC).
+function tsw(k) ( k * stepT + (m_mod(k, 2) > 0.5 ? swd : 0) );
+
+// LA VALEUR D'UNE LIGNE LIBRE A L'INSTANT t (en noires), pour la publication
+// rapide. Une fonction de la DATE, pas de l'etat du bloc : la ligne change a
+// son propre pas, quelle que soit sa vitesse. Le swing la deplace comme il
+// deplace les notes -- l'instant est ramene a sa date NON swinguee, comme
+// `fire` lit les lignes a `k * stepT` --, et un pas d'une ligne a la vitesse de
+// TRIG tombe donc avec sa note. Un tour qui commence pendant le bloc lit les
+// pas MUTES (`lane_tick` les a deja retires) ; le tour en cours lit la photo
+// prise avant (`SNAP`), sinon un pas finirait avec la valeur du suivant.
+function line_at(L, s, t) local(m r u k n c) (
+  swd > 0 ? (
+    m = floor(t / (2 * stepT));
+    r = t - m * 2 * stepT;
+    u = r < stepT + swd ? m * 2 * stepT + r * stepT / (stepT + swd)
+                        : m * 2 * stepT + stepT + (r - stepT - swd) * stepT / (stepT - swd);
+  ) : (
+    u = t;
+  );
+  n = LENA[L];
+  k = lane_k(L, u);
+  c = floor(k / lane_per(n));
+  k = lane_pos(L, k, n);
+  c > PC0[s] ? sp(L, k) : SNAP[s * 16 + k];
+);
+
+function seq_reset(t) local(L) (
+  k_last = ceil(t / stepT - 0.000001) - 1;
+  L = 0;
+  loop(NL,
+    lane_sync(L, t);
+    PPER[L] = lane_per(LENA[L]); PSPD[L] = SPDF[L];
+    L += 1;
+  );
+  last_stepT = stepT;
+  // Un depart, un saut : l'arpege repart de sa premiere note.
+  ar_i = 0;
+);
+
+// ---------------------------------------------------------------------------
+// LES PATTERNS. Les sliders SONT le pattern courant ; la memoire tient les
+// seize, et le courant y est range quand on le quitte (ou qu'on le sauve).
+// ---------------------------------------------------------------------------
+function pt_save(n) local(i b) (
+  b = PATM + n * 256; i = 0;
+  loop(NPV, b[i] = slider(PATP[i]); i += 1;);
+  pt_mask |= (1 << n);
+  pt_dirty = 1;
+);
+
+// Poser le pattern n dans les sliders. Le panneau le relit comme un tirage.
+function pt_load(n) local(i b) (
+  b = PATM + n * 256; i = 0;
+  loop(NPV, slider(PATP[i]) = b[i]; i += 1;);
+  rev += 1;
+  sliderchange(-1);
+);
+
+function pt_defs(n) local(i b) (
+  b = PATM + n * 256; i = 0;
+  loop(NPV, b[i] = PDEF[i]; i += 1;);
+  pt_mask |= (1 << n);
+  pt_dirty = 1;
+);
+
+// CHANGER DE PATTERN. Ce qu'on quitte est range ; un pattern jamais visite
+// nait COPIE de celui qu'on quitte -- une variation part de ce qui joue --, un
+// pattern defini est pose.
+function pt_apply(n) (
+  n != pt_cur ? (
+    pt_save(pt_cur);
+    ((pt_mask >> n) & 1) ? pt_load(n) : pt_save(n);
+    pt_cur = n;
+  );
+  pt_pend = -1; pt_at = -1;
+  pt_dirty = 1;
+);
+
+function pt_copy(a, b) local(i) (
+  a == pt_cur ? pt_save(a);
+  (a != b && ((pt_mask >> a) & 1)) ? (
+    i = 0;
+    loop(NPV, PATM[b * 256 + i] = PATM[a * 256 + i]; i += 1;);
+    pt_mask |= (1 << b);
+    b == pt_cur ? pt_load(b);
+    pt_dirty = 1;
+  );
+);
+
+// Effacer = remettre aux defauts (un pattern efface reste DEFINI : il est
+// vide de musique, pas absent).
+function pt_clear(n) (
+  pt_defs(n);
+  n == pt_cur ? pt_load(n);
+);
+
+// L'Init : un seul pattern, le premier, et les sliders n'y sont pour rien
+// (Lua les remet aux defauts lui-meme).
+function pt_resetall() local(k) (
+  k = 0;
+  loop(16, pt_defs(k); k += 1;);
+  pt_cur = 0; pt_mask = 1; pt_pend = -1; pt_at = -1;
+  pt_dirty = 1;
+);
+
+// LA BOITE D'ARRIVEE : seize patterns deposes par Lua (un preset, un Remove,
+// une mise a niveau), adoptes seulement si le jeton est le notre.
+function pt_adopt() local(ib nv k i c m) (
+  pt_ch = floor(seq_pch + 0.5);
+  (pt_ch >= 1 && pt_ch <= 255 && seq_ptok >= 1) ? (
+    ib = PATG + pt_ch * PGS + PIN;
+    gmem[ib] == seq_ptok ? (
+      nv = floor(gmem[ib + 4] + 0.5);
+      nv > NPV ? ( nv = NPV; );
+      nv < 0 ? ( nv = 0; );
+      m = (floor(gmem[ib + 3] + 0.5) & 65535);
+      c = floor(gmem[ib + 2] + 0.5);
+      c < 0 ? ( c = 0; );
+      c > 15 ? ( c = 15; );
+      k = 0;
+      loop(16,
+        i = 0;
+        loop(NPV,
+          PATM[k * 256 + i] = (i < nv) ? gmem[ib + PHD + k * 256 + i] : PDEF[i];
+          i += 1;
+        );
+        k += 1;
+      );
+      pt_mask = (m | (1 << c));
+      pt_cur = c; pt_pend = -1; pt_at = -1;
+      pt_load(c);
+      pt_dirty = 1;
+    );
+  );
+);
+
+// LE MIROIR : les patterns DEFINIS, publies pour Lua. Le courant vient des
+// sliders (sa case en memoire peut dater de la derniere fois qu'on l'a quitte).
+// Le numero de version s'ecrit EN DERNIER : Lua relit si il a bouge pendant sa
+// lecture.
+function pt_publish() local(gb k i b) (
+  gb = PATG + pt_ch * PGS;
+  gmem[gb] = seq_ptok; gmem[gb + 2] = pt_cur; gmem[gb + 3] = pt_mask; gmem[gb + 4] = NPV;
+  gmem[gb + 5] = pt_pend;
+  k = 0;
+  loop(16,
+    ((pt_mask >> k) & 1) ? (
+      b = gb + PHD + k * 256; i = 0;
+      k == pt_cur ? (
+        loop(NPV, gmem[b + i] = slider(PATP[i]); i += 1;);
+      ) : (
+        loop(NPV, gmem[b + i] = PATM[k * 256 + i]; i += 1;);
+      );
+    );
+    k += 1;
+  );
+  gmem[gb + 1] += 1;
+);
+
+// La date ou un changement demande prend effet, en noires (-1 = maintenant).
+// Une mesure est de quatre noires (la convention de CP_Mod) ; la fin du
+// pattern est celle du tour de TRIG. Une demande posee PILE sur la grille
+// (a un millieme de case pres) prend cette case.
+function pt_when(t) local(q g) (
+  q = floor(seq_pq + 0.5);
+  g = (q == 1) ? 1 : (q == 2) ? 4 : (q == 3) ? lane_per(LENA[0]) * stepT : 0;
+  pt_g = g;
+  g > 0 ? ceil(t / g - 0.001) * g : -1;
+);
+
+// CE QUI NE CHANGE QU'AU BLOC, lu dans les sliders. Une fonction parce qu'un
+// changement de pattern (en tete de bloc) le relit aussitot : la division, les
+// longueurs, les vitesses, le swing et la gamme sont dans le pattern.
+function blk_params() local(L n si) (
+  dir = floor(seq_dir + 0.5);
+  ri = floor(seq_rate + 0.5);
+  ri < 0 ? ( ri = 0; );
+  ri > 8 ? ( ri = 8; );
+  stepB = RATEB[ri];
+  L = 0;
+  loop(NL,
+    n = floor(slider(GB + L * LS + O_LEN + 1) + 0.5);
+    n < 1 ? ( n = 1; );
+    n > NS ? ( n = NS; );
+    LENA[L] = n;
+    si = floor(slider(GB + L * LS + O_SPD + 1) + 0.5);
+    si < 0 ? ( si = 0; );
+    si > 8 ? ( si = 8; );
+    SPDF[L] = SPDT[si];
+    L += 1;
+  );
+  stepT = stepB / SPDF[0];
+  swd = seq_swing * 0.005 * stepT;
+  sc = floor(seq_scale + 0.5);
+  sc != last_sc ? ( seq_degs(sc); last_sc = sc; );
+  tonic = 12 * (floor(seq_oct + 0.5) + 1) + floor(seq_root + 0.5);
+  transp = floor(seq_transp + 0.5);
+);
+
+// ---------------------------------------------------------------------------
+// L'ARPEGE : les notes tenues, et la hauteur d'un pas
+// ---------------------------------------------------------------------------
+function ar_sort() local(i j t) (
+  i = 0;
+  loop(ar_n, ARS[i] = ARH[i]; i += 1;);
+  i = 1;
+  while (i < ar_n) (
+    t = ARS[i]; j = i - 1;
+    while (j >= 0 && ARS[j] > t) ( ARS[j + 1] = ARS[j]; j -= 1; );
+    ARS[j + 1] = t;
+    i += 1;
+  );
+  ar_srt = 1;
+);
+
+// Une note recue. ⚠ LE LOQUET COMPTE LES DOIGTS (`ARK`), pas les messages :
+// une touche relancee sans note-off ne compte pas deux fois. Loquet mis, la
+// premiere touche baissee quand toutes etaient levees REMPLACE l'accord.
+function ar_event(s, nt, vl) local(i j f) (
+  nt = (nt | 0) & 127;
+  (s == 0x90 && vl > 0) ? (
+    (ar_lat && ar_phys == 0) ? ( ar_n = 0; );
+    ar_n == 0 ? ( ar_i = 0; );
+    ARK[nt] < 0.5 ? ( ARK[nt] = 1; ar_phys += 1; );
+    f = 0; i = 0;
+    loop(ar_n, ARH[i] == nt ? ( f = 1; ); i += 1;);
+    (f == 0 && ar_n < 32) ? ( ARH[ar_n] = nt; ar_n += 1; );
+  ) : (
+    ARK[nt] > 0.5 ? ( ARK[nt] = 0; ar_phys -= 1; );
+    ar_lat == 0 ? (
+      i = 0; j = 0;
+      loop(ar_n, ARH[i] != nt ? ( ARH[j] = ARH[i]; j += 1; ); i += 1;);
+      ar_n = j;
+    );
+  );
+  ar_srt = 0;
+);
+
+// Le loquet qu'on releve garde les touches encore baissees, rien d'autre.
+function ar_unlatch() local(i k) (
+  i = 0; k = 0;
+  loop(ar_n, ARK[ARH[i]] > 0.5 ? ( ARH[k] = ARH[i]; k += 1; ); i += 1;);
+  ar_n = k; ar_srt = 0;
+);
+
+// Les notes recues jusqu'a l'offset o, dans l'ordre : un accord pose sur la
+// meme date qu'un pas compte pour ce pas, un accord relache apres lui non.
+function ar_upto(o) local(e) (
+  while (ar_qi < ar_qn && ARQ[ar_qi * 4] <= o) (
+    e = ARQ + ar_qi * 4;
+    ar_event(e[1], e[2], e[3]);
+    ar_qi += 1;
+  );
+);
+
+// LA HAUTEUR D'UN PAS ARPEGE. L'ordre parcourt l'accord sur `seq_arpo`
+// octaves ; `off` (la ligne PITCH) decale dans l'accord, au-dela d'un tour on
+// change d'octave. « As Played » parcourt l'ordre de jeu, les autres l'accord
+// trie.
+function ar_note(off) local(m oc nn per i t c k) (
+  ar_srt < 0.5 ? ar_sort();
+  m = floor(seq_arpm + 0.5);
+  oc = floor(seq_arpo + 0.5);
+  oc < 1 ? ( oc = 1; );
+  oc > 4 ? ( oc = 4; );
+  nn = ar_n * oc;
+  per = (nn > 1) ? 2 * nn - 2 : 1;
+  i = m_mod(ar_i, per);
+  t = (m == 1) ? nn - 1 - m_mod(ar_i, nn)
+    : (m == 2) ? ( i < nn ? i : per - i )
+    : (m == 3) ? nn - 1 - ( i < nn ? i : per - i )
+    : (m == 5) ? floor(rand(nn))
+    : m_mod(ar_i, nn);
+  t += off;
+  c = floor(t / ar_n);
+  k = t - c * ar_n;
+  ((m == 4) ? ARH[k] : ARS[k]) + 12 * c;
+);
+
+// UN PAS DE TRIG : la note, si le pas joue. Les autres lignes sont lues a la
+// date NON swinguee du pas — le swing deplace la note, pas la melodie.
+//
+// LE GLISSE : la note tient jusqu'au pas suivant (`off_at` = -1) et la
+// suivante part AVANT sa note-off, le legato des monosynthes. Meme hauteur :
+// rien n'est relance, la note continue.
+function fire(k, o) local(tT on pr nt vl sl gt dist L) (
+  tT = k * stepT;
+  L = 0; loop(NL, lane_tick(L, tT); L += 1;);
+  (snd >= 0 && off_at >= 0 && off_at <= abs_s + o) ? note_kill(max(0, off_at - abs_s));
+  // L'accord tenu A LA DATE du pas : les notes recues jusque-la, pas au-dela.
+  ar_on ? ar_upto(o);
+  on = sp(0, POS[0]) > 0.5;
+  on ? ( pr = sp(5, POS[5]); on = rand(100) < pr; );
+  // Rien de tenu : un silence, comme un pas eteint.
+  (on && ar_on && ar_n < 1) ? ( on = 0; );
+  on ? (
+    ar_on ? (
+      // ARP : la hauteur vient de l'accord ; PITCH y decale, OCT et TRANSP
+      // gardent leur role. La gamme et la tonique ne servent pas.
+      nt = ar_note(floor(sp(1, POS[1]) + 0.5)) + 12 * floor(sp(2, POS[2]) + 0.5) + transp;
+      ar_i += 1;
+    ) : (
+      nt = tonic + deg_semi(sp(1, POS[1])) + 12 * floor(sp(2, POS[2]) + 0.5) + transp + in_tr;
+    );
+    nt = floor(nt + 0.5);
+    nt < 0 ? ( nt = 0; );
+    nt > 127 ? ( nt = 127; );
+    vl = floor(sp(3, POS[3]) + 0.5);
+    vl < 1 ? ( vl = 1; );
+    vl > 127 ? ( vl = 127; );
+    sl = sp(6, POS[6]) > 0.5;
+    dist = (tsw(k + 1) - tsw(k)) * spb_s;
+    gt = floor(sp(4, POS[4]) * 0.01 * dist) - 1;
+    gt < 16 ? ( gt = 16; );
+    (snd >= 0 && off_at < 0) ? (
+      nt != snd ? (
+        ev_push(o, 0x90 + chan, nt, vl);
+        ev_push(o, 0x80 + snd_ch, snd, 0);
+        snd = nt; snd_ch = chan;
+      );
+    ) : (
+      snd >= 0 ? note_kill(o);
+      ev_push(o, 0x90 + chan, nt, vl);
+      snd = nt; snd_ch = chan;
+    );
+    off_at = sl ? -1 : abs_s + o + gt;
+    note_last = nt;
+  ) : (
+    (snd >= 0 && off_at < 0) ? note_kill(o);
+  );
+);
+
+@block
+// ---- ce qui ne change qu'au bloc --------------------------------------------
+tb = tempo > 1 ? tempo : 120;
+spb_s = srate * 60 / tb;
+blk_b = samplesblock / spb_s;
+chan = floor(seq_chan + 0.5) - 1;
+chan < 0 ? ( chan = 0; );
+chan > 15 ? ( chan = 15; );
+blk_params();
+evn = 0;
+
+// ---- le MIDI recu ---------------------------------------------------------------
+// Les seize notes de pattern (et les changements de programme 0..15) ne
+// passent jamais : elles demandent un pattern. Le reste selon le sens des notes
+// recues : Thru les laisse passer, Transpose les lit comme une transposition,
+// Arp les tient pour l'arpege (et ne les rend pas non plus).
+nm = floor(seq_notein + 0.5);
+ar_on = nm == 2;
+nm != ar_lnm ? (
+  // Un autre sens : l'accord tenu ne vaut plus rien.
+  ar_n = 0; ar_phys = 0; ar_srt = 0;
+  i = 0;
+  loop(128, ARK[i] = 0; i += 1;);
+  ar_lnm = nm;
+);
+seq_arpl > 0.5 ? ( ar_lat = 1; ) : ( ar_lat ? ar_unlatch(); ar_lat = 0; );
+pbase = (seq_pnote >= 0.5) ? (floor(seq_pnote + 0.5) - 1) * 12 : -1;
+inn = 0; ar_qn = 0; ar_qi = 0;
+while (midirecv(mo, m1, m2, m3)) (
+  st = m1 & 0xF0;
+  isn = (st == 0x90 || st == 0x80);
+  ispat = 0;
+  pbase >= 0 ? (
+    (isn && m2 >= pbase && m2 < pbase + 16) ? (
+      (st == 0x90 && m3 > 0) ? ( pt_rq = m2 - pbase; pt_rqo = mo; );
+      ispat = 1;
+    );
+    (st == 0xC0 && m2 < 16) ? ( pt_rq = m2; pt_rqo = mo; ispat = 1; );
+  );
+  ispat ? (
+    0;
+  ) : (nm == 1 && isn) ? (
+    (st == 0x90 && m3 > 0) ? ( in_tr = m2 - 60; );
+  ) : (nm == 2 && isn) ? (
+    ar_qn < 256 ? (
+      e = ARQ + ar_qn * 4;
+      e[0] = mo; e[1] = st; e[2] = m2; e[3] = m3;
+      ar_qn += 1;
+    );
+  ) : (
+    inn < 256 ? (
+      e = INQ + inn * 4;
+      e[0] = mo; e[1] = m1; e[2] = m2; e[3] = m3;
+      inn += 1;
+    );
+  );
+);
+nm != 1 ? ( in_tr = 0; );
+
+// ---- la demande de tirage ----------------------------------------------------
+// ⚠ ADOPTEE AU PREMIER BLOC, PAS EXECUTEE. Le projet rouvert rend la derniere
+// demande au slider : la prendre pour neuve retirerait les lignes a chaque
+// ouverture.
+booted < 0.5 ? ( last_roll = seq_roll; booted = 1; );
+seq_roll != last_roll ? (
+  last_roll = seq_roll;
+  msk = m_mod(seq_roll, 512);
+  L = 0;
+  loop(NL,
+    ((msk >> L) & 1) ? dice_lane(L);
+    L += 1;
+  );
+  rev += 1;
+  sliderchange(-1);
+);
+
+// ---- l'horloge : comme Session ----------------------------------------------
+// Auto : le transport quand REAPER joue, la notre (Run) quand il est arrete.
+// Transport : seulement quand REAPER joue. Free : la notre, toujours.
+playing = (play_state == 1 || play_state == 5);
+clk = floor(seq_clock + 0.5);
+src = 0;
+seq_on > 0.5 ? (
+  (clk != 2 && playing) ? ( src = 1; )
+  : (clk != 1 && seq_run > 0.5) ? ( src = 2; );
+);
+
+// ---- le pattern : la demande de Lua, puis ce qui prend effet ------------------
+// ⚠ ADOPTEE AU PREMIER BLOC QUI SUIT UN @serialize LU (projet rouvert, piste
+// dupliquee, annulation) : la derniere demande est dans le slider, la rejouer
+// relirait une boite perimee. Une instance NEUVE (posee par Lua) execute la
+// sienne : c'est ainsi qu'une mise a niveau lui rend ses patterns.
+pt_ser > 0.5 ? ( pt_lreq = seq_preq; pt_ser = 0; );
+seq_preq != pt_lreq ? (
+  pt_lreq = seq_preq;
+  pq_v = m_mod(floor(seq_preq + 0.5), 4096);
+  pq_op = floor(pq_v / 256);
+  pq_a = pq_v - pq_op * 256;
+  pq_op == 1 ? ( pt_rq = (pq_a & 15); pt_rqo = 0; )
+  : pq_op == 2 ? pt_copy(floor(pq_a / 16), (pq_a & 15))
+  : pq_op == 3 ? pt_clear(pq_a & 15)
+  : pq_op == 4 ? pt_adopt()
+  : pq_op == 5 ? ( pt_dirty = 1; )
+  : pq_op == 6 ? pt_resetall();
+);
+// La date de la tete pour la quantification : la position du transport, ou
+// celle de la boucle libre (celle ou il s'est arrete s'il vient de s'arreter).
+pt_t0 = (src == 1) ? beat_position : (src == 2 && last_src == 1) ? last_b1 : fb;
+pt_rq >= 0 ? (
+  pt_at = (src == 0) ? -1 : pt_when(pt_t0 + pt_rqo / spb_s);
+  pt_pend = pt_rq; pt_rq = -1;
+);
+// ⚠ IL PREND EFFET EN TETE DU BLOC qui contient sa date : un pas pose sur la
+// meme date le joue deja, et c'est le cas de toute note de pattern posee sur la
+// grille d'un clip. Un pas qui tomberait AVANT dans ce meme bloc le prend aussi
+// (moins d'un bloc d'avance) -- il faudrait un pas plus court qu'un bloc.
+pt_pend >= 0 ? (
+  (src != 0 && pt_at >= 0 && pt_g > 0 && pt_at - pt_t0 > pt_g + 0.000001) ? (
+    // La tete est revenue en arriere (une boucle, un saut) : la prochaine case.
+    pt_at = ceil(pt_t0 / pt_g - 0.001) * pt_g;
+  );
+  (src == 0 || pt_at < 0 || pt_at < pt_t0 + blk_b) ? (
+    pt_apply(pt_pend);
+    blk_params();
+  );
+);
+b0 = 0;
+src == 1 ? ( b0 = beat_position; );
+src == 2 ? ( b0 = fb; );
+src != last_src ? (
+  (last_src == 1 && src == 2) ? (
+    // Le transport s'arrete et la boucle libre continue SANS TROU, la ou il
+    // etait.
+    b0 = last_b1; fb = b0;
+  ) : (
+    note_kill(0);
+    // Un depart a la main part du pas 1.
+    src == 2 ? ( fb = 0; b0 = 0; );
+    src != 0 ? seq_reset(b0);
+  );
+) : (
+  // UN SAUT DE TETE, UNE BOUCLE DE L'ARRANGEUR : la position ne suit plus.
+  (src == 1 && abs(b0 - last_b1) > blk_b * 0.5 + 0.0001) ? (
+    note_kill(0);
+    seq_reset(b0);
+  );
+);
+
+src != 0 ? (
+  // La grille a change (division, vitesse de TRIG) : on se recale dessus.
+  stepT != last_stepT ? ( k_last = ceil(b0 / stepT - 0.000001) - 1; last_stepT = stepT; );
+  // Une longueur, une vitesse ou un sens change : le tour se repose sans muter.
+  L = 0;
+  loop(NL,
+    (lane_per(LENA[L]) != PPER[L] || SPDF[L] != PSPD[L]) ? (
+      lane_sync(L, b0);
+      PPER[L] = lane_per(LENA[L]); PSPD[L] = SPDF[L];
+    );
+    L += 1;
+  );
+  // LA PHOTO DES DEUX LIGNES LIBRES, avant que le bloc ne les mute (voir
+  // `line_at`) : apres un saut ou un depart, c'est le tour qu'on vient de poser.
+  sj = 0;
+  loop(16, SNAP[sj] = sp(7, sj); SNAP[16 + sj] = sp(8, sj); sj += 1;);
+  PC0[0] = PCYC[7]; PC0[1] = PCYC[8];
+  b1 = b0 + blk_b;
+  guard = 0;
+  // ⚠ UN PAS SE COMPTE PAR SON NUMERO, PAS PAR LA POSITION DU BLOC. Deux blocs
+  // ne se raccordent pas au bit pres (le tempo de REAPER s'integre, le notre
+  // se multiplie) : comparer des dates doublerait ou perdrait le pas pose sur
+  // la frontiere. `k_last` dit lequel est deja parti.
+  while (tsw(k_last + 1) < b1 && guard < 64) (
+    k = k_last + 1;
+    // Au plus proche, pas par troncature : une date exacte relue a 1e-12 sous
+    // l'entier tomberait un echantillon trop tot.
+    o = floor((tsw(k) - b0) * spb_s + 0.5);
+    o < 0 ? ( o = 0; );
+    o > samplesblock - 1 ? ( o = samplesblock - 1; );
+    fire(k, o);
+    k_last = k;
+    guard += 1;
+  );
+  (snd >= 0 && off_at >= 0 && off_at < abs_s + samplesblock) ? note_kill(max(0, off_at - abs_s));
+  L = 0; loop(NL, lane_tick(L, b1); L += 1;);
+  src == 2 ? ( fb = b1; );
+  last_b1 = b1;
+) : (
+  note_kill(0);
+);
+last_src = src;
+abs_s += samplesblock;
+// Les notes recues apres le dernier pas du bloc (ou toutes, a l'arret).
+ar_upto(samplesblock);
+
+// ---- les sorties --------------------------------------------------------------
+rev >= 1000000 ? ( rev = 0; );
+seq_rev = rev;
+seq_pha = POS[0] + POS[1] * 16 + POS[2] * 256 + POS[3] * 4096 + POS[4] * 65536;
+seq_phb = POS[5] + POS[6] * 16 + POS[7] * 256 + POS[8] * 4096;
+seq_state = (src != 0) + (src == 1) * 2 + (snd >= 0) * 4;
+seq_moda = seq_on > 0.5 ? sp(7, POS[7]) : 0.5;
+seq_modb = seq_on > 0.5 ? sp(8, POS[8]) : 0.5;
+seq_note = note_last;
+seq_pat = pt_cur;
+seq_pmask = pt_mask;
+seq_pnext = pt_pend;
+
+// ---- le miroir des patterns, pour Lua -------------------------------------------
+// Republie a chaque changement, et quand le canal change (piste dupliquee).
+pt_ch = floor(seq_pch + 0.5);
+(pt_ch >= 1 && pt_ch <= 255) ? (
+  pt_ch != pt_lch ? ( pt_lch = pt_ch; pt_dirty = 1; );
+  pt_dirty ? ( pt_publish(); pt_dirty = 0; );
+);
+
+// ---- la publication rapide des deux lignes libres ----------------------------
+// Tous les 32 echantillons, la valeur de MOD A et de MOD B A LA FIN du sous-pas,
+// aux slots 9 et 10 du canal de la piste (Sequencer.FAST_SLOT) ; puis l'en-tete,
+// comme la banque CP_Mod : le nombre de sous-pas, leur longueur, et un compteur
+// de blocs qui dit au Sound Gen que la memoire vit. Arrete, la ligne tient sa
+// valeur -- celle de la sortie.
+fon = seq_fch >= 1 && seq_fch <= 255;
+fon ? (
+  fgb = (seq_fch | 0) * 4096;
+  fns = ceil(samplesblock / 32);
+  fns > 256 ? ( fns = 256; );
+  fns < 1 ? ( fns = 1; );
+  fki = 0;
+  loop(fns,
+    fte = b0 + min((fki + 1) * 32, samplesblock) / spb_s;
+    src != 0 ? (
+      gmem[fgb + 2064 + fki] = line_at(7, 0, fte);
+      gmem[fgb + 2320 + fki] = line_at(8, 1, fte);
+    ) : (
+      gmem[fgb + 2064 + fki] = seq_moda;
+      gmem[fgb + 2320 + fki] = seq_modb;
+    );
+    fki += 1;
+  );
+  gmem[fgb] = fns; gmem[fgb + 1] = 32; gmem[fgb + 2] += 1;
+);
+
+// ---- l'envoi : nos notes et le MIDI recu, FUSIONNES dans l'ordre des dates ----
+i = 0; j = 0;
+while (i < evn || j < inn) (
+  (j >= inn || (i < evn && EVQ[i * 4] <= INQ[j * 4])) ? (
+    e = EVQ + i * 4; i += 1;
+  ) : (
+    e = INQ + j * 4; j += 1;
+  );
+  midisend(e[0], e[1], e[2], e[3]);
+);
+
+@serialize
+// LES PATTERNS VOYAGENT AVEC LE PROJET (les sliders, eux, sont deja sauves par
+// REAPER : c'est le pattern courant). Dans l'ordre : la marque, la version, le
+// nombre de valeurs par pattern, le courant, le masque, puis chaque pattern
+// DEFINI. ⚠ La marque d'abord : un sequenceur d'avant n'a rien ecrit, rien
+// n'est lu ni adopte. ⚠ Un pattern range plus court que `PAT_P` (un modele
+// anterieur) prend ses valeurs manquantes a leur defaut.
+file_avail(0) >= 0 ? (
+  s_mk = 0;
+  file_var(0, s_mk);
+  s_mk == 7301 ? (
+    s_ver = 0; s_nv = 0; s_cur = 0; s_msk = 1;
+    file_var(0, s_ver); file_var(0, s_nv); file_var(0, s_cur); file_var(0, s_msk);
+    s_nv = max(0, min(4096, floor(s_nv + 0.5)));
+    s_cur = max(0, min(15, floor(s_cur + 0.5)));
+    s_msk = (floor(s_msk + 0.5) & 65535) | (1 << s_cur);
+    s_k = 0;
+    loop(16,
+      ((s_msk >> s_k) & 1) ? (
+        s_i = 0;
+        loop(s_nv,
+          s_x = 0;
+          file_var(0, s_x);
+          s_i < NPV ? ( PATM[s_k * 256 + s_i] = s_x; );
+          s_i += 1;
+        );
+        while (s_i < NPV) ( PATM[s_k * 256 + s_i] = PDEF[s_i]; s_i += 1; );
+      );
+      s_k += 1;
+    );
+    pt_cur = s_cur; pt_mask = s_msk; pt_pend = -1; pt_at = -1;
+    pt_ser = 1; pt_dirty = 1;
+  );
+) : (
+  // Le courant d'abord dans sa case : c'est elle qui s'ecrit.
+  pt_save(pt_cur);
+  s_mk = 7301; s_ver = 1; s_nv = NPV; s_cur = pt_cur; s_msk = pt_mask;
+  file_var(0, s_mk); file_var(0, s_ver); file_var(0, s_nv);
+  file_var(0, s_cur); file_var(0, s_msk);
+  s_k = 0;
+  loop(16,
+    ((s_msk >> s_k) & 1) ? file_mem(0, PATM + s_k * 256, NPV);
+    s_k += 1;
+  );
+);

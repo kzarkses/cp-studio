@@ -1,0 +1,1578 @@
+desc: CP_Mod LFO
+options:gmem=CP_FXC_FAST
+slider1:lfo1_on=1<0,1,1{Off,On}>LFO 1 On
+slider2:lfo1_shape=0<0,7,1{Sine,Triangle,Saw Up,Saw Down,Square,Random,S&H,Steps}>LFO 1 Shape
+slider3:lfo1_rate=1<0.01,20,0.01:log>LFO 1 Rate (Hz)
+slider4:lfo1_sync=0<0,10,1{Free,1/16,1/8,1/4,1/2,1 bar,2 bars,4 bars,8 bars,16 bars,32 bars}>LFO 1 Sync
+slider5:lfo1_phase=0<0,1,0.01>LFO 1 Phase
+slider6:lfo2_on=0<0,1,1{Off,On}>LFO 2 On
+slider7:lfo2_shape=0<0,7,1{Sine,Triangle,Saw Up,Saw Down,Square,Random,S&H,Steps}>LFO 2 Shape
+slider8:lfo2_rate=1<0.01,20,0.01:log>LFO 2 Rate (Hz)
+slider9:lfo2_sync=0<0,10,1{Free,1/16,1/8,1/4,1/2,1 bar,2 bars,4 bars,8 bars,16 bars,32 bars}>LFO 2 Sync
+slider10:lfo2_phase=0<0,1,0.01>LFO 2 Phase
+slider11:lfo3_on=0<0,1,1{Off,On}>LFO 3 On
+slider12:lfo3_shape=0<0,7,1{Sine,Triangle,Saw Up,Saw Down,Square,Random,S&H,Steps}>LFO 3 Shape
+slider13:lfo3_rate=1<0.01,20,0.01:log>LFO 3 Rate (Hz)
+slider14:lfo3_sync=0<0,10,1{Free,1/16,1/8,1/4,1/2,1 bar,2 bars,4 bars,8 bars,16 bars,32 bars}>LFO 3 Sync
+slider15:lfo3_phase=0<0,1,0.01>LFO 3 Phase
+slider16:lfo4_on=0<0,1,1{Off,On}>LFO 4 On
+slider17:lfo4_shape=0<0,7,1{Sine,Triangle,Saw Up,Saw Down,Square,Random,S&H,Steps}>LFO 4 Shape
+slider18:lfo4_rate=1<0.01,20,0.01:log>LFO 4 Rate (Hz)
+slider19:lfo4_sync=0<0,10,1{Free,1/16,1/8,1/4,1/2,1 bar,2 bars,4 bars,8 bars,16 bars,32 bars}>LFO 4 Sync
+slider20:lfo4_phase=0<0,1,0.01>LFO 4 Phase
+slider21:lfo5_on=0<0,1,1{Off,On}>LFO 5 On
+slider22:lfo5_shape=0<0,7,1{Sine,Triangle,Saw Up,Saw Down,Square,Random,S&H,Steps}>LFO 5 Shape
+slider23:lfo5_rate=1<0.01,20,0.01:log>LFO 5 Rate (Hz)
+slider24:lfo5_sync=0<0,10,1{Free,1/16,1/8,1/4,1/2,1 bar,2 bars,4 bars,8 bars,16 bars,32 bars}>LFO 5 Sync
+slider25:lfo5_phase=0<0,1,0.01>LFO 5 Phase
+slider26:lfo6_on=0<0,1,1{Off,On}>LFO 6 On
+slider27:lfo6_shape=0<0,7,1{Sine,Triangle,Saw Up,Saw Down,Square,Random,S&H,Steps}>LFO 6 Shape
+slider28:lfo6_rate=1<0.01,20,0.01:log>LFO 6 Rate (Hz)
+slider29:lfo6_sync=0<0,10,1{Free,1/16,1/8,1/4,1/2,1 bar,2 bars,4 bars,8 bars,16 bars,32 bars}>LFO 6 Sync
+slider30:lfo6_phase=0<0,1,0.01>LFO 6 Phase
+slider31:lfo7_on=0<0,1,1{Off,On}>LFO 7 On
+slider32:lfo7_shape=0<0,7,1{Sine,Triangle,Saw Up,Saw Down,Square,Random,S&H,Steps}>LFO 7 Shape
+slider33:lfo7_rate=1<0.01,20,0.01:log>LFO 7 Rate (Hz)
+slider34:lfo7_sync=0<0,10,1{Free,1/16,1/8,1/4,1/2,1 bar,2 bars,4 bars,8 bars,16 bars,32 bars}>LFO 7 Sync
+slider35:lfo7_phase=0<0,1,0.01>LFO 7 Phase
+slider36:lfo8_on=0<0,1,1{Off,On}>LFO 8 On
+slider37:lfo8_shape=0<0,7,1{Sine,Triangle,Saw Up,Saw Down,Square,Random,S&H,Steps}>LFO 8 Shape
+slider38:lfo8_rate=1<0.01,20,0.01:log>LFO 8 Rate (Hz)
+slider39:lfo8_sync=0<0,10,1{Free,1/16,1/8,1/4,1/2,1 bar,2 bars,4 bars,8 bars,16 bars,32 bars}>LFO 8 Sync
+slider40:lfo8_phase=0<0,1,0.01>LFO 8 Phase
+slider41:lfo1_out=0.5<0,1,0.0001>-LFO 1 Out (mod source)
+slider42:lfo2_out=0.5<0,1,0.0001>-LFO 2 Out (mod source)
+slider43:lfo3_out=0.5<0,1,0.0001>-LFO 3 Out (mod source)
+slider44:lfo4_out=0.5<0,1,0.0001>-LFO 4 Out (mod source)
+slider45:lfo5_out=0.5<0,1,0.0001>-LFO 5 Out (mod source)
+slider46:lfo6_out=0.5<0,1,0.0001>-LFO 6 Out (mod source)
+slider47:lfo7_out=0.5<0,1,0.0001>-LFO 7 Out (mod source)
+slider48:lfo8_out=0.5<0,1,0.0001>-LFO 8 Out (mod source)
+slider49:lfo1_pho=0<0,1,0.0001>-LFO 1 Phase (display)
+slider50:lfo2_pho=0<0,1,0.0001>-LFO 2 Phase (display)
+slider51:lfo3_pho=0<0,1,0.0001>-LFO 3 Phase (display)
+slider52:lfo4_pho=0<0,1,0.0001>-LFO 4 Phase (display)
+slider53:lfo5_pho=0<0,1,0.0001>-LFO 5 Phase (display)
+slider54:lfo6_pho=0<0,1,0.0001>-LFO 6 Phase (display)
+slider55:lfo7_pho=0<0,1,0.0001>-LFO 7 Phase (display)
+slider56:lfo8_pho=0<0,1,0.0001>-LFO 8 Phase (display)
+slider57:lfo1_slew=0<0,2,0.001:sqr>LFO 1 Slew (s)
+slider58:lfo1_curve=0<-1,1,0.01>LFO 1 Curve
+slider59:lfo1_mode=0<0,2,1{Loop,One-shot,Loop resync}>LFO 1 Mode
+slider60:lfo1_trig=0<0,1,1>-LFO 1 Trig
+slider61:lfo2_slew=0<0,2,0.001:sqr>LFO 2 Slew (s)
+slider62:lfo2_curve=0<-1,1,0.01>LFO 2 Curve
+slider63:lfo2_mode=0<0,2,1{Loop,One-shot,Loop resync}>LFO 2 Mode
+slider64:lfo2_trig=0<0,1,1>-LFO 2 Trig
+slider65:lfo3_slew=0<0,2,0.001:sqr>LFO 3 Slew (s)
+slider66:lfo3_curve=0<-1,1,0.01>LFO 3 Curve
+slider67:lfo3_mode=0<0,2,1{Loop,One-shot,Loop resync}>LFO 3 Mode
+slider68:lfo3_trig=0<0,1,1>-LFO 3 Trig
+slider69:lfo4_slew=0<0,2,0.001:sqr>LFO 4 Slew (s)
+slider70:lfo4_curve=0<-1,1,0.01>LFO 4 Curve
+slider71:lfo4_mode=0<0,2,1{Loop,One-shot,Loop resync}>LFO 4 Mode
+slider72:lfo4_trig=0<0,1,1>-LFO 4 Trig
+slider73:lfo5_slew=0<0,2,0.001:sqr>LFO 5 Slew (s)
+slider74:lfo5_curve=0<-1,1,0.01>LFO 5 Curve
+slider75:lfo5_mode=0<0,2,1{Loop,One-shot,Loop resync}>LFO 5 Mode
+slider76:lfo5_trig=0<0,1,1>-LFO 5 Trig
+slider77:lfo6_slew=0<0,2,0.001:sqr>LFO 6 Slew (s)
+slider78:lfo6_curve=0<-1,1,0.01>LFO 6 Curve
+slider79:lfo6_mode=0<0,2,1{Loop,One-shot,Loop resync}>LFO 6 Mode
+slider80:lfo6_trig=0<0,1,1>-LFO 6 Trig
+slider81:lfo7_slew=0<0,2,0.001:sqr>LFO 7 Slew (s)
+slider82:lfo7_curve=0<-1,1,0.01>LFO 7 Curve
+slider83:lfo7_mode=0<0,2,1{Loop,One-shot,Loop resync}>LFO 7 Mode
+slider84:lfo7_trig=0<0,1,1>-LFO 7 Trig
+slider85:lfo8_slew=0<0,2,0.001:sqr>LFO 8 Slew (s)
+slider86:lfo8_curve=0<-1,1,0.01>LFO 8 Curve
+slider87:lfo8_mode=0<0,2,1{Loop,One-shot,Loop resync}>LFO 8 Mode
+slider88:lfo8_trig=0<0,1,1>-LFO 8 Trig
+slider89:lfo1_uni=0<0,1,1{Bipolar,Unipolar}>LFO 1 Polarity
+slider90:lfo2_uni=0<0,1,1{Bipolar,Unipolar}>LFO 2 Polarity
+slider91:lfo3_uni=0<0,1,1{Bipolar,Unipolar}>LFO 3 Polarity
+slider92:lfo4_uni=0<0,1,1{Bipolar,Unipolar}>LFO 4 Polarity
+slider93:lfo5_uni=0<0,1,1{Bipolar,Unipolar}>LFO 5 Polarity
+slider94:lfo6_uni=0<0,1,1{Bipolar,Unipolar}>LFO 6 Polarity
+slider95:lfo7_uni=0<0,1,1{Bipolar,Unipolar}>LFO 7 Polarity
+slider96:lfo8_uni=0<0,1,1{Bipolar,Unipolar}>LFO 8 Polarity
+slider97:lfo1_sh=0<0,8,1{Noise,LFO 1,LFO 2,LFO 3,LFO 4,LFO 5,LFO 6,LFO 7,LFO 8}>LFO 1 S&H Source
+slider98:lfo2_sh=0<0,8,1{Noise,LFO 1,LFO 2,LFO 3,LFO 4,LFO 5,LFO 6,LFO 7,LFO 8}>LFO 2 S&H Source
+slider99:lfo3_sh=0<0,8,1{Noise,LFO 1,LFO 2,LFO 3,LFO 4,LFO 5,LFO 6,LFO 7,LFO 8}>LFO 3 S&H Source
+slider100:lfo4_sh=0<0,8,1{Noise,LFO 1,LFO 2,LFO 3,LFO 4,LFO 5,LFO 6,LFO 7,LFO 8}>LFO 4 S&H Source
+slider101:lfo5_sh=0<0,8,1{Noise,LFO 1,LFO 2,LFO 3,LFO 4,LFO 5,LFO 6,LFO 7,LFO 8}>LFO 5 S&H Source
+slider102:lfo6_sh=0<0,8,1{Noise,LFO 1,LFO 2,LFO 3,LFO 4,LFO 5,LFO 6,LFO 7,LFO 8}>LFO 6 S&H Source
+slider103:lfo7_sh=0<0,8,1{Noise,LFO 1,LFO 2,LFO 3,LFO 4,LFO 5,LFO 6,LFO 7,LFO 8}>LFO 7 S&H Source
+slider104:lfo8_sh=0<0,8,1{Noise,LFO 1,LFO 2,LFO 3,LFO 4,LFO 5,LFO 6,LFO 7,LFO 8}>LFO 8 S&H Source
+slider105:lfo1_st1=8255455<0,16777215,1>-LFO 1 Steps 1-4
+slider106:lfo1_st2=8255455<0,16777215,1>-LFO 1 Steps 5-8
+slider107:lfo1_st3=8255455<0,16777215,1>-LFO 1 Steps 9-12
+slider108:lfo1_st4=8255455<0,16777215,1>-LFO 1 Steps 13-16
+slider109:lfo2_st1=8255455<0,16777215,1>-LFO 2 Steps 1-4
+slider110:lfo2_st2=8255455<0,16777215,1>-LFO 2 Steps 5-8
+slider111:lfo2_st3=8255455<0,16777215,1>-LFO 2 Steps 9-12
+slider112:lfo2_st4=8255455<0,16777215,1>-LFO 2 Steps 13-16
+slider113:lfo3_st1=8255455<0,16777215,1>-LFO 3 Steps 1-4
+slider114:lfo3_st2=8255455<0,16777215,1>-LFO 3 Steps 5-8
+slider115:lfo3_st3=8255455<0,16777215,1>-LFO 3 Steps 9-12
+slider116:lfo3_st4=8255455<0,16777215,1>-LFO 3 Steps 13-16
+slider117:lfo4_st1=8255455<0,16777215,1>-LFO 4 Steps 1-4
+slider118:lfo4_st2=8255455<0,16777215,1>-LFO 4 Steps 5-8
+slider119:lfo4_st3=8255455<0,16777215,1>-LFO 4 Steps 9-12
+slider120:lfo4_st4=8255455<0,16777215,1>-LFO 4 Steps 13-16
+slider121:lfo5_st1=8255455<0,16777215,1>-LFO 5 Steps 1-4
+slider122:lfo5_st2=8255455<0,16777215,1>-LFO 5 Steps 5-8
+slider123:lfo5_st3=8255455<0,16777215,1>-LFO 5 Steps 9-12
+slider124:lfo5_st4=8255455<0,16777215,1>-LFO 5 Steps 13-16
+slider125:lfo6_st1=8255455<0,16777215,1>-LFO 6 Steps 1-4
+slider126:lfo6_st2=8255455<0,16777215,1>-LFO 6 Steps 5-8
+slider127:lfo6_st3=8255455<0,16777215,1>-LFO 6 Steps 9-12
+slider128:lfo6_st4=8255455<0,16777215,1>-LFO 6 Steps 13-16
+slider129:lfo7_st1=8255455<0,16777215,1>-LFO 7 Steps 1-4
+slider130:lfo7_st2=8255455<0,16777215,1>-LFO 7 Steps 5-8
+slider131:lfo7_st3=8255455<0,16777215,1>-LFO 7 Steps 9-12
+slider132:lfo7_st4=8255455<0,16777215,1>-LFO 7 Steps 13-16
+slider133:lfo8_st1=8255455<0,16777215,1>-LFO 8 Steps 1-4
+slider134:lfo8_st2=8255455<0,16777215,1>-LFO 8 Steps 5-8
+slider135:lfo8_st3=8255455<0,16777215,1>-LFO 8 Steps 9-12
+slider136:lfo8_st4=8255455<0,16777215,1>-LFO 8 Steps 13-16
+slider137:lfo1_len=16<1,16,1>LFO 1 Step Count
+slider138:lfo2_len=16<1,16,1>LFO 2 Step Count
+slider139:lfo3_len=16<1,16,1>LFO 3 Step Count
+slider140:lfo4_len=16<1,16,1>LFO 4 Step Count
+slider141:lfo5_len=16<1,16,1>LFO 5 Step Count
+slider142:lfo6_len=16<1,16,1>LFO 6 Step Count
+slider143:lfo7_len=16<1,16,1>LFO 7 Step Count
+slider144:lfo8_len=16<1,16,1>LFO 8 Step Count
+slider145:shp=0<0,1,1>-Shapes converted (internal)
+slider146:fch=0<0,255,1>-Fast channel (internal)
+slider147:fmask=0<0,255,1>-Fast slots (internal)
+
+@init
+obuf = 0;
+stp = 8;
+ph1 = 0; held1 = 0.5; cyc1 = -1; sm1 = 0.5; lps1 = 0; str1 = 0; don1 = 0; obuf[0] = 0.5;
+ph2 = 0; held2 = 0.5; cyc2 = -1; sm2 = 0.5; lps2 = 0; str2 = 0; don2 = 0; obuf[1] = 0.5;
+ph3 = 0; held3 = 0.5; cyc3 = -1; sm3 = 0.5; lps3 = 0; str3 = 0; don3 = 0; obuf[2] = 0.5;
+ph4 = 0; held4 = 0.5; cyc4 = -1; sm4 = 0.5; lps4 = 0; str4 = 0; don4 = 0; obuf[3] = 0.5;
+ph5 = 0; held5 = 0.5; cyc5 = -1; sm5 = 0.5; lps5 = 0; str5 = 0; don5 = 0; obuf[4] = 0.5;
+ph6 = 0; held6 = 0.5; cyc6 = -1; sm6 = 0.5; lps6 = 0; str6 = 0; don6 = 0; obuf[5] = 0.5;
+ph7 = 0; held7 = 0.5; cyc7 = -1; sm7 = 0.5; lps7 = 0; str7 = 0; don7 = 0; obuf[6] = 0.5;
+ph8 = 0; held8 = 0.5; cyc8 = -1; sm8 = 0.5; lps8 = 0; str8 = 0; don8 = 0; obuf[7] = 0.5;
+
+@slider
+v = lfo1_st1;
+stp[0] = v - floor(v / 64) * 64; v = floor(v / 64);
+stp[1] = v - floor(v / 64) * 64; v = floor(v / 64);
+stp[2] = v - floor(v / 64) * 64; v = floor(v / 64);
+stp[3] = v - floor(v / 64) * 64; v = floor(v / 64);
+v = lfo1_st2;
+stp[4] = v - floor(v / 64) * 64; v = floor(v / 64);
+stp[5] = v - floor(v / 64) * 64; v = floor(v / 64);
+stp[6] = v - floor(v / 64) * 64; v = floor(v / 64);
+stp[7] = v - floor(v / 64) * 64; v = floor(v / 64);
+v = lfo1_st3;
+stp[8] = v - floor(v / 64) * 64; v = floor(v / 64);
+stp[9] = v - floor(v / 64) * 64; v = floor(v / 64);
+stp[10] = v - floor(v / 64) * 64; v = floor(v / 64);
+stp[11] = v - floor(v / 64) * 64; v = floor(v / 64);
+v = lfo1_st4;
+stp[12] = v - floor(v / 64) * 64; v = floor(v / 64);
+stp[13] = v - floor(v / 64) * 64; v = floor(v / 64);
+stp[14] = v - floor(v / 64) * 64; v = floor(v / 64);
+stp[15] = v - floor(v / 64) * 64; v = floor(v / 64);
+v = lfo2_st1;
+stp[16] = v - floor(v / 64) * 64; v = floor(v / 64);
+stp[17] = v - floor(v / 64) * 64; v = floor(v / 64);
+stp[18] = v - floor(v / 64) * 64; v = floor(v / 64);
+stp[19] = v - floor(v / 64) * 64; v = floor(v / 64);
+v = lfo2_st2;
+stp[20] = v - floor(v / 64) * 64; v = floor(v / 64);
+stp[21] = v - floor(v / 64) * 64; v = floor(v / 64);
+stp[22] = v - floor(v / 64) * 64; v = floor(v / 64);
+stp[23] = v - floor(v / 64) * 64; v = floor(v / 64);
+v = lfo2_st3;
+stp[24] = v - floor(v / 64) * 64; v = floor(v / 64);
+stp[25] = v - floor(v / 64) * 64; v = floor(v / 64);
+stp[26] = v - floor(v / 64) * 64; v = floor(v / 64);
+stp[27] = v - floor(v / 64) * 64; v = floor(v / 64);
+v = lfo2_st4;
+stp[28] = v - floor(v / 64) * 64; v = floor(v / 64);
+stp[29] = v - floor(v / 64) * 64; v = floor(v / 64);
+stp[30] = v - floor(v / 64) * 64; v = floor(v / 64);
+stp[31] = v - floor(v / 64) * 64; v = floor(v / 64);
+v = lfo3_st1;
+stp[32] = v - floor(v / 64) * 64; v = floor(v / 64);
+stp[33] = v - floor(v / 64) * 64; v = floor(v / 64);
+stp[34] = v - floor(v / 64) * 64; v = floor(v / 64);
+stp[35] = v - floor(v / 64) * 64; v = floor(v / 64);
+v = lfo3_st2;
+stp[36] = v - floor(v / 64) * 64; v = floor(v / 64);
+stp[37] = v - floor(v / 64) * 64; v = floor(v / 64);
+stp[38] = v - floor(v / 64) * 64; v = floor(v / 64);
+stp[39] = v - floor(v / 64) * 64; v = floor(v / 64);
+v = lfo3_st3;
+stp[40] = v - floor(v / 64) * 64; v = floor(v / 64);
+stp[41] = v - floor(v / 64) * 64; v = floor(v / 64);
+stp[42] = v - floor(v / 64) * 64; v = floor(v / 64);
+stp[43] = v - floor(v / 64) * 64; v = floor(v / 64);
+v = lfo3_st4;
+stp[44] = v - floor(v / 64) * 64; v = floor(v / 64);
+stp[45] = v - floor(v / 64) * 64; v = floor(v / 64);
+stp[46] = v - floor(v / 64) * 64; v = floor(v / 64);
+stp[47] = v - floor(v / 64) * 64; v = floor(v / 64);
+v = lfo4_st1;
+stp[48] = v - floor(v / 64) * 64; v = floor(v / 64);
+stp[49] = v - floor(v / 64) * 64; v = floor(v / 64);
+stp[50] = v - floor(v / 64) * 64; v = floor(v / 64);
+stp[51] = v - floor(v / 64) * 64; v = floor(v / 64);
+v = lfo4_st2;
+stp[52] = v - floor(v / 64) * 64; v = floor(v / 64);
+stp[53] = v - floor(v / 64) * 64; v = floor(v / 64);
+stp[54] = v - floor(v / 64) * 64; v = floor(v / 64);
+stp[55] = v - floor(v / 64) * 64; v = floor(v / 64);
+v = lfo4_st3;
+stp[56] = v - floor(v / 64) * 64; v = floor(v / 64);
+stp[57] = v - floor(v / 64) * 64; v = floor(v / 64);
+stp[58] = v - floor(v / 64) * 64; v = floor(v / 64);
+stp[59] = v - floor(v / 64) * 64; v = floor(v / 64);
+v = lfo4_st4;
+stp[60] = v - floor(v / 64) * 64; v = floor(v / 64);
+stp[61] = v - floor(v / 64) * 64; v = floor(v / 64);
+stp[62] = v - floor(v / 64) * 64; v = floor(v / 64);
+stp[63] = v - floor(v / 64) * 64; v = floor(v / 64);
+v = lfo5_st1;
+stp[64] = v - floor(v / 64) * 64; v = floor(v / 64);
+stp[65] = v - floor(v / 64) * 64; v = floor(v / 64);
+stp[66] = v - floor(v / 64) * 64; v = floor(v / 64);
+stp[67] = v - floor(v / 64) * 64; v = floor(v / 64);
+v = lfo5_st2;
+stp[68] = v - floor(v / 64) * 64; v = floor(v / 64);
+stp[69] = v - floor(v / 64) * 64; v = floor(v / 64);
+stp[70] = v - floor(v / 64) * 64; v = floor(v / 64);
+stp[71] = v - floor(v / 64) * 64; v = floor(v / 64);
+v = lfo5_st3;
+stp[72] = v - floor(v / 64) * 64; v = floor(v / 64);
+stp[73] = v - floor(v / 64) * 64; v = floor(v / 64);
+stp[74] = v - floor(v / 64) * 64; v = floor(v / 64);
+stp[75] = v - floor(v / 64) * 64; v = floor(v / 64);
+v = lfo5_st4;
+stp[76] = v - floor(v / 64) * 64; v = floor(v / 64);
+stp[77] = v - floor(v / 64) * 64; v = floor(v / 64);
+stp[78] = v - floor(v / 64) * 64; v = floor(v / 64);
+stp[79] = v - floor(v / 64) * 64; v = floor(v / 64);
+v = lfo6_st1;
+stp[80] = v - floor(v / 64) * 64; v = floor(v / 64);
+stp[81] = v - floor(v / 64) * 64; v = floor(v / 64);
+stp[82] = v - floor(v / 64) * 64; v = floor(v / 64);
+stp[83] = v - floor(v / 64) * 64; v = floor(v / 64);
+v = lfo6_st2;
+stp[84] = v - floor(v / 64) * 64; v = floor(v / 64);
+stp[85] = v - floor(v / 64) * 64; v = floor(v / 64);
+stp[86] = v - floor(v / 64) * 64; v = floor(v / 64);
+stp[87] = v - floor(v / 64) * 64; v = floor(v / 64);
+v = lfo6_st3;
+stp[88] = v - floor(v / 64) * 64; v = floor(v / 64);
+stp[89] = v - floor(v / 64) * 64; v = floor(v / 64);
+stp[90] = v - floor(v / 64) * 64; v = floor(v / 64);
+stp[91] = v - floor(v / 64) * 64; v = floor(v / 64);
+v = lfo6_st4;
+stp[92] = v - floor(v / 64) * 64; v = floor(v / 64);
+stp[93] = v - floor(v / 64) * 64; v = floor(v / 64);
+stp[94] = v - floor(v / 64) * 64; v = floor(v / 64);
+stp[95] = v - floor(v / 64) * 64; v = floor(v / 64);
+v = lfo7_st1;
+stp[96] = v - floor(v / 64) * 64; v = floor(v / 64);
+stp[97] = v - floor(v / 64) * 64; v = floor(v / 64);
+stp[98] = v - floor(v / 64) * 64; v = floor(v / 64);
+stp[99] = v - floor(v / 64) * 64; v = floor(v / 64);
+v = lfo7_st2;
+stp[100] = v - floor(v / 64) * 64; v = floor(v / 64);
+stp[101] = v - floor(v / 64) * 64; v = floor(v / 64);
+stp[102] = v - floor(v / 64) * 64; v = floor(v / 64);
+stp[103] = v - floor(v / 64) * 64; v = floor(v / 64);
+v = lfo7_st3;
+stp[104] = v - floor(v / 64) * 64; v = floor(v / 64);
+stp[105] = v - floor(v / 64) * 64; v = floor(v / 64);
+stp[106] = v - floor(v / 64) * 64; v = floor(v / 64);
+stp[107] = v - floor(v / 64) * 64; v = floor(v / 64);
+v = lfo7_st4;
+stp[108] = v - floor(v / 64) * 64; v = floor(v / 64);
+stp[109] = v - floor(v / 64) * 64; v = floor(v / 64);
+stp[110] = v - floor(v / 64) * 64; v = floor(v / 64);
+stp[111] = v - floor(v / 64) * 64; v = floor(v / 64);
+v = lfo8_st1;
+stp[112] = v - floor(v / 64) * 64; v = floor(v / 64);
+stp[113] = v - floor(v / 64) * 64; v = floor(v / 64);
+stp[114] = v - floor(v / 64) * 64; v = floor(v / 64);
+stp[115] = v - floor(v / 64) * 64; v = floor(v / 64);
+v = lfo8_st2;
+stp[116] = v - floor(v / 64) * 64; v = floor(v / 64);
+stp[117] = v - floor(v / 64) * 64; v = floor(v / 64);
+stp[118] = v - floor(v / 64) * 64; v = floor(v / 64);
+stp[119] = v - floor(v / 64) * 64; v = floor(v / 64);
+v = lfo8_st3;
+stp[120] = v - floor(v / 64) * 64; v = floor(v / 64);
+stp[121] = v - floor(v / 64) * 64; v = floor(v / 64);
+stp[122] = v - floor(v / 64) * 64; v = floor(v / 64);
+stp[123] = v - floor(v / 64) * 64; v = floor(v / 64);
+v = lfo8_st4;
+stp[124] = v - floor(v / 64) * 64; v = floor(v / 64);
+stp[125] = v - floor(v / 64) * 64; v = floor(v / 64);
+stp[126] = v - floor(v / 64) * 64; v = floor(v / 64);
+stp[127] = v - floor(v / 64) * 64; v = floor(v / 64);
+
+@block
+fon = fch >= 1 && fch <= 255;
+fon ? (
+  fgb = (fch | 0) * 4096;
+  fns = ceil(samplesblock / 32);
+  fns > 256 ? fns = 256;
+  fns < 1 ? fns = 1;
+  fbps = (play_state & 1) ? tempo / (60 * srate) : 0;
+);
+fon && (fmask & 1) ? (
+  fsd = 0; fk = 0;
+  loop(fns,
+    sbl = min(32, samplesblock - fsd);
+    sbl < 1 ? sbl = 1;
+    bp = beat_position + fsd * fbps;
+lfo1_on > 0.5 ? (
+  trg = 0;
+  lfo1_trig > 0.5 ? ( trg = 1; lfo1_trig = 0; );
+  psn = play_state & 1;
+  psn > lps1 && lfo1_mode > 0.5 ? trg = 1;
+  lps1 = psn;
+  trg ? ( ph1 = 0; str1 = bp; don1 = 0; cyc1 = -1; );
+  osh = lfo1_mode > 0.5 && lfo1_mode < 1.5;
+  osh < 0.5 ? don1 = 0;
+  nst = 16;
+  lfo1_shape > 6.5 ? (
+    nst = floor(lfo1_len + 0.5);
+    nst < 1 ? nst = 1 : nst > 16 ? nst = 16;
+  );
+  lfo1_sync > 0.5 ? (
+    cpb = lfo1_sync < 1.5 ? 4 : lfo1_sync < 2.5 ? 2 : lfo1_sync < 3.5 ? 1 : lfo1_sync < 4.5 ? 0.5 : lfo1_sync < 5.5 ? 0.25 : lfo1_sync < 6.5 ? 0.125 : lfo1_sync < 7.5 ? 0.0625 : lfo1_sync < 8.5 ? 0.03125 : lfo1_sync < 9.5 ? 0.015625 : 0.0078125;
+    osh ? (
+      ph1 = (bp - str1) * cpb;
+      ph1 < 0 ? ph1 = 0;
+    ) : (
+      ph1 = bp * cpb;
+    );
+  ) : (
+    don1 < 0.5 ? ph1 += sbl / srate * lfo1_rate;
+  );
+  osh && ph1 >= nst / 16 ? ( ph1 = nst / 16; don1 = 1; );
+  pp = ph1 + lfo1_phase;
+  pf = pp - floor(pp);
+  don1 > 0.5 && pf < 0.0000001 ? pf = 0.9999999;
+  lfo1_shape > 6.5 ? (
+    sq = pp * 16;
+    sq = don1 > 0.5 ? ceil(sq) - 1 : floor(sq);
+    si = sq - floor(sq / nst) * nst;
+    si < 0 ? si = 0 : si > 15 ? si = 15;
+    vv = stp[0 + si] / 63;
+  ) : lfo1_shape > 5.5 ? (
+    cc = floor(pp);
+    cc != cyc1 ? (
+      shs = lfo1_sh | 0;
+      held1 = (shs < 1 || shs == 1) ? rand() : obuf[shs - 1];
+      cyc1 = cc;
+    );
+    vv = held1;
+  ) : lfo1_shape > 4.5 ? (
+    cc = floor(pp);
+    cc != cyc1 ? ( held1 = rand(); cyc1 = cc; );
+    vv = held1;
+  ) : lfo1_shape > 3.5 ? ( vv = pf < 0.5 + lfo1_curve * 0.45 ? 1 : 0; )
+  : lfo1_shape > 2.5 ? ( vv = 1 - pf; )
+  : lfo1_shape > 1.5 ? ( vv = pf; )
+  : lfo1_shape > 0.5 ? ( vv = pf < 0.5 ? 2*pf : 2 - 2*pf; )
+  : ( vv = 0.5 + 0.5 * sin(pf * 2 * $pi); );
+  (lfo1_shape < 3.5 || lfo1_shape > 4.5) && lfo1_curve != 0 ? (
+    vv = pow(vv, pow(2, lfo1_curve * 3));
+  );
+  lfo1_slew > 0.001 ? (
+    sm1 += (vv - sm1) * min(1, 3 * sbl / (srate * lfo1_slew));
+    vv = sm1;
+  ) : ( sm1 = vv; );
+  lfo1_out = vv;
+  lfo1_shape > 6.5 ? (
+    don1 > 0.5 ? (
+      lfo1_pho = 0.9999;
+    ) : (
+      uu = ph1 * 16 / nst;
+      lfo1_pho = uu - floor(uu);
+    );
+  ) : (
+    lfo1_pho = ph1 - floor(ph1);
+  );
+) : ( lfo1_out = lfo1_uni > 0.5 ? 0 : 0.5; lfo1_pho = 0; );
+obuf[0] = lfo1_out;
+    gmem[fgb + 16 + fk] = lfo1_out;
+    fsd += sbl; fk += 1;
+  );
+) : (
+lfo1_on > 0.5 ? (
+  trg = 0;
+  lfo1_trig > 0.5 ? ( trg = 1; lfo1_trig = 0; );
+  psn = play_state & 1;
+  psn > lps1 && lfo1_mode > 0.5 ? trg = 1;
+  lps1 = psn;
+  trg ? ( ph1 = 0; str1 = beat_position; don1 = 0; cyc1 = -1; );
+  osh = lfo1_mode > 0.5 && lfo1_mode < 1.5;
+  osh < 0.5 ? don1 = 0;
+  nst = 16;
+  lfo1_shape > 6.5 ? (
+    nst = floor(lfo1_len + 0.5);
+    nst < 1 ? nst = 1 : nst > 16 ? nst = 16;
+  );
+  lfo1_sync > 0.5 ? (
+    cpb = lfo1_sync < 1.5 ? 4 : lfo1_sync < 2.5 ? 2 : lfo1_sync < 3.5 ? 1 : lfo1_sync < 4.5 ? 0.5 : lfo1_sync < 5.5 ? 0.25 : lfo1_sync < 6.5 ? 0.125 : lfo1_sync < 7.5 ? 0.0625 : lfo1_sync < 8.5 ? 0.03125 : lfo1_sync < 9.5 ? 0.015625 : 0.0078125;
+    osh ? (
+      ph1 = (beat_position - str1) * cpb;
+      ph1 < 0 ? ph1 = 0;
+    ) : (
+      ph1 = beat_position * cpb;
+    );
+  ) : (
+    don1 < 0.5 ? ph1 += samplesblock / srate * lfo1_rate;
+  );
+  osh && ph1 >= nst / 16 ? ( ph1 = nst / 16; don1 = 1; );
+  pp = ph1 + lfo1_phase;
+  pf = pp - floor(pp);
+  don1 > 0.5 && pf < 0.0000001 ? pf = 0.9999999;
+  lfo1_shape > 6.5 ? (
+    sq = pp * 16;
+    sq = don1 > 0.5 ? ceil(sq) - 1 : floor(sq);
+    si = sq - floor(sq / nst) * nst;
+    si < 0 ? si = 0 : si > 15 ? si = 15;
+    vv = stp[0 + si] / 63;
+  ) : lfo1_shape > 5.5 ? (
+    cc = floor(pp);
+    cc != cyc1 ? (
+      shs = lfo1_sh | 0;
+      held1 = (shs < 1 || shs == 1) ? rand() : obuf[shs - 1];
+      cyc1 = cc;
+    );
+    vv = held1;
+  ) : lfo1_shape > 4.5 ? (
+    cc = floor(pp);
+    cc != cyc1 ? ( held1 = rand(); cyc1 = cc; );
+    vv = held1;
+  ) : lfo1_shape > 3.5 ? ( vv = pf < 0.5 + lfo1_curve * 0.45 ? 1 : 0; )
+  : lfo1_shape > 2.5 ? ( vv = 1 - pf; )
+  : lfo1_shape > 1.5 ? ( vv = pf; )
+  : lfo1_shape > 0.5 ? ( vv = pf < 0.5 ? 2*pf : 2 - 2*pf; )
+  : ( vv = 0.5 + 0.5 * sin(pf * 2 * $pi); );
+  (lfo1_shape < 3.5 || lfo1_shape > 4.5) && lfo1_curve != 0 ? (
+    vv = pow(vv, pow(2, lfo1_curve * 3));
+  );
+  lfo1_slew > 0.001 ? (
+    sm1 += (vv - sm1) * min(1, 3 * samplesblock / (srate * lfo1_slew));
+    vv = sm1;
+  ) : ( sm1 = vv; );
+  lfo1_out = vv;
+  lfo1_shape > 6.5 ? (
+    don1 > 0.5 ? (
+      lfo1_pho = 0.9999;
+    ) : (
+      uu = ph1 * 16 / nst;
+      lfo1_pho = uu - floor(uu);
+    );
+  ) : (
+    lfo1_pho = ph1 - floor(ph1);
+  );
+) : ( lfo1_out = lfo1_uni > 0.5 ? 0 : 0.5; lfo1_pho = 0; );
+obuf[0] = lfo1_out;
+);
+fon && (fmask & 2) ? (
+  fsd = 0; fk = 0;
+  loop(fns,
+    sbl = min(32, samplesblock - fsd);
+    sbl < 1 ? sbl = 1;
+    bp = beat_position + fsd * fbps;
+lfo2_on > 0.5 ? (
+  trg = 0;
+  lfo2_trig > 0.5 ? ( trg = 1; lfo2_trig = 0; );
+  psn = play_state & 1;
+  psn > lps2 && lfo2_mode > 0.5 ? trg = 1;
+  lps2 = psn;
+  trg ? ( ph2 = 0; str2 = bp; don2 = 0; cyc2 = -1; );
+  osh = lfo2_mode > 0.5 && lfo2_mode < 1.5;
+  osh < 0.5 ? don2 = 0;
+  nst = 16;
+  lfo2_shape > 6.5 ? (
+    nst = floor(lfo2_len + 0.5);
+    nst < 1 ? nst = 1 : nst > 16 ? nst = 16;
+  );
+  lfo2_sync > 0.5 ? (
+    cpb = lfo2_sync < 1.5 ? 4 : lfo2_sync < 2.5 ? 2 : lfo2_sync < 3.5 ? 1 : lfo2_sync < 4.5 ? 0.5 : lfo2_sync < 5.5 ? 0.25 : lfo2_sync < 6.5 ? 0.125 : lfo2_sync < 7.5 ? 0.0625 : lfo2_sync < 8.5 ? 0.03125 : lfo2_sync < 9.5 ? 0.015625 : 0.0078125;
+    osh ? (
+      ph2 = (bp - str2) * cpb;
+      ph2 < 0 ? ph2 = 0;
+    ) : (
+      ph2 = bp * cpb;
+    );
+  ) : (
+    don2 < 0.5 ? ph2 += sbl / srate * lfo2_rate;
+  );
+  osh && ph2 >= nst / 16 ? ( ph2 = nst / 16; don2 = 1; );
+  pp = ph2 + lfo2_phase;
+  pf = pp - floor(pp);
+  don2 > 0.5 && pf < 0.0000001 ? pf = 0.9999999;
+  lfo2_shape > 6.5 ? (
+    sq = pp * 16;
+    sq = don2 > 0.5 ? ceil(sq) - 1 : floor(sq);
+    si = sq - floor(sq / nst) * nst;
+    si < 0 ? si = 0 : si > 15 ? si = 15;
+    vv = stp[16 + si] / 63;
+  ) : lfo2_shape > 5.5 ? (
+    cc = floor(pp);
+    cc != cyc2 ? (
+      shs = lfo2_sh | 0;
+      held2 = (shs < 1 || shs == 2) ? rand() : obuf[shs - 1];
+      cyc2 = cc;
+    );
+    vv = held2;
+  ) : lfo2_shape > 4.5 ? (
+    cc = floor(pp);
+    cc != cyc2 ? ( held2 = rand(); cyc2 = cc; );
+    vv = held2;
+  ) : lfo2_shape > 3.5 ? ( vv = pf < 0.5 + lfo2_curve * 0.45 ? 1 : 0; )
+  : lfo2_shape > 2.5 ? ( vv = 1 - pf; )
+  : lfo2_shape > 1.5 ? ( vv = pf; )
+  : lfo2_shape > 0.5 ? ( vv = pf < 0.5 ? 2*pf : 2 - 2*pf; )
+  : ( vv = 0.5 + 0.5 * sin(pf * 2 * $pi); );
+  (lfo2_shape < 3.5 || lfo2_shape > 4.5) && lfo2_curve != 0 ? (
+    vv = pow(vv, pow(2, lfo2_curve * 3));
+  );
+  lfo2_slew > 0.001 ? (
+    sm2 += (vv - sm2) * min(1, 3 * sbl / (srate * lfo2_slew));
+    vv = sm2;
+  ) : ( sm2 = vv; );
+  lfo2_out = vv;
+  lfo2_shape > 6.5 ? (
+    don2 > 0.5 ? (
+      lfo2_pho = 0.9999;
+    ) : (
+      uu = ph2 * 16 / nst;
+      lfo2_pho = uu - floor(uu);
+    );
+  ) : (
+    lfo2_pho = ph2 - floor(ph2);
+  );
+) : ( lfo2_out = lfo2_uni > 0.5 ? 0 : 0.5; lfo2_pho = 0; );
+obuf[1] = lfo2_out;
+    gmem[fgb + 272 + fk] = lfo2_out;
+    fsd += sbl; fk += 1;
+  );
+) : (
+lfo2_on > 0.5 ? (
+  trg = 0;
+  lfo2_trig > 0.5 ? ( trg = 1; lfo2_trig = 0; );
+  psn = play_state & 1;
+  psn > lps2 && lfo2_mode > 0.5 ? trg = 1;
+  lps2 = psn;
+  trg ? ( ph2 = 0; str2 = beat_position; don2 = 0; cyc2 = -1; );
+  osh = lfo2_mode > 0.5 && lfo2_mode < 1.5;
+  osh < 0.5 ? don2 = 0;
+  nst = 16;
+  lfo2_shape > 6.5 ? (
+    nst = floor(lfo2_len + 0.5);
+    nst < 1 ? nst = 1 : nst > 16 ? nst = 16;
+  );
+  lfo2_sync > 0.5 ? (
+    cpb = lfo2_sync < 1.5 ? 4 : lfo2_sync < 2.5 ? 2 : lfo2_sync < 3.5 ? 1 : lfo2_sync < 4.5 ? 0.5 : lfo2_sync < 5.5 ? 0.25 : lfo2_sync < 6.5 ? 0.125 : lfo2_sync < 7.5 ? 0.0625 : lfo2_sync < 8.5 ? 0.03125 : lfo2_sync < 9.5 ? 0.015625 : 0.0078125;
+    osh ? (
+      ph2 = (beat_position - str2) * cpb;
+      ph2 < 0 ? ph2 = 0;
+    ) : (
+      ph2 = beat_position * cpb;
+    );
+  ) : (
+    don2 < 0.5 ? ph2 += samplesblock / srate * lfo2_rate;
+  );
+  osh && ph2 >= nst / 16 ? ( ph2 = nst / 16; don2 = 1; );
+  pp = ph2 + lfo2_phase;
+  pf = pp - floor(pp);
+  don2 > 0.5 && pf < 0.0000001 ? pf = 0.9999999;
+  lfo2_shape > 6.5 ? (
+    sq = pp * 16;
+    sq = don2 > 0.5 ? ceil(sq) - 1 : floor(sq);
+    si = sq - floor(sq / nst) * nst;
+    si < 0 ? si = 0 : si > 15 ? si = 15;
+    vv = stp[16 + si] / 63;
+  ) : lfo2_shape > 5.5 ? (
+    cc = floor(pp);
+    cc != cyc2 ? (
+      shs = lfo2_sh | 0;
+      held2 = (shs < 1 || shs == 2) ? rand() : obuf[shs - 1];
+      cyc2 = cc;
+    );
+    vv = held2;
+  ) : lfo2_shape > 4.5 ? (
+    cc = floor(pp);
+    cc != cyc2 ? ( held2 = rand(); cyc2 = cc; );
+    vv = held2;
+  ) : lfo2_shape > 3.5 ? ( vv = pf < 0.5 + lfo2_curve * 0.45 ? 1 : 0; )
+  : lfo2_shape > 2.5 ? ( vv = 1 - pf; )
+  : lfo2_shape > 1.5 ? ( vv = pf; )
+  : lfo2_shape > 0.5 ? ( vv = pf < 0.5 ? 2*pf : 2 - 2*pf; )
+  : ( vv = 0.5 + 0.5 * sin(pf * 2 * $pi); );
+  (lfo2_shape < 3.5 || lfo2_shape > 4.5) && lfo2_curve != 0 ? (
+    vv = pow(vv, pow(2, lfo2_curve * 3));
+  );
+  lfo2_slew > 0.001 ? (
+    sm2 += (vv - sm2) * min(1, 3 * samplesblock / (srate * lfo2_slew));
+    vv = sm2;
+  ) : ( sm2 = vv; );
+  lfo2_out = vv;
+  lfo2_shape > 6.5 ? (
+    don2 > 0.5 ? (
+      lfo2_pho = 0.9999;
+    ) : (
+      uu = ph2 * 16 / nst;
+      lfo2_pho = uu - floor(uu);
+    );
+  ) : (
+    lfo2_pho = ph2 - floor(ph2);
+  );
+) : ( lfo2_out = lfo2_uni > 0.5 ? 0 : 0.5; lfo2_pho = 0; );
+obuf[1] = lfo2_out;
+);
+fon && (fmask & 4) ? (
+  fsd = 0; fk = 0;
+  loop(fns,
+    sbl = min(32, samplesblock - fsd);
+    sbl < 1 ? sbl = 1;
+    bp = beat_position + fsd * fbps;
+lfo3_on > 0.5 ? (
+  trg = 0;
+  lfo3_trig > 0.5 ? ( trg = 1; lfo3_trig = 0; );
+  psn = play_state & 1;
+  psn > lps3 && lfo3_mode > 0.5 ? trg = 1;
+  lps3 = psn;
+  trg ? ( ph3 = 0; str3 = bp; don3 = 0; cyc3 = -1; );
+  osh = lfo3_mode > 0.5 && lfo3_mode < 1.5;
+  osh < 0.5 ? don3 = 0;
+  nst = 16;
+  lfo3_shape > 6.5 ? (
+    nst = floor(lfo3_len + 0.5);
+    nst < 1 ? nst = 1 : nst > 16 ? nst = 16;
+  );
+  lfo3_sync > 0.5 ? (
+    cpb = lfo3_sync < 1.5 ? 4 : lfo3_sync < 2.5 ? 2 : lfo3_sync < 3.5 ? 1 : lfo3_sync < 4.5 ? 0.5 : lfo3_sync < 5.5 ? 0.25 : lfo3_sync < 6.5 ? 0.125 : lfo3_sync < 7.5 ? 0.0625 : lfo3_sync < 8.5 ? 0.03125 : lfo3_sync < 9.5 ? 0.015625 : 0.0078125;
+    osh ? (
+      ph3 = (bp - str3) * cpb;
+      ph3 < 0 ? ph3 = 0;
+    ) : (
+      ph3 = bp * cpb;
+    );
+  ) : (
+    don3 < 0.5 ? ph3 += sbl / srate * lfo3_rate;
+  );
+  osh && ph3 >= nst / 16 ? ( ph3 = nst / 16; don3 = 1; );
+  pp = ph3 + lfo3_phase;
+  pf = pp - floor(pp);
+  don3 > 0.5 && pf < 0.0000001 ? pf = 0.9999999;
+  lfo3_shape > 6.5 ? (
+    sq = pp * 16;
+    sq = don3 > 0.5 ? ceil(sq) - 1 : floor(sq);
+    si = sq - floor(sq / nst) * nst;
+    si < 0 ? si = 0 : si > 15 ? si = 15;
+    vv = stp[32 + si] / 63;
+  ) : lfo3_shape > 5.5 ? (
+    cc = floor(pp);
+    cc != cyc3 ? (
+      shs = lfo3_sh | 0;
+      held3 = (shs < 1 || shs == 3) ? rand() : obuf[shs - 1];
+      cyc3 = cc;
+    );
+    vv = held3;
+  ) : lfo3_shape > 4.5 ? (
+    cc = floor(pp);
+    cc != cyc3 ? ( held3 = rand(); cyc3 = cc; );
+    vv = held3;
+  ) : lfo3_shape > 3.5 ? ( vv = pf < 0.5 + lfo3_curve * 0.45 ? 1 : 0; )
+  : lfo3_shape > 2.5 ? ( vv = 1 - pf; )
+  : lfo3_shape > 1.5 ? ( vv = pf; )
+  : lfo3_shape > 0.5 ? ( vv = pf < 0.5 ? 2*pf : 2 - 2*pf; )
+  : ( vv = 0.5 + 0.5 * sin(pf * 2 * $pi); );
+  (lfo3_shape < 3.5 || lfo3_shape > 4.5) && lfo3_curve != 0 ? (
+    vv = pow(vv, pow(2, lfo3_curve * 3));
+  );
+  lfo3_slew > 0.001 ? (
+    sm3 += (vv - sm3) * min(1, 3 * sbl / (srate * lfo3_slew));
+    vv = sm3;
+  ) : ( sm3 = vv; );
+  lfo3_out = vv;
+  lfo3_shape > 6.5 ? (
+    don3 > 0.5 ? (
+      lfo3_pho = 0.9999;
+    ) : (
+      uu = ph3 * 16 / nst;
+      lfo3_pho = uu - floor(uu);
+    );
+  ) : (
+    lfo3_pho = ph3 - floor(ph3);
+  );
+) : ( lfo3_out = lfo3_uni > 0.5 ? 0 : 0.5; lfo3_pho = 0; );
+obuf[2] = lfo3_out;
+    gmem[fgb + 528 + fk] = lfo3_out;
+    fsd += sbl; fk += 1;
+  );
+) : (
+lfo3_on > 0.5 ? (
+  trg = 0;
+  lfo3_trig > 0.5 ? ( trg = 1; lfo3_trig = 0; );
+  psn = play_state & 1;
+  psn > lps3 && lfo3_mode > 0.5 ? trg = 1;
+  lps3 = psn;
+  trg ? ( ph3 = 0; str3 = beat_position; don3 = 0; cyc3 = -1; );
+  osh = lfo3_mode > 0.5 && lfo3_mode < 1.5;
+  osh < 0.5 ? don3 = 0;
+  nst = 16;
+  lfo3_shape > 6.5 ? (
+    nst = floor(lfo3_len + 0.5);
+    nst < 1 ? nst = 1 : nst > 16 ? nst = 16;
+  );
+  lfo3_sync > 0.5 ? (
+    cpb = lfo3_sync < 1.5 ? 4 : lfo3_sync < 2.5 ? 2 : lfo3_sync < 3.5 ? 1 : lfo3_sync < 4.5 ? 0.5 : lfo3_sync < 5.5 ? 0.25 : lfo3_sync < 6.5 ? 0.125 : lfo3_sync < 7.5 ? 0.0625 : lfo3_sync < 8.5 ? 0.03125 : lfo3_sync < 9.5 ? 0.015625 : 0.0078125;
+    osh ? (
+      ph3 = (beat_position - str3) * cpb;
+      ph3 < 0 ? ph3 = 0;
+    ) : (
+      ph3 = beat_position * cpb;
+    );
+  ) : (
+    don3 < 0.5 ? ph3 += samplesblock / srate * lfo3_rate;
+  );
+  osh && ph3 >= nst / 16 ? ( ph3 = nst / 16; don3 = 1; );
+  pp = ph3 + lfo3_phase;
+  pf = pp - floor(pp);
+  don3 > 0.5 && pf < 0.0000001 ? pf = 0.9999999;
+  lfo3_shape > 6.5 ? (
+    sq = pp * 16;
+    sq = don3 > 0.5 ? ceil(sq) - 1 : floor(sq);
+    si = sq - floor(sq / nst) * nst;
+    si < 0 ? si = 0 : si > 15 ? si = 15;
+    vv = stp[32 + si] / 63;
+  ) : lfo3_shape > 5.5 ? (
+    cc = floor(pp);
+    cc != cyc3 ? (
+      shs = lfo3_sh | 0;
+      held3 = (shs < 1 || shs == 3) ? rand() : obuf[shs - 1];
+      cyc3 = cc;
+    );
+    vv = held3;
+  ) : lfo3_shape > 4.5 ? (
+    cc = floor(pp);
+    cc != cyc3 ? ( held3 = rand(); cyc3 = cc; );
+    vv = held3;
+  ) : lfo3_shape > 3.5 ? ( vv = pf < 0.5 + lfo3_curve * 0.45 ? 1 : 0; )
+  : lfo3_shape > 2.5 ? ( vv = 1 - pf; )
+  : lfo3_shape > 1.5 ? ( vv = pf; )
+  : lfo3_shape > 0.5 ? ( vv = pf < 0.5 ? 2*pf : 2 - 2*pf; )
+  : ( vv = 0.5 + 0.5 * sin(pf * 2 * $pi); );
+  (lfo3_shape < 3.5 || lfo3_shape > 4.5) && lfo3_curve != 0 ? (
+    vv = pow(vv, pow(2, lfo3_curve * 3));
+  );
+  lfo3_slew > 0.001 ? (
+    sm3 += (vv - sm3) * min(1, 3 * samplesblock / (srate * lfo3_slew));
+    vv = sm3;
+  ) : ( sm3 = vv; );
+  lfo3_out = vv;
+  lfo3_shape > 6.5 ? (
+    don3 > 0.5 ? (
+      lfo3_pho = 0.9999;
+    ) : (
+      uu = ph3 * 16 / nst;
+      lfo3_pho = uu - floor(uu);
+    );
+  ) : (
+    lfo3_pho = ph3 - floor(ph3);
+  );
+) : ( lfo3_out = lfo3_uni > 0.5 ? 0 : 0.5; lfo3_pho = 0; );
+obuf[2] = lfo3_out;
+);
+fon && (fmask & 8) ? (
+  fsd = 0; fk = 0;
+  loop(fns,
+    sbl = min(32, samplesblock - fsd);
+    sbl < 1 ? sbl = 1;
+    bp = beat_position + fsd * fbps;
+lfo4_on > 0.5 ? (
+  trg = 0;
+  lfo4_trig > 0.5 ? ( trg = 1; lfo4_trig = 0; );
+  psn = play_state & 1;
+  psn > lps4 && lfo4_mode > 0.5 ? trg = 1;
+  lps4 = psn;
+  trg ? ( ph4 = 0; str4 = bp; don4 = 0; cyc4 = -1; );
+  osh = lfo4_mode > 0.5 && lfo4_mode < 1.5;
+  osh < 0.5 ? don4 = 0;
+  nst = 16;
+  lfo4_shape > 6.5 ? (
+    nst = floor(lfo4_len + 0.5);
+    nst < 1 ? nst = 1 : nst > 16 ? nst = 16;
+  );
+  lfo4_sync > 0.5 ? (
+    cpb = lfo4_sync < 1.5 ? 4 : lfo4_sync < 2.5 ? 2 : lfo4_sync < 3.5 ? 1 : lfo4_sync < 4.5 ? 0.5 : lfo4_sync < 5.5 ? 0.25 : lfo4_sync < 6.5 ? 0.125 : lfo4_sync < 7.5 ? 0.0625 : lfo4_sync < 8.5 ? 0.03125 : lfo4_sync < 9.5 ? 0.015625 : 0.0078125;
+    osh ? (
+      ph4 = (bp - str4) * cpb;
+      ph4 < 0 ? ph4 = 0;
+    ) : (
+      ph4 = bp * cpb;
+    );
+  ) : (
+    don4 < 0.5 ? ph4 += sbl / srate * lfo4_rate;
+  );
+  osh && ph4 >= nst / 16 ? ( ph4 = nst / 16; don4 = 1; );
+  pp = ph4 + lfo4_phase;
+  pf = pp - floor(pp);
+  don4 > 0.5 && pf < 0.0000001 ? pf = 0.9999999;
+  lfo4_shape > 6.5 ? (
+    sq = pp * 16;
+    sq = don4 > 0.5 ? ceil(sq) - 1 : floor(sq);
+    si = sq - floor(sq / nst) * nst;
+    si < 0 ? si = 0 : si > 15 ? si = 15;
+    vv = stp[48 + si] / 63;
+  ) : lfo4_shape > 5.5 ? (
+    cc = floor(pp);
+    cc != cyc4 ? (
+      shs = lfo4_sh | 0;
+      held4 = (shs < 1 || shs == 4) ? rand() : obuf[shs - 1];
+      cyc4 = cc;
+    );
+    vv = held4;
+  ) : lfo4_shape > 4.5 ? (
+    cc = floor(pp);
+    cc != cyc4 ? ( held4 = rand(); cyc4 = cc; );
+    vv = held4;
+  ) : lfo4_shape > 3.5 ? ( vv = pf < 0.5 + lfo4_curve * 0.45 ? 1 : 0; )
+  : lfo4_shape > 2.5 ? ( vv = 1 - pf; )
+  : lfo4_shape > 1.5 ? ( vv = pf; )
+  : lfo4_shape > 0.5 ? ( vv = pf < 0.5 ? 2*pf : 2 - 2*pf; )
+  : ( vv = 0.5 + 0.5 * sin(pf * 2 * $pi); );
+  (lfo4_shape < 3.5 || lfo4_shape > 4.5) && lfo4_curve != 0 ? (
+    vv = pow(vv, pow(2, lfo4_curve * 3));
+  );
+  lfo4_slew > 0.001 ? (
+    sm4 += (vv - sm4) * min(1, 3 * sbl / (srate * lfo4_slew));
+    vv = sm4;
+  ) : ( sm4 = vv; );
+  lfo4_out = vv;
+  lfo4_shape > 6.5 ? (
+    don4 > 0.5 ? (
+      lfo4_pho = 0.9999;
+    ) : (
+      uu = ph4 * 16 / nst;
+      lfo4_pho = uu - floor(uu);
+    );
+  ) : (
+    lfo4_pho = ph4 - floor(ph4);
+  );
+) : ( lfo4_out = lfo4_uni > 0.5 ? 0 : 0.5; lfo4_pho = 0; );
+obuf[3] = lfo4_out;
+    gmem[fgb + 784 + fk] = lfo4_out;
+    fsd += sbl; fk += 1;
+  );
+) : (
+lfo4_on > 0.5 ? (
+  trg = 0;
+  lfo4_trig > 0.5 ? ( trg = 1; lfo4_trig = 0; );
+  psn = play_state & 1;
+  psn > lps4 && lfo4_mode > 0.5 ? trg = 1;
+  lps4 = psn;
+  trg ? ( ph4 = 0; str4 = beat_position; don4 = 0; cyc4 = -1; );
+  osh = lfo4_mode > 0.5 && lfo4_mode < 1.5;
+  osh < 0.5 ? don4 = 0;
+  nst = 16;
+  lfo4_shape > 6.5 ? (
+    nst = floor(lfo4_len + 0.5);
+    nst < 1 ? nst = 1 : nst > 16 ? nst = 16;
+  );
+  lfo4_sync > 0.5 ? (
+    cpb = lfo4_sync < 1.5 ? 4 : lfo4_sync < 2.5 ? 2 : lfo4_sync < 3.5 ? 1 : lfo4_sync < 4.5 ? 0.5 : lfo4_sync < 5.5 ? 0.25 : lfo4_sync < 6.5 ? 0.125 : lfo4_sync < 7.5 ? 0.0625 : lfo4_sync < 8.5 ? 0.03125 : lfo4_sync < 9.5 ? 0.015625 : 0.0078125;
+    osh ? (
+      ph4 = (beat_position - str4) * cpb;
+      ph4 < 0 ? ph4 = 0;
+    ) : (
+      ph4 = beat_position * cpb;
+    );
+  ) : (
+    don4 < 0.5 ? ph4 += samplesblock / srate * lfo4_rate;
+  );
+  osh && ph4 >= nst / 16 ? ( ph4 = nst / 16; don4 = 1; );
+  pp = ph4 + lfo4_phase;
+  pf = pp - floor(pp);
+  don4 > 0.5 && pf < 0.0000001 ? pf = 0.9999999;
+  lfo4_shape > 6.5 ? (
+    sq = pp * 16;
+    sq = don4 > 0.5 ? ceil(sq) - 1 : floor(sq);
+    si = sq - floor(sq / nst) * nst;
+    si < 0 ? si = 0 : si > 15 ? si = 15;
+    vv = stp[48 + si] / 63;
+  ) : lfo4_shape > 5.5 ? (
+    cc = floor(pp);
+    cc != cyc4 ? (
+      shs = lfo4_sh | 0;
+      held4 = (shs < 1 || shs == 4) ? rand() : obuf[shs - 1];
+      cyc4 = cc;
+    );
+    vv = held4;
+  ) : lfo4_shape > 4.5 ? (
+    cc = floor(pp);
+    cc != cyc4 ? ( held4 = rand(); cyc4 = cc; );
+    vv = held4;
+  ) : lfo4_shape > 3.5 ? ( vv = pf < 0.5 + lfo4_curve * 0.45 ? 1 : 0; )
+  : lfo4_shape > 2.5 ? ( vv = 1 - pf; )
+  : lfo4_shape > 1.5 ? ( vv = pf; )
+  : lfo4_shape > 0.5 ? ( vv = pf < 0.5 ? 2*pf : 2 - 2*pf; )
+  : ( vv = 0.5 + 0.5 * sin(pf * 2 * $pi); );
+  (lfo4_shape < 3.5 || lfo4_shape > 4.5) && lfo4_curve != 0 ? (
+    vv = pow(vv, pow(2, lfo4_curve * 3));
+  );
+  lfo4_slew > 0.001 ? (
+    sm4 += (vv - sm4) * min(1, 3 * samplesblock / (srate * lfo4_slew));
+    vv = sm4;
+  ) : ( sm4 = vv; );
+  lfo4_out = vv;
+  lfo4_shape > 6.5 ? (
+    don4 > 0.5 ? (
+      lfo4_pho = 0.9999;
+    ) : (
+      uu = ph4 * 16 / nst;
+      lfo4_pho = uu - floor(uu);
+    );
+  ) : (
+    lfo4_pho = ph4 - floor(ph4);
+  );
+) : ( lfo4_out = lfo4_uni > 0.5 ? 0 : 0.5; lfo4_pho = 0; );
+obuf[3] = lfo4_out;
+);
+fon && (fmask & 16) ? (
+  fsd = 0; fk = 0;
+  loop(fns,
+    sbl = min(32, samplesblock - fsd);
+    sbl < 1 ? sbl = 1;
+    bp = beat_position + fsd * fbps;
+lfo5_on > 0.5 ? (
+  trg = 0;
+  lfo5_trig > 0.5 ? ( trg = 1; lfo5_trig = 0; );
+  psn = play_state & 1;
+  psn > lps5 && lfo5_mode > 0.5 ? trg = 1;
+  lps5 = psn;
+  trg ? ( ph5 = 0; str5 = bp; don5 = 0; cyc5 = -1; );
+  osh = lfo5_mode > 0.5 && lfo5_mode < 1.5;
+  osh < 0.5 ? don5 = 0;
+  nst = 16;
+  lfo5_shape > 6.5 ? (
+    nst = floor(lfo5_len + 0.5);
+    nst < 1 ? nst = 1 : nst > 16 ? nst = 16;
+  );
+  lfo5_sync > 0.5 ? (
+    cpb = lfo5_sync < 1.5 ? 4 : lfo5_sync < 2.5 ? 2 : lfo5_sync < 3.5 ? 1 : lfo5_sync < 4.5 ? 0.5 : lfo5_sync < 5.5 ? 0.25 : lfo5_sync < 6.5 ? 0.125 : lfo5_sync < 7.5 ? 0.0625 : lfo5_sync < 8.5 ? 0.03125 : lfo5_sync < 9.5 ? 0.015625 : 0.0078125;
+    osh ? (
+      ph5 = (bp - str5) * cpb;
+      ph5 < 0 ? ph5 = 0;
+    ) : (
+      ph5 = bp * cpb;
+    );
+  ) : (
+    don5 < 0.5 ? ph5 += sbl / srate * lfo5_rate;
+  );
+  osh && ph5 >= nst / 16 ? ( ph5 = nst / 16; don5 = 1; );
+  pp = ph5 + lfo5_phase;
+  pf = pp - floor(pp);
+  don5 > 0.5 && pf < 0.0000001 ? pf = 0.9999999;
+  lfo5_shape > 6.5 ? (
+    sq = pp * 16;
+    sq = don5 > 0.5 ? ceil(sq) - 1 : floor(sq);
+    si = sq - floor(sq / nst) * nst;
+    si < 0 ? si = 0 : si > 15 ? si = 15;
+    vv = stp[64 + si] / 63;
+  ) : lfo5_shape > 5.5 ? (
+    cc = floor(pp);
+    cc != cyc5 ? (
+      shs = lfo5_sh | 0;
+      held5 = (shs < 1 || shs == 5) ? rand() : obuf[shs - 1];
+      cyc5 = cc;
+    );
+    vv = held5;
+  ) : lfo5_shape > 4.5 ? (
+    cc = floor(pp);
+    cc != cyc5 ? ( held5 = rand(); cyc5 = cc; );
+    vv = held5;
+  ) : lfo5_shape > 3.5 ? ( vv = pf < 0.5 + lfo5_curve * 0.45 ? 1 : 0; )
+  : lfo5_shape > 2.5 ? ( vv = 1 - pf; )
+  : lfo5_shape > 1.5 ? ( vv = pf; )
+  : lfo5_shape > 0.5 ? ( vv = pf < 0.5 ? 2*pf : 2 - 2*pf; )
+  : ( vv = 0.5 + 0.5 * sin(pf * 2 * $pi); );
+  (lfo5_shape < 3.5 || lfo5_shape > 4.5) && lfo5_curve != 0 ? (
+    vv = pow(vv, pow(2, lfo5_curve * 3));
+  );
+  lfo5_slew > 0.001 ? (
+    sm5 += (vv - sm5) * min(1, 3 * sbl / (srate * lfo5_slew));
+    vv = sm5;
+  ) : ( sm5 = vv; );
+  lfo5_out = vv;
+  lfo5_shape > 6.5 ? (
+    don5 > 0.5 ? (
+      lfo5_pho = 0.9999;
+    ) : (
+      uu = ph5 * 16 / nst;
+      lfo5_pho = uu - floor(uu);
+    );
+  ) : (
+    lfo5_pho = ph5 - floor(ph5);
+  );
+) : ( lfo5_out = lfo5_uni > 0.5 ? 0 : 0.5; lfo5_pho = 0; );
+obuf[4] = lfo5_out;
+    gmem[fgb + 1040 + fk] = lfo5_out;
+    fsd += sbl; fk += 1;
+  );
+) : (
+lfo5_on > 0.5 ? (
+  trg = 0;
+  lfo5_trig > 0.5 ? ( trg = 1; lfo5_trig = 0; );
+  psn = play_state & 1;
+  psn > lps5 && lfo5_mode > 0.5 ? trg = 1;
+  lps5 = psn;
+  trg ? ( ph5 = 0; str5 = beat_position; don5 = 0; cyc5 = -1; );
+  osh = lfo5_mode > 0.5 && lfo5_mode < 1.5;
+  osh < 0.5 ? don5 = 0;
+  nst = 16;
+  lfo5_shape > 6.5 ? (
+    nst = floor(lfo5_len + 0.5);
+    nst < 1 ? nst = 1 : nst > 16 ? nst = 16;
+  );
+  lfo5_sync > 0.5 ? (
+    cpb = lfo5_sync < 1.5 ? 4 : lfo5_sync < 2.5 ? 2 : lfo5_sync < 3.5 ? 1 : lfo5_sync < 4.5 ? 0.5 : lfo5_sync < 5.5 ? 0.25 : lfo5_sync < 6.5 ? 0.125 : lfo5_sync < 7.5 ? 0.0625 : lfo5_sync < 8.5 ? 0.03125 : lfo5_sync < 9.5 ? 0.015625 : 0.0078125;
+    osh ? (
+      ph5 = (beat_position - str5) * cpb;
+      ph5 < 0 ? ph5 = 0;
+    ) : (
+      ph5 = beat_position * cpb;
+    );
+  ) : (
+    don5 < 0.5 ? ph5 += samplesblock / srate * lfo5_rate;
+  );
+  osh && ph5 >= nst / 16 ? ( ph5 = nst / 16; don5 = 1; );
+  pp = ph5 + lfo5_phase;
+  pf = pp - floor(pp);
+  don5 > 0.5 && pf < 0.0000001 ? pf = 0.9999999;
+  lfo5_shape > 6.5 ? (
+    sq = pp * 16;
+    sq = don5 > 0.5 ? ceil(sq) - 1 : floor(sq);
+    si = sq - floor(sq / nst) * nst;
+    si < 0 ? si = 0 : si > 15 ? si = 15;
+    vv = stp[64 + si] / 63;
+  ) : lfo5_shape > 5.5 ? (
+    cc = floor(pp);
+    cc != cyc5 ? (
+      shs = lfo5_sh | 0;
+      held5 = (shs < 1 || shs == 5) ? rand() : obuf[shs - 1];
+      cyc5 = cc;
+    );
+    vv = held5;
+  ) : lfo5_shape > 4.5 ? (
+    cc = floor(pp);
+    cc != cyc5 ? ( held5 = rand(); cyc5 = cc; );
+    vv = held5;
+  ) : lfo5_shape > 3.5 ? ( vv = pf < 0.5 + lfo5_curve * 0.45 ? 1 : 0; )
+  : lfo5_shape > 2.5 ? ( vv = 1 - pf; )
+  : lfo5_shape > 1.5 ? ( vv = pf; )
+  : lfo5_shape > 0.5 ? ( vv = pf < 0.5 ? 2*pf : 2 - 2*pf; )
+  : ( vv = 0.5 + 0.5 * sin(pf * 2 * $pi); );
+  (lfo5_shape < 3.5 || lfo5_shape > 4.5) && lfo5_curve != 0 ? (
+    vv = pow(vv, pow(2, lfo5_curve * 3));
+  );
+  lfo5_slew > 0.001 ? (
+    sm5 += (vv - sm5) * min(1, 3 * samplesblock / (srate * lfo5_slew));
+    vv = sm5;
+  ) : ( sm5 = vv; );
+  lfo5_out = vv;
+  lfo5_shape > 6.5 ? (
+    don5 > 0.5 ? (
+      lfo5_pho = 0.9999;
+    ) : (
+      uu = ph5 * 16 / nst;
+      lfo5_pho = uu - floor(uu);
+    );
+  ) : (
+    lfo5_pho = ph5 - floor(ph5);
+  );
+) : ( lfo5_out = lfo5_uni > 0.5 ? 0 : 0.5; lfo5_pho = 0; );
+obuf[4] = lfo5_out;
+);
+fon && (fmask & 32) ? (
+  fsd = 0; fk = 0;
+  loop(fns,
+    sbl = min(32, samplesblock - fsd);
+    sbl < 1 ? sbl = 1;
+    bp = beat_position + fsd * fbps;
+lfo6_on > 0.5 ? (
+  trg = 0;
+  lfo6_trig > 0.5 ? ( trg = 1; lfo6_trig = 0; );
+  psn = play_state & 1;
+  psn > lps6 && lfo6_mode > 0.5 ? trg = 1;
+  lps6 = psn;
+  trg ? ( ph6 = 0; str6 = bp; don6 = 0; cyc6 = -1; );
+  osh = lfo6_mode > 0.5 && lfo6_mode < 1.5;
+  osh < 0.5 ? don6 = 0;
+  nst = 16;
+  lfo6_shape > 6.5 ? (
+    nst = floor(lfo6_len + 0.5);
+    nst < 1 ? nst = 1 : nst > 16 ? nst = 16;
+  );
+  lfo6_sync > 0.5 ? (
+    cpb = lfo6_sync < 1.5 ? 4 : lfo6_sync < 2.5 ? 2 : lfo6_sync < 3.5 ? 1 : lfo6_sync < 4.5 ? 0.5 : lfo6_sync < 5.5 ? 0.25 : lfo6_sync < 6.5 ? 0.125 : lfo6_sync < 7.5 ? 0.0625 : lfo6_sync < 8.5 ? 0.03125 : lfo6_sync < 9.5 ? 0.015625 : 0.0078125;
+    osh ? (
+      ph6 = (bp - str6) * cpb;
+      ph6 < 0 ? ph6 = 0;
+    ) : (
+      ph6 = bp * cpb;
+    );
+  ) : (
+    don6 < 0.5 ? ph6 += sbl / srate * lfo6_rate;
+  );
+  osh && ph6 >= nst / 16 ? ( ph6 = nst / 16; don6 = 1; );
+  pp = ph6 + lfo6_phase;
+  pf = pp - floor(pp);
+  don6 > 0.5 && pf < 0.0000001 ? pf = 0.9999999;
+  lfo6_shape > 6.5 ? (
+    sq = pp * 16;
+    sq = don6 > 0.5 ? ceil(sq) - 1 : floor(sq);
+    si = sq - floor(sq / nst) * nst;
+    si < 0 ? si = 0 : si > 15 ? si = 15;
+    vv = stp[80 + si] / 63;
+  ) : lfo6_shape > 5.5 ? (
+    cc = floor(pp);
+    cc != cyc6 ? (
+      shs = lfo6_sh | 0;
+      held6 = (shs < 1 || shs == 6) ? rand() : obuf[shs - 1];
+      cyc6 = cc;
+    );
+    vv = held6;
+  ) : lfo6_shape > 4.5 ? (
+    cc = floor(pp);
+    cc != cyc6 ? ( held6 = rand(); cyc6 = cc; );
+    vv = held6;
+  ) : lfo6_shape > 3.5 ? ( vv = pf < 0.5 + lfo6_curve * 0.45 ? 1 : 0; )
+  : lfo6_shape > 2.5 ? ( vv = 1 - pf; )
+  : lfo6_shape > 1.5 ? ( vv = pf; )
+  : lfo6_shape > 0.5 ? ( vv = pf < 0.5 ? 2*pf : 2 - 2*pf; )
+  : ( vv = 0.5 + 0.5 * sin(pf * 2 * $pi); );
+  (lfo6_shape < 3.5 || lfo6_shape > 4.5) && lfo6_curve != 0 ? (
+    vv = pow(vv, pow(2, lfo6_curve * 3));
+  );
+  lfo6_slew > 0.001 ? (
+    sm6 += (vv - sm6) * min(1, 3 * sbl / (srate * lfo6_slew));
+    vv = sm6;
+  ) : ( sm6 = vv; );
+  lfo6_out = vv;
+  lfo6_shape > 6.5 ? (
+    don6 > 0.5 ? (
+      lfo6_pho = 0.9999;
+    ) : (
+      uu = ph6 * 16 / nst;
+      lfo6_pho = uu - floor(uu);
+    );
+  ) : (
+    lfo6_pho = ph6 - floor(ph6);
+  );
+) : ( lfo6_out = lfo6_uni > 0.5 ? 0 : 0.5; lfo6_pho = 0; );
+obuf[5] = lfo6_out;
+    gmem[fgb + 1296 + fk] = lfo6_out;
+    fsd += sbl; fk += 1;
+  );
+) : (
+lfo6_on > 0.5 ? (
+  trg = 0;
+  lfo6_trig > 0.5 ? ( trg = 1; lfo6_trig = 0; );
+  psn = play_state & 1;
+  psn > lps6 && lfo6_mode > 0.5 ? trg = 1;
+  lps6 = psn;
+  trg ? ( ph6 = 0; str6 = beat_position; don6 = 0; cyc6 = -1; );
+  osh = lfo6_mode > 0.5 && lfo6_mode < 1.5;
+  osh < 0.5 ? don6 = 0;
+  nst = 16;
+  lfo6_shape > 6.5 ? (
+    nst = floor(lfo6_len + 0.5);
+    nst < 1 ? nst = 1 : nst > 16 ? nst = 16;
+  );
+  lfo6_sync > 0.5 ? (
+    cpb = lfo6_sync < 1.5 ? 4 : lfo6_sync < 2.5 ? 2 : lfo6_sync < 3.5 ? 1 : lfo6_sync < 4.5 ? 0.5 : lfo6_sync < 5.5 ? 0.25 : lfo6_sync < 6.5 ? 0.125 : lfo6_sync < 7.5 ? 0.0625 : lfo6_sync < 8.5 ? 0.03125 : lfo6_sync < 9.5 ? 0.015625 : 0.0078125;
+    osh ? (
+      ph6 = (beat_position - str6) * cpb;
+      ph6 < 0 ? ph6 = 0;
+    ) : (
+      ph6 = beat_position * cpb;
+    );
+  ) : (
+    don6 < 0.5 ? ph6 += samplesblock / srate * lfo6_rate;
+  );
+  osh && ph6 >= nst / 16 ? ( ph6 = nst / 16; don6 = 1; );
+  pp = ph6 + lfo6_phase;
+  pf = pp - floor(pp);
+  don6 > 0.5 && pf < 0.0000001 ? pf = 0.9999999;
+  lfo6_shape > 6.5 ? (
+    sq = pp * 16;
+    sq = don6 > 0.5 ? ceil(sq) - 1 : floor(sq);
+    si = sq - floor(sq / nst) * nst;
+    si < 0 ? si = 0 : si > 15 ? si = 15;
+    vv = stp[80 + si] / 63;
+  ) : lfo6_shape > 5.5 ? (
+    cc = floor(pp);
+    cc != cyc6 ? (
+      shs = lfo6_sh | 0;
+      held6 = (shs < 1 || shs == 6) ? rand() : obuf[shs - 1];
+      cyc6 = cc;
+    );
+    vv = held6;
+  ) : lfo6_shape > 4.5 ? (
+    cc = floor(pp);
+    cc != cyc6 ? ( held6 = rand(); cyc6 = cc; );
+    vv = held6;
+  ) : lfo6_shape > 3.5 ? ( vv = pf < 0.5 + lfo6_curve * 0.45 ? 1 : 0; )
+  : lfo6_shape > 2.5 ? ( vv = 1 - pf; )
+  : lfo6_shape > 1.5 ? ( vv = pf; )
+  : lfo6_shape > 0.5 ? ( vv = pf < 0.5 ? 2*pf : 2 - 2*pf; )
+  : ( vv = 0.5 + 0.5 * sin(pf * 2 * $pi); );
+  (lfo6_shape < 3.5 || lfo6_shape > 4.5) && lfo6_curve != 0 ? (
+    vv = pow(vv, pow(2, lfo6_curve * 3));
+  );
+  lfo6_slew > 0.001 ? (
+    sm6 += (vv - sm6) * min(1, 3 * samplesblock / (srate * lfo6_slew));
+    vv = sm6;
+  ) : ( sm6 = vv; );
+  lfo6_out = vv;
+  lfo6_shape > 6.5 ? (
+    don6 > 0.5 ? (
+      lfo6_pho = 0.9999;
+    ) : (
+      uu = ph6 * 16 / nst;
+      lfo6_pho = uu - floor(uu);
+    );
+  ) : (
+    lfo6_pho = ph6 - floor(ph6);
+  );
+) : ( lfo6_out = lfo6_uni > 0.5 ? 0 : 0.5; lfo6_pho = 0; );
+obuf[5] = lfo6_out;
+);
+fon && (fmask & 64) ? (
+  fsd = 0; fk = 0;
+  loop(fns,
+    sbl = min(32, samplesblock - fsd);
+    sbl < 1 ? sbl = 1;
+    bp = beat_position + fsd * fbps;
+lfo7_on > 0.5 ? (
+  trg = 0;
+  lfo7_trig > 0.5 ? ( trg = 1; lfo7_trig = 0; );
+  psn = play_state & 1;
+  psn > lps7 && lfo7_mode > 0.5 ? trg = 1;
+  lps7 = psn;
+  trg ? ( ph7 = 0; str7 = bp; don7 = 0; cyc7 = -1; );
+  osh = lfo7_mode > 0.5 && lfo7_mode < 1.5;
+  osh < 0.5 ? don7 = 0;
+  nst = 16;
+  lfo7_shape > 6.5 ? (
+    nst = floor(lfo7_len + 0.5);
+    nst < 1 ? nst = 1 : nst > 16 ? nst = 16;
+  );
+  lfo7_sync > 0.5 ? (
+    cpb = lfo7_sync < 1.5 ? 4 : lfo7_sync < 2.5 ? 2 : lfo7_sync < 3.5 ? 1 : lfo7_sync < 4.5 ? 0.5 : lfo7_sync < 5.5 ? 0.25 : lfo7_sync < 6.5 ? 0.125 : lfo7_sync < 7.5 ? 0.0625 : lfo7_sync < 8.5 ? 0.03125 : lfo7_sync < 9.5 ? 0.015625 : 0.0078125;
+    osh ? (
+      ph7 = (bp - str7) * cpb;
+      ph7 < 0 ? ph7 = 0;
+    ) : (
+      ph7 = bp * cpb;
+    );
+  ) : (
+    don7 < 0.5 ? ph7 += sbl / srate * lfo7_rate;
+  );
+  osh && ph7 >= nst / 16 ? ( ph7 = nst / 16; don7 = 1; );
+  pp = ph7 + lfo7_phase;
+  pf = pp - floor(pp);
+  don7 > 0.5 && pf < 0.0000001 ? pf = 0.9999999;
+  lfo7_shape > 6.5 ? (
+    sq = pp * 16;
+    sq = don7 > 0.5 ? ceil(sq) - 1 : floor(sq);
+    si = sq - floor(sq / nst) * nst;
+    si < 0 ? si = 0 : si > 15 ? si = 15;
+    vv = stp[96 + si] / 63;
+  ) : lfo7_shape > 5.5 ? (
+    cc = floor(pp);
+    cc != cyc7 ? (
+      shs = lfo7_sh | 0;
+      held7 = (shs < 1 || shs == 7) ? rand() : obuf[shs - 1];
+      cyc7 = cc;
+    );
+    vv = held7;
+  ) : lfo7_shape > 4.5 ? (
+    cc = floor(pp);
+    cc != cyc7 ? ( held7 = rand(); cyc7 = cc; );
+    vv = held7;
+  ) : lfo7_shape > 3.5 ? ( vv = pf < 0.5 + lfo7_curve * 0.45 ? 1 : 0; )
+  : lfo7_shape > 2.5 ? ( vv = 1 - pf; )
+  : lfo7_shape > 1.5 ? ( vv = pf; )
+  : lfo7_shape > 0.5 ? ( vv = pf < 0.5 ? 2*pf : 2 - 2*pf; )
+  : ( vv = 0.5 + 0.5 * sin(pf * 2 * $pi); );
+  (lfo7_shape < 3.5 || lfo7_shape > 4.5) && lfo7_curve != 0 ? (
+    vv = pow(vv, pow(2, lfo7_curve * 3));
+  );
+  lfo7_slew > 0.001 ? (
+    sm7 += (vv - sm7) * min(1, 3 * sbl / (srate * lfo7_slew));
+    vv = sm7;
+  ) : ( sm7 = vv; );
+  lfo7_out = vv;
+  lfo7_shape > 6.5 ? (
+    don7 > 0.5 ? (
+      lfo7_pho = 0.9999;
+    ) : (
+      uu = ph7 * 16 / nst;
+      lfo7_pho = uu - floor(uu);
+    );
+  ) : (
+    lfo7_pho = ph7 - floor(ph7);
+  );
+) : ( lfo7_out = lfo7_uni > 0.5 ? 0 : 0.5; lfo7_pho = 0; );
+obuf[6] = lfo7_out;
+    gmem[fgb + 1552 + fk] = lfo7_out;
+    fsd += sbl; fk += 1;
+  );
+) : (
+lfo7_on > 0.5 ? (
+  trg = 0;
+  lfo7_trig > 0.5 ? ( trg = 1; lfo7_trig = 0; );
+  psn = play_state & 1;
+  psn > lps7 && lfo7_mode > 0.5 ? trg = 1;
+  lps7 = psn;
+  trg ? ( ph7 = 0; str7 = beat_position; don7 = 0; cyc7 = -1; );
+  osh = lfo7_mode > 0.5 && lfo7_mode < 1.5;
+  osh < 0.5 ? don7 = 0;
+  nst = 16;
+  lfo7_shape > 6.5 ? (
+    nst = floor(lfo7_len + 0.5);
+    nst < 1 ? nst = 1 : nst > 16 ? nst = 16;
+  );
+  lfo7_sync > 0.5 ? (
+    cpb = lfo7_sync < 1.5 ? 4 : lfo7_sync < 2.5 ? 2 : lfo7_sync < 3.5 ? 1 : lfo7_sync < 4.5 ? 0.5 : lfo7_sync < 5.5 ? 0.25 : lfo7_sync < 6.5 ? 0.125 : lfo7_sync < 7.5 ? 0.0625 : lfo7_sync < 8.5 ? 0.03125 : lfo7_sync < 9.5 ? 0.015625 : 0.0078125;
+    osh ? (
+      ph7 = (beat_position - str7) * cpb;
+      ph7 < 0 ? ph7 = 0;
+    ) : (
+      ph7 = beat_position * cpb;
+    );
+  ) : (
+    don7 < 0.5 ? ph7 += samplesblock / srate * lfo7_rate;
+  );
+  osh && ph7 >= nst / 16 ? ( ph7 = nst / 16; don7 = 1; );
+  pp = ph7 + lfo7_phase;
+  pf = pp - floor(pp);
+  don7 > 0.5 && pf < 0.0000001 ? pf = 0.9999999;
+  lfo7_shape > 6.5 ? (
+    sq = pp * 16;
+    sq = don7 > 0.5 ? ceil(sq) - 1 : floor(sq);
+    si = sq - floor(sq / nst) * nst;
+    si < 0 ? si = 0 : si > 15 ? si = 15;
+    vv = stp[96 + si] / 63;
+  ) : lfo7_shape > 5.5 ? (
+    cc = floor(pp);
+    cc != cyc7 ? (
+      shs = lfo7_sh | 0;
+      held7 = (shs < 1 || shs == 7) ? rand() : obuf[shs - 1];
+      cyc7 = cc;
+    );
+    vv = held7;
+  ) : lfo7_shape > 4.5 ? (
+    cc = floor(pp);
+    cc != cyc7 ? ( held7 = rand(); cyc7 = cc; );
+    vv = held7;
+  ) : lfo7_shape > 3.5 ? ( vv = pf < 0.5 + lfo7_curve * 0.45 ? 1 : 0; )
+  : lfo7_shape > 2.5 ? ( vv = 1 - pf; )
+  : lfo7_shape > 1.5 ? ( vv = pf; )
+  : lfo7_shape > 0.5 ? ( vv = pf < 0.5 ? 2*pf : 2 - 2*pf; )
+  : ( vv = 0.5 + 0.5 * sin(pf * 2 * $pi); );
+  (lfo7_shape < 3.5 || lfo7_shape > 4.5) && lfo7_curve != 0 ? (
+    vv = pow(vv, pow(2, lfo7_curve * 3));
+  );
+  lfo7_slew > 0.001 ? (
+    sm7 += (vv - sm7) * min(1, 3 * samplesblock / (srate * lfo7_slew));
+    vv = sm7;
+  ) : ( sm7 = vv; );
+  lfo7_out = vv;
+  lfo7_shape > 6.5 ? (
+    don7 > 0.5 ? (
+      lfo7_pho = 0.9999;
+    ) : (
+      uu = ph7 * 16 / nst;
+      lfo7_pho = uu - floor(uu);
+    );
+  ) : (
+    lfo7_pho = ph7 - floor(ph7);
+  );
+) : ( lfo7_out = lfo7_uni > 0.5 ? 0 : 0.5; lfo7_pho = 0; );
+obuf[6] = lfo7_out;
+);
+fon && (fmask & 128) ? (
+  fsd = 0; fk = 0;
+  loop(fns,
+    sbl = min(32, samplesblock - fsd);
+    sbl < 1 ? sbl = 1;
+    bp = beat_position + fsd * fbps;
+lfo8_on > 0.5 ? (
+  trg = 0;
+  lfo8_trig > 0.5 ? ( trg = 1; lfo8_trig = 0; );
+  psn = play_state & 1;
+  psn > lps8 && lfo8_mode > 0.5 ? trg = 1;
+  lps8 = psn;
+  trg ? ( ph8 = 0; str8 = bp; don8 = 0; cyc8 = -1; );
+  osh = lfo8_mode > 0.5 && lfo8_mode < 1.5;
+  osh < 0.5 ? don8 = 0;
+  nst = 16;
+  lfo8_shape > 6.5 ? (
+    nst = floor(lfo8_len + 0.5);
+    nst < 1 ? nst = 1 : nst > 16 ? nst = 16;
+  );
+  lfo8_sync > 0.5 ? (
+    cpb = lfo8_sync < 1.5 ? 4 : lfo8_sync < 2.5 ? 2 : lfo8_sync < 3.5 ? 1 : lfo8_sync < 4.5 ? 0.5 : lfo8_sync < 5.5 ? 0.25 : lfo8_sync < 6.5 ? 0.125 : lfo8_sync < 7.5 ? 0.0625 : lfo8_sync < 8.5 ? 0.03125 : lfo8_sync < 9.5 ? 0.015625 : 0.0078125;
+    osh ? (
+      ph8 = (bp - str8) * cpb;
+      ph8 < 0 ? ph8 = 0;
+    ) : (
+      ph8 = bp * cpb;
+    );
+  ) : (
+    don8 < 0.5 ? ph8 += sbl / srate * lfo8_rate;
+  );
+  osh && ph8 >= nst / 16 ? ( ph8 = nst / 16; don8 = 1; );
+  pp = ph8 + lfo8_phase;
+  pf = pp - floor(pp);
+  don8 > 0.5 && pf < 0.0000001 ? pf = 0.9999999;
+  lfo8_shape > 6.5 ? (
+    sq = pp * 16;
+    sq = don8 > 0.5 ? ceil(sq) - 1 : floor(sq);
+    si = sq - floor(sq / nst) * nst;
+    si < 0 ? si = 0 : si > 15 ? si = 15;
+    vv = stp[112 + si] / 63;
+  ) : lfo8_shape > 5.5 ? (
+    cc = floor(pp);
+    cc != cyc8 ? (
+      shs = lfo8_sh | 0;
+      held8 = (shs < 1 || shs == 8) ? rand() : obuf[shs - 1];
+      cyc8 = cc;
+    );
+    vv = held8;
+  ) : lfo8_shape > 4.5 ? (
+    cc = floor(pp);
+    cc != cyc8 ? ( held8 = rand(); cyc8 = cc; );
+    vv = held8;
+  ) : lfo8_shape > 3.5 ? ( vv = pf < 0.5 + lfo8_curve * 0.45 ? 1 : 0; )
+  : lfo8_shape > 2.5 ? ( vv = 1 - pf; )
+  : lfo8_shape > 1.5 ? ( vv = pf; )
+  : lfo8_shape > 0.5 ? ( vv = pf < 0.5 ? 2*pf : 2 - 2*pf; )
+  : ( vv = 0.5 + 0.5 * sin(pf * 2 * $pi); );
+  (lfo8_shape < 3.5 || lfo8_shape > 4.5) && lfo8_curve != 0 ? (
+    vv = pow(vv, pow(2, lfo8_curve * 3));
+  );
+  lfo8_slew > 0.001 ? (
+    sm8 += (vv - sm8) * min(1, 3 * sbl / (srate * lfo8_slew));
+    vv = sm8;
+  ) : ( sm8 = vv; );
+  lfo8_out = vv;
+  lfo8_shape > 6.5 ? (
+    don8 > 0.5 ? (
+      lfo8_pho = 0.9999;
+    ) : (
+      uu = ph8 * 16 / nst;
+      lfo8_pho = uu - floor(uu);
+    );
+  ) : (
+    lfo8_pho = ph8 - floor(ph8);
+  );
+) : ( lfo8_out = lfo8_uni > 0.5 ? 0 : 0.5; lfo8_pho = 0; );
+obuf[7] = lfo8_out;
+    gmem[fgb + 1808 + fk] = lfo8_out;
+    fsd += sbl; fk += 1;
+  );
+) : (
+lfo8_on > 0.5 ? (
+  trg = 0;
+  lfo8_trig > 0.5 ? ( trg = 1; lfo8_trig = 0; );
+  psn = play_state & 1;
+  psn > lps8 && lfo8_mode > 0.5 ? trg = 1;
+  lps8 = psn;
+  trg ? ( ph8 = 0; str8 = beat_position; don8 = 0; cyc8 = -1; );
+  osh = lfo8_mode > 0.5 && lfo8_mode < 1.5;
+  osh < 0.5 ? don8 = 0;
+  nst = 16;
+  lfo8_shape > 6.5 ? (
+    nst = floor(lfo8_len + 0.5);
+    nst < 1 ? nst = 1 : nst > 16 ? nst = 16;
+  );
+  lfo8_sync > 0.5 ? (
+    cpb = lfo8_sync < 1.5 ? 4 : lfo8_sync < 2.5 ? 2 : lfo8_sync < 3.5 ? 1 : lfo8_sync < 4.5 ? 0.5 : lfo8_sync < 5.5 ? 0.25 : lfo8_sync < 6.5 ? 0.125 : lfo8_sync < 7.5 ? 0.0625 : lfo8_sync < 8.5 ? 0.03125 : lfo8_sync < 9.5 ? 0.015625 : 0.0078125;
+    osh ? (
+      ph8 = (beat_position - str8) * cpb;
+      ph8 < 0 ? ph8 = 0;
+    ) : (
+      ph8 = beat_position * cpb;
+    );
+  ) : (
+    don8 < 0.5 ? ph8 += samplesblock / srate * lfo8_rate;
+  );
+  osh && ph8 >= nst / 16 ? ( ph8 = nst / 16; don8 = 1; );
+  pp = ph8 + lfo8_phase;
+  pf = pp - floor(pp);
+  don8 > 0.5 && pf < 0.0000001 ? pf = 0.9999999;
+  lfo8_shape > 6.5 ? (
+    sq = pp * 16;
+    sq = don8 > 0.5 ? ceil(sq) - 1 : floor(sq);
+    si = sq - floor(sq / nst) * nst;
+    si < 0 ? si = 0 : si > 15 ? si = 15;
+    vv = stp[112 + si] / 63;
+  ) : lfo8_shape > 5.5 ? (
+    cc = floor(pp);
+    cc != cyc8 ? (
+      shs = lfo8_sh | 0;
+      held8 = (shs < 1 || shs == 8) ? rand() : obuf[shs - 1];
+      cyc8 = cc;
+    );
+    vv = held8;
+  ) : lfo8_shape > 4.5 ? (
+    cc = floor(pp);
+    cc != cyc8 ? ( held8 = rand(); cyc8 = cc; );
+    vv = held8;
+  ) : lfo8_shape > 3.5 ? ( vv = pf < 0.5 + lfo8_curve * 0.45 ? 1 : 0; )
+  : lfo8_shape > 2.5 ? ( vv = 1 - pf; )
+  : lfo8_shape > 1.5 ? ( vv = pf; )
+  : lfo8_shape > 0.5 ? ( vv = pf < 0.5 ? 2*pf : 2 - 2*pf; )
+  : ( vv = 0.5 + 0.5 * sin(pf * 2 * $pi); );
+  (lfo8_shape < 3.5 || lfo8_shape > 4.5) && lfo8_curve != 0 ? (
+    vv = pow(vv, pow(2, lfo8_curve * 3));
+  );
+  lfo8_slew > 0.001 ? (
+    sm8 += (vv - sm8) * min(1, 3 * samplesblock / (srate * lfo8_slew));
+    vv = sm8;
+  ) : ( sm8 = vv; );
+  lfo8_out = vv;
+  lfo8_shape > 6.5 ? (
+    don8 > 0.5 ? (
+      lfo8_pho = 0.9999;
+    ) : (
+      uu = ph8 * 16 / nst;
+      lfo8_pho = uu - floor(uu);
+    );
+  ) : (
+    lfo8_pho = ph8 - floor(ph8);
+  );
+) : ( lfo8_out = lfo8_uni > 0.5 ? 0 : 0.5; lfo8_pho = 0; );
+obuf[7] = lfo8_out;
+);
+fon ? (
+  gmem[fgb] = fns;
+  gmem[fgb + 1] = 32;
+  gmem[fgb + 2] += 1;
+);

@@ -1,0 +1,63 @@
+desc: FX Constellation - Notes
+// Genere par FX Constellation (Modules/NoteSource.lua) : ne pas editer,
+// le fichier est reecrit a chaque ouverture de la fenetre.
+// Les notes qui traversent la piste, en quatre sources de modulation.
+// Le MIDI ressort tel qu'il est entre ; le son ne passe pas par ici.
+slider1:ns_note=0<0,1,0.0001>-Note Pitch (mod source)
+slider2:ns_vel=0<0,1,0.0001>-Velocity (mod source)
+slider3:ns_rand=0.5<0,1,0.0001>-Note Random (mod source)
+slider4:ns_oct=0<0,1,0.0001>-Note Octave (mod source)
+slider5:ns_lo=24<0,127,1>-Note Pitch Low
+slider6:ns_hi=96<0,127,1>-Note Pitch High
+slider7:ns_gnote=0<0,2000,1>-Note Pitch Glide (ms)
+slider8:ns_gvel=0<0,2000,1>-Velocity Glide (ms)
+slider9:ns_grand=0<0,2000,1>-Note Random Glide (ms)
+slider10:ns_goct=0<0,2000,1>-Note Octave Glide (ms)
+slider11:ns_knote=60<0,127,1>-Keyboard Note
+slider12:ns_kgate=0<0,1,1>-Keyboard Gate
+slider13:ns_kvel=100<1,127,1>-Keyboard Velocity
+
+@init
+ext_noinit = 1;
+// Les cibles partent de ce que le projet a range : une valeur tenue revient
+// telle quelle au rechargement, sans saut.
+t_note = ns_note; t_vel = ns_vel; t_rand = ns_rand; t_oct = ns_oct;
+kg_prev = 0; kn_prev = -1;
+
+// Une note : les quatre cibles d'un coup.
+function ns_hit(nt, vl) local(lo hi) (
+  lo = floor(ns_lo + 0.5);
+  hi = floor(ns_hi + 0.5);
+  hi <= lo ? ( hi = lo + 1; );
+  t_note = max(0, min(1, (nt - lo) / (hi - lo)));
+  t_vel = max(0, min(1, vl / 127));
+  t_rand = rand(1);
+  t_oct = (floor(nt + 0.5) % 12) / 11;
+);
+
+// Le glissement d'une source, par bloc : un pole, `ms` pour l'essentiel.
+function ns_glide(cur, tgt, ms) local(k) (
+  ms < 0.5 ? (
+    tgt;
+  ) : (
+    k = 1 - exp(0 - samplesblock / (ms * 0.001 * srate));
+    cur + (tgt - cur) * k;
+  );
+);
+
+@block
+while (midirecv(mo, m1, m2, m3)) (
+  ((m1 & 0xF0) == 0x90) && (m3 > 0) ? ( ns_hit(m2, m3); );
+  midisend(mo, m1, m2, m3);
+);
+// Le clavier de la fenetre : une arete montante, ou une autre touche tenue
+// (un glissando), est une note.
+kg = ns_kgate > 0.5;
+kn = floor(ns_knote + 0.5);
+kg && ((kg_prev < 0.5) || (kn != kn_prev)) ? ( ns_hit(kn, floor(ns_kvel + 0.5)); );
+kg_prev = kg;
+kn_prev = kn;
+ns_note = ns_glide(ns_note, t_note, ns_gnote);
+ns_vel = ns_glide(ns_vel, t_vel, ns_gvel);
+ns_rand = ns_glide(ns_rand, t_rand, ns_grand);
+ns_oct = ns_glide(ns_oct, t_oct, ns_goct);
