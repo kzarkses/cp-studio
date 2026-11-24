@@ -55,21 +55,62 @@ des fichiers de Claude, et les JSFX installés dans REAPER.
 | `cp_sys::fxc` | REAPER : les paramètres d'un effet (normalisé, brut, affiché), les réglages nommés (les liens), les GUID, les données de piste et de projet, les presets |
 | `cp_module/src/fxc*.rs` | l'application : la fenêtre, la piste suivie, la passe des liens, les effets internes, les menus |
 
-## Le plan de la nuit
+## L'état
 
-☐ à faire, ✅ fait.
+✅ fait, ☐ à faire.
 
-1. ☐ Le modèle (`cp_fxc`) : sources, paramètres, pad, plan des liens (pad,
-   source seule, bus, axes menés), adoption, état gardé, ROLL, presets.
-2. ☐ L'accès à REAPER (`cp_sys::fxc`) et les JSFX installés.
-3. ☐ La fenêtre : pad (Manual / Walk / Figures / Granular, zone), ROLL et ses
-   8 axes, macros, liste des paramètres (pools ROLL / DETACHED), barre de
-   commande (presets, snapshots, Lock), barre d'état.
-4. ☐ La modulation : rack Track / Global, tuiles, éditeur de slot (LFO, S&H,
-   STEP), glisser une pastille sur un bouton, anneaux, Alt+glisser,
-   plusieurs sources par le bus, Links, Map.
-5. ☐ Le Sound Gen et le séquenceur : leurs onglets, le clavier.
-6. ☐ L'auto-test dans le vrai REAPER (`cargo xtask reaper-test`).
+**Le modèle** (`cp_fxc`, 21 tests)
+- ✅ Les sources (l'espace d'adresses repris), les cartes des JSFX.
+- ✅ Le plan des liens : pad seul (sortie du bridge selon les pastilles X / Y,
+  ancre en offset), source seule (neutre de la source ou du lien), deux
+  sources ou plus et le pad qui roule avec une source (un bus du Mod Mix, un
+  bus tenu le reste), axe du pad mené par une source (inscrit dans la zone).
+- ✅ L'adoption : le plan d'un modèle, relu comme des liens, refait le même
+  modèle (testé).
+- ✅ ROLL (les huit axes), le granulaire, les figures (le triangle ne saute
+  plus, dans le bridge aussi), les presets et snapshots en texte.
+
+**La vue** (`cp_fxcview`, planches `%TEMP%\cp_fxc_*.png`)
+- ✅ Barre de commande, pad, navigation, ROLL, macros, parametres en pools
+  ROLL / DETACHED, rack Track / Global / Links, Map, éditeur de slot (LFO,
+  S&H, STEP), onglets Sound Gen et Seq, clavier, barre d'état.
+- ✅ Chaque contrôle est là où il est dessiné (testé).
+
+**Dans REAPER** (`cp_module/src/fxc*.rs`)
+- ✅ La piste suivie, Lock, l'état par piste dans le projet, l'adoption.
+- ✅ La passe des liens (seulement ce qui diffère ; nos liens plus voulus
+  relâchés, ceux de l'utilisateur jamais touchés).
+- ✅ Les effets internes posés au premier besoin, retirés quand plus rien ne
+  les demande, les liens recalés par GUID ; un retrait refusé si quelque
+  chose mourrait avec (enveloppe, réglage modulé, lien qu'il mène).
+- ✅ La banque globale : la piste cachée « CP MOD », son envoi MIDI seul.
+- ✅ Le moteur du pad poussé au bridge.
+- ✅ ROLL, presets (état entier des effets : `vst_chunk` / `clap_chunk`),
+  snapshots, Init, A → B, Sound Gen (garé dans la piste quand il
+  s'éteint), séquenceur (patterns par requête), clavier.
+
+**Vérifié dans le vrai REAPER** (`cargo xtask reaper-test`, phase Fxc,
+2026-11-25) : suivre un paramètre pose le bridge et le lien du pad ; le pad
+écrit sa position ; une source tirée pose la banque et allume le slot ; deux
+sources passent par un bus du Mod Mix posé en tête, et le lien du pad suit
+son bridge ; ROLL ; un preset enregistré puis rappelé rend les mêmes
+paramètres ; le Sound Gen posé puis retiré (son réglage gardé) ; le
+séquenceur en tête puis retiré ; l'état relu du projet.
+
+**Pas vérifié dans le vrai REAPER** : les gestes à la souris (l'auto-test
+appelle les actions de la vue), l'image de la fenêtre (les planches PNG
+seulement), le son.
+
+**Reste**
+- ☐ Moduler un réglage : les boutons du Sound Gen, les macros, les
+  réglages d'un slot, ceux du séquenceur (les « destinations internes »).
+- ☐ Les liens sur des liens (moduler une profondeur) et les routes rapides
+  (banque → Sound Gen tous les 32 échantillons) : ils demandent la mémoire
+  partagée des JSFX, qu'une extension n'a pas.
+- ☐ Charger un sample dans le Sound Gen, lire les 16 patterns pour un
+  preset : même raison.
+- ☐ La capture (« Capture » : les gestes en enveloppes) ; les vues des
+  effets maison.
 
 ## Les faits
 
