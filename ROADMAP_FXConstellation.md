@@ -104,11 +104,13 @@ seulement), le son.
 **Reste**
 - ☐ Moduler un réglage : les boutons du Sound Gen, les macros, les
   réglages d'un slot, ceux du séquenceur (les « destinations internes »).
-- ☐ Les liens sur des liens (moduler une profondeur) et les routes rapides
-  (banque → Sound Gen tous les 32 échantillons) : ils demandent la mémoire
-  partagée des JSFX, qu'une extension n'a pas.
-- ☐ Charger un sample dans le Sound Gen, lire les 16 patterns pour un
-  preset : même raison.
+- ☐ Les liens sur des liens (moduler une profondeur) : les voies de
+  profondeur du Mod Mix (des curseurs, faisable).
+- ☐ Les routes rapides (banque → Sound Gen tous les 32 échantillons), charger
+  un sample dans le Sound Gen, lire les 16 patterns pour un preset : ils
+  passent par la mémoire partagée des JSFX (`gmem`), qu'une extension n'a
+  pas. Sans route rapide, une source atteint le Sound Gen par un lien natif
+  (une valeur par bloc).
 - ☐ La capture (« Capture » : les gestes en enveloppes) ; les vues des
   effets maison.
 
