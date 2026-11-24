@@ -17,8 +17,8 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use cp_abi::{
-    ACTION_FX_BUTTON, PLACE_ARRANGE, PLACE_HELD, VIEW_DOCK, VIEW_FLOAT, VIEW_PLACED, WM_CP_ACCEL,
-    WM_CP_FRAME,
+    ACTION_ADD_FX_TO, ACTION_FX_BUTTON, ADD_FX_MAX_TRACK, PLACE_ARRANGE, PLACE_HELD, VIEW_DOCK,
+    VIEW_FLOAT, VIEW_PLACED, WM_CP_ACCEL, WM_CP_FRAME,
 };
 use cp_fxlist::{Catalog, IniTexts, Kind, Rule, Src, Store, Tab, dice};
 use cp_fxview::{Act, Chain, ChainFx, Hit, KeyUse, View};
@@ -72,6 +72,8 @@ pub(crate) struct FPart {
     stolen: Option<bool>,
     /// Les actions de REAPER prises depuis le chargement (l'auto-test).
     taken: u32,
+    /// Les boites « Add FX to » de REAPER remplacees (l'auto-test).
+    adds: u32,
 }
 
 impl FPart {
@@ -102,6 +104,7 @@ impl FPart {
             ticks: 0,
             stolen: None,
             taken: 0,
+            adds: 0,
         }
     }
 }
@@ -954,6 +957,23 @@ impl App {
                 self.queue(WinOp::FxbOpen);
                 Some(true)
             }
+            // La boite « Add FX to ... » de REAPER (le bouton « Add » d'une
+            // chaine, un emplacement libre de la liste d'effets d'une
+            // piste) : la notre, pour la meme piste.
+            c if (ACTION_ADD_FX_TO - ADD_FX_MAX_TRACK..=ACTION_ADD_FX_TO).contains(&c) => {
+                if !self.fxb.st.set.steal {
+                    return Some(false);
+                }
+                let Some(g) = self.r.fx_track_by_number(ACTION_ADD_FX_TO - c) else {
+                    return Some(false);
+                };
+                self.fxb.adds += 1;
+                self.r.fx_select_track(&g);
+                self.fxb.new_track = None;
+                self.fxb_ready_to_type();
+                self.queue(WinOp::FxbOpen);
+                Some(true)
+            }
             _ => None,
         }
     }
@@ -1524,10 +1544,11 @@ impl App {
     /// Pour l'auto-test et le journal : ce que montre le navigateur.
     pub(crate) fn fxb_state_line(&self) -> String {
         format!(
-            "open={} shown={} taken={} src={} rows={} sel={} track={} fx={} steal={:?}",
+            "open={} shown={} taken={} adds={} src={} rows={} sel={} track={} fx={} steal={:?}",
             self.fxb.win.is_some() as u8,
             self.fxb.win.as_ref().is_some_and(|w| ui::is_shown(w.hwnd)) as u8,
             self.fxb.taken,
+            self.fxb.adds,
             self.fxb.view.src.key(),
             self.fxb.view.rows.len(),
             self.fxb.view.selection().len(),

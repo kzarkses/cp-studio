@@ -1834,6 +1834,59 @@ impl SelfTest {
                         && field(&st, "taken") == "2",
                     format!("FX Browser : une seconde fois, le rouvre ({st})"),
                 );
+                // Le bouton « Add » de la chaine de REAPER.
+                if let Some(g) = self.fxb_track.clone() {
+                    r.fx_open(&g, 0, true);
+                }
+                self.keys_step = 3;
+                self.ui_at = Some(Instant::now());
+            }
+            3 => {
+                if t < 0.6 {
+                    return false;
+                }
+                let Some(add) = chain_add_button("CPF test") else {
+                    self.say(
+                        false,
+                        "FX Browser : la fenetre de chaine de REAPER ou son bouton « Add » introuvable".into(),
+                    );
+                    self.keys_step = 5;
+                    return false;
+                };
+                const BM_CLICK: u32 = 0x00F5;
+                cp_sys::win::post_message(add, BM_CLICK, 0, 0);
+                self.keys_step = 4;
+                self.ui_at = Some(Instant::now());
+            }
+            4 => {
+                if t < 1.0 {
+                    return false;
+                }
+                act("state");
+                let st = out();
+                let reaper_box = add_fx_boxes();
+                self.say(
+                    field(&st, "adds") == "1"
+                        && field(&st, "open") == "1"
+                        && field(&st, "track") == "CPF"
+                        && reaper_box.is_empty(),
+                    format!(
+                        "FX Browser : le bouton « Add » de la chaine de REAPER ouvre le notre, pour sa piste ({st} ; boites de REAPER restees : {})",
+                        reaper_box.len()
+                    ),
+                );
+                self.keys_step = 5;
+            }
+            5 => {
+                // Rien de REAPER ne reste ouvert (sa config est celle de
+                // Cedric).
+                const WM_COMMAND: u32 = 0x0111;
+                for b in add_fx_boxes() {
+                    cp_sys::win::post_message(b, WM_COMMAND, 2, 0);
+                }
+                if let Some(g) = self.fxb_track.clone() {
+                    r.fx_hide_chain(&g);
+                }
                 act("clean");
                 // La fenetre de REAPER ne reste jamais ouverte apres le test
                 // (sa config est celle de Cedric).
@@ -2798,4 +2851,36 @@ fn compare(
         ));
     }
     Ok(format!("{wf} frames x {nch} canaux, identiques au bit"))
+}
+
+/// Les fenetres du processus, ancrees comprises.
+fn all_windows() -> Vec<cp_sys::win::Hwnd> {
+    let mut v = Vec::new();
+    for t in cp_sys::ui::process_windows() {
+        v.push(t);
+        v.extend(cp_sys::ui::descendants(t));
+    }
+    v
+}
+
+/// Le bouton « Add » de la fenetre de chaine d'une piste (son nom).
+fn chain_add_button(track: &str) -> Option<cp_sys::win::Hwnd> {
+    let chain = all_windows().into_iter().find(|&h| {
+        let t = cp_sys::ui::window_text(h);
+        t.starts_with("FX: ") && t.contains(track) && cp_sys::ui::is_visible(h)
+    })?;
+    cp_sys::ui::descendants(chain).into_iter().find(|&b| {
+        cp_sys::ui::class_name(b).eq_ignore_ascii_case("Button")
+            && cp_sys::ui::window_text(b).replace('&', "") == "Add"
+    })
+}
+
+/// Les boites « Add FX to ... » de REAPER montrees.
+fn add_fx_boxes() -> Vec<cp_sys::win::Hwnd> {
+    all_windows()
+        .into_iter()
+        .filter(|&h| {
+            cp_sys::ui::window_text(h).starts_with("Add FX to") && cp_sys::ui::is_visible(h)
+        })
+        .collect()
 }

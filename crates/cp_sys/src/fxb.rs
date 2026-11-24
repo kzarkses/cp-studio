@@ -123,6 +123,30 @@ impl Reaper {
         v
     }
 
+    /// La piste de numero `n` (1 = la premiere ; 0 = la maitre).
+    pub fn fx_track_by_number(&self, n: i32) -> Option<String> {
+        if n == 0 {
+            return self.fb_master().map(|_| MASTER.to_string());
+        }
+        type Get = unsafe extern "C" fn(P, i32) -> P;
+        let g: Get = self.fb(c"GetTrack")?;
+        // SAFETY: projet courant ; REAPER rend nul hors des bornes.
+        let tr = unsafe { g(null_mut(), n - 1) };
+        if tr.is_null() {
+            return None;
+        }
+        self.fb_guid(tr)
+    }
+
+    /// Ferme la fenetre de chaine de la piste.
+    pub fn fx_hide_chain(&self, guid: &str) {
+        type Show = unsafe extern "C" fn(P, i32, i32);
+        if let (Some(tr), Some(f)) = (self.fb_track(guid), self.fb::<Show>(c"TrackFX_Show")) {
+            // SAFETY: piste vivante ; 0 = cacher la chaine.
+            unsafe { f(tr, 0, 0) };
+        }
+    }
+
     /// La premiere piste choisie (la maitre si elle seule l'est).
     pub fn fx_selected_track(&self) -> Option<String> {
         type Sel = unsafe extern "C" fn(P, i32) -> P;

@@ -332,6 +332,16 @@ pub const EXT_VERSION: u32 = 2;
 /// Le module rend 1 s'il a pris le clic.
 pub const ACTION_FX_BUTTON: i32 = -0x0046_5842;
 
+/// La boite « Add FX to ... » de REAPER s'ouvre (le bouton « Add » d'une
+/// chaine, un emplacement libre de la liste d'effets d'une piste...) : le
+/// chargeur passe au module `ACTION_ADD_FX_TO - n`, n le numero de la piste
+/// (1 = la premiere, 0 = la maitre). 1 : le module l'a prise, la boite de
+/// REAPER se ferme (EXT 2, avec [`ExtApi::steal_fx_button`]).
+pub const ACTION_ADD_FX_TO: i32 = -0x0041_0000;
+
+/// Le plus grand numero de piste que porte [`ACTION_ADD_FX_TO`].
+pub const ADD_FX_MAX_TRACK: i32 = 100_000;
+
 /// Une note d'un clip MIDI de la Session, en noires depuis son debut.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, PartialEq)]

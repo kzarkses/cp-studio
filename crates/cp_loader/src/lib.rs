@@ -982,6 +982,75 @@ fn stolen_action(cmd: i32) -> bool {
     }
 }
 
+/// Le numero de piste d'une boite « Add FX to Track 3 "Basse" » (0 : la
+/// maitre). Aucun : une autre boite, ou une chaine que le navigateur ne
+/// remplit pas (entree, monitoring, prise).
+fn add_fx_target(title: &str) -> Option<i32> {
+    let rest = title.strip_prefix("Add FX to")?;
+    let rest = rest.trim_start_matches([':', ' ']);
+    let low = rest.to_ascii_lowercase();
+    if ["input", "monitor", "item", "take", "record"]
+        .iter()
+        .any(|w| low.contains(w))
+    {
+        return None;
+    }
+    if low.starts_with("master") {
+        return Some(0);
+    }
+    let digits: String = rest
+        .strip_prefix("Track ")?
+        .chars()
+        .take_while(|c| c.is_ascii_digit())
+        .collect();
+    digits
+        .parse::<i32>()
+        .ok()
+        .filter(|&n| n > 0 && n <= cp_abi::ADD_FX_MAX_TRACK)
+}
+
+/// Les titres de boites « Add FX » deja ecrits au journal.
+static ADD_FX_SEEN: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+/// Une fenetre s'active : si c'est la boite « Add FX to ... » de REAPER et
+/// que le module la prend, elle se ferme (comme « Cancel ») et le
+/// navigateur d'effets s'ouvre pour la meme piste.
+pub(crate) fn add_fx_window(h: Hwnd) {
+    use std::sync::atomic::Ordering::Relaxed;
+    if !STEAL_FX.load(Relaxed) {
+        return;
+    }
+    let title = cp_sys::ui::window_text(h);
+    if !title.starts_with("Add FX") {
+        return;
+    }
+    let target = add_fx_target(&title);
+    {
+        let mut seen = lock(&ADD_FX_SEEN);
+        if seen.len() < 20 && !seen.contains(&title) {
+            seen.push(title.clone());
+            log(
+                LOG_INFO,
+                &format!("boite de REAPER « {title} » : piste {target:?}"),
+            );
+        }
+    }
+    let Some(n) = target else { return };
+    let hot = HOT.get();
+    let sane = hot.is_some_and(|h| h.fault().is_none());
+    let code = cp_abi::ACTION_ADD_FX_TO - n;
+    match hot.and_then(|hh| hh.call(|api| (api.on_action)(code))) {
+        Some(FAULT) => check_fault(sane, "boite Add FX"),
+        Some(1) => {
+            const WM_COMMAND: u32 = 0x0111;
+            const IDCANCEL: usize = 2;
+            cp_sys::ui::show_window(h, false);
+            win::post_message(h, WM_COMMAND, IDCANCEL, 0);
+        }
+        _ => {}
+    }
+}
+
 /// Le crochet souris : le clavier suit le dernier clic (`views`), et le
 /// bouton FX d'une piste passe d'abord par le module. Vrai : le message est
 /// pris.

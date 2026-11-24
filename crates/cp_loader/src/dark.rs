@@ -25,17 +25,18 @@ fn on_activate(h: Hwnd) {
     if is_on() {
         dark::set_title_bar(h, true);
     }
+    // La boite « Add FX to ... » de REAPER : le navigateur d'effets la
+    // remplace (s'il le veut).
+    crate::add_fx_window(h);
 }
 
 /// Allume ou eteint, tout de suite, sur toutes les fenetres de REAPER.
 pub fn set(r: &Reaper, on: bool, persist: bool) {
     ON.store(on, Ordering::Relaxed);
     let menus = dark::set_app_mode(on);
-    if on {
-        dark::install_activate_hook(on_activate);
-    } else {
-        dark::remove_activate_hook();
-    }
+    // Le crochet reste pose meme eteint : il sert aussi au navigateur
+    // d'effets (la boite « Add FX to ... »).
+    dark::install_activate_hook(on_activate);
     for h in dark::thread_windows() {
         dark::set_title_bar(h, on);
     }
@@ -54,6 +55,7 @@ pub fn set(r: &Reaper, on: bool, persist: bool) {
 
 /// Au demarrage : le reglage garde.
 pub fn restore(r: &Reaper) {
+    dark::install_activate_hook(on_activate);
     if r.ext_get("CP_Studio", "dark").as_deref() == Some("1") {
         set(r, true, false);
     }
