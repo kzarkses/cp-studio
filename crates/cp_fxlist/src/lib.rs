@@ -286,11 +286,16 @@ impl Catalog {
                 name_of_file
                     .entry(l.file.clone())
                     .or_insert_with(|| l.name.to_lowercase());
-                // Le meme nom en VST2 et en VST3 : deux fichiers.
+                // Le meme nom en VST2 et en VST3 : deux fichiers. Le nom sans
+                // son developpeur aussi (REAPER ajoute parfois le
+                // developpeur de reaper-fxtags.ini au nom qu'il montre).
                 let v = if l.file.ends_with(".vst3") { '3' } else { '2' };
-                vst_by_name
-                    .entry(format!("{v}|{}", l.name.to_lowercase()))
-                    .or_insert((l.file, l.instrument));
+                let (label, _) = split_dev(&l.name);
+                for key in [l.name.to_lowercase(), label.to_lowercase()] {
+                    vst_by_name
+                        .entry(format!("{v}|{key}"))
+                        .or_insert((l.file.clone(), l.instrument));
+                }
             }
         }
         let mut clap_by_name: HashMap<String, (String, bool)> = HashMap::new();
@@ -345,14 +350,18 @@ impl Catalog {
                         .iter()
                         .any(|e| low.split('<').next().unwrap_or("").ends_with(e));
                     let low_rest = rest.to_lowercase();
+                    let low_label = label.to_lowercase();
+                    let (first, second) = if kind == Kind::Vst3 {
+                        ('3', '2')
+                    } else {
+                        ('2', '3')
+                    };
                     let hit = match kind {
                         Kind::Clap => clap_by_name.get(&low_rest),
-                        Kind::Vst3 => vst_by_name
-                            .get(&format!("3|{low_rest}"))
-                            .or_else(|| vst_by_name.get(&format!("2|{low_rest}"))),
-                        _ => vst_by_name
-                            .get(&format!("2|{low_rest}"))
-                            .or_else(|| vst_by_name.get(&format!("3|{low_rest}"))),
+                        _ => [&low_rest, &low_label]
+                            .iter()
+                            .flat_map(|k| [format!("{first}|{k}"), format!("{second}|{k}")])
+                            .find_map(|k| vst_by_name.get(&k)),
                     };
                     if let Some((_, i)) = hit {
                         instrument |= *i;
