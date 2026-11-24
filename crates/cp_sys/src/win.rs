@@ -166,6 +166,65 @@ impl WinMsg {
     }
 }
 
+/// `WM_WINDOWPOSCHANGING` : la place qu'une fenetre va prendre, qu'on peut
+/// changer avant que Windows ne l'applique.
+pub const WM_WINDOWPOSCHANGING: u32 = 0x0046;
+
+#[repr(C)]
+struct WindowPos {
+    hwnd: Raw,
+    after: Raw,
+    x: i32,
+    y: i32,
+    cx: i32,
+    cy: i32,
+    flags: u32,
+}
+
+const SWP_NOSIZE: u32 = 0x0001;
+const SWP_NOMOVE: u32 = 0x0002;
+
+/// Le WINDOWPOS d'un `WM_WINDOWPOSCHANGING` qui deplace ET redimensionne.
+fn window_pos(m: &WinMsg) -> Option<*mut WindowPos> {
+    if m.msg != WM_WINDOWPOSCHANGING || m.lp == 0 {
+        return None;
+    }
+    let p = m.lp as *mut WindowPos;
+    // SAFETY: le lParam d'un WM_WINDOWPOSCHANGING venu de Windows est un
+    // WINDOWPOS* valide pendant tout le traitement du message.
+    let flags = unsafe { (*p).flags };
+    (flags & (SWP_NOSIZE | SWP_NOMOVE) == 0).then_some(p)
+}
+
+/// La place proposee par un `WM_WINDOWPOSCHANGING` qui deplace ET
+/// redimensionne (coordonnees du parent). `None` pour tout autre message,
+/// ou pour un changement d'ordre ou de taille seule.
+pub fn pos_changing(m: &WinMsg) -> Option<Rect> {
+    let p = window_pos(m)?;
+    // SAFETY: voir `window_pos`.
+    let w = unsafe { &*p };
+    Some(Rect {
+        left: w.x,
+        top: w.y,
+        right: w.x + w.cx,
+        bottom: w.y + w.cy,
+    })
+}
+
+/// Remplace la place proposee (le meme message que [`pos_changing`]).
+pub fn set_pos_changing(m: &WinMsg, r: Rect) -> bool {
+    let Some(p) = window_pos(m) else {
+        return false;
+    };
+    // SAFETY: voir `window_pos` ; Windows relit la structure apres nous.
+    let w = unsafe { &mut *p };
+    w.x = r.left;
+    w.y = r.top;
+    w.cx = (r.right - r.left).max(0);
+    w.cy = (r.bottom - r.top).max(0);
+    true
+}
+
 /// Une chaine terminee par un zero, en UTF-16.
 pub fn wide(s: &str) -> Vec<u16> {
     s.encode_utf16().chain(std::iter::once(0)).collect()

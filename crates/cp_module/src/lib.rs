@@ -39,6 +39,7 @@ mod clocksync;
 mod editor;
 mod frame;
 mod fxb;
+mod grip;
 mod gtab;
 mod items;
 mod native;
@@ -438,6 +439,10 @@ pub(crate) struct App {
     ticks: u32,
     /// Un glisser de poignee passe a REAPER : sa poignee native, et quand.
     grab: Option<(Hwnd, std::time::Instant)>,
+    /// La petite poignee de REAPER masquee (grip.rs) : le battement de la
+    /// derniere remise en page, et les lignes de journal deja ecrites.
+    grip_relayout: u32,
+    grip_logs: u32,
     /// Les raccourcis de la fenetre principale de REAPER (les editions au
     /// survol), lus une fois.
     main_keys: Option<cp_editview::keys::KeyMap>,
@@ -1270,13 +1275,14 @@ pub(crate) fn dock_grip(view: Hwnd) -> Option<Hwnd> {
     // Mince dans un sens : en bas dans un docker de cote (444 x 6), a
     // GAUCHE dans le docker du bas (6 x toute la hauteur : l'Editor, journal
     // du 2026-11-24, « marges gauche 6 »). La bande d'onglets pleine, elle,
-    // fait 15 px et plus.
+    // fait 15 px et plus. Cachee, c'est nous (grip.rs) : la vue la couvre.
+    let vr = ui::window_rect(view);
     ui::children(b).into_iter().find(|&c| {
         let r = ui::window_rect(c);
         c != view
             && ui::class_name(c) == "WDLTabCtrl"
-            && ui::is_visible(c)
-            && (1..=10).contains(&(r.bottom - r.top).min(r.right - r.left))
+            && grip::thin(&r)
+            && (ui::is_visible(c) || grip::covers(&vr, &r))
     })
 }
 
@@ -1383,6 +1389,9 @@ impl App {
         };
         let r = ui::window_rect(grip);
         let (gx, gy) = ((r.right - r.left) / 2, (r.bottom - r.top) / 2);
+        // Cachee sous la vue (grip.rs) : REAPER la reprend le temps du
+        // glisser ; le battement la recache dans le docker d'arrivee.
+        ui::show_window(grip, true);
         ui::release_capture();
         win::post_message(grip, WM_LBUTTONDOWN, MK_LBUTTON, lparam(gx, gy));
         let (cx, cy) = ui::cursor_pos();
@@ -1741,6 +1750,8 @@ impl Module for App {
             ops: Vec::new(),
             ticks: 0,
             grab: None,
+            grip_relayout: 0,
+            grip_logs: 0,
             show_perf: false,
             main_keys: None,
             last_mods: Mods::default(),
@@ -1896,6 +1907,10 @@ impl Module for App {
         self.reaper_look();
         self.pointer_tick();
         self.grab_tick();
+        // Apres la pose des onglets des dockers (battement 15).
+        if self.ticks > 15 {
+            self.grip_tick();
+        }
         if self.ticks % 10 == 5 {
             self.handle_tick();
         }
@@ -2054,6 +2069,9 @@ impl Module for App {
     }
 
     fn wnd_proc(&mut self, m: &WinMsg) -> Option<isize> {
+        // REAPER place une vue ancree : elle couvre aussi sa petite poignee
+        // (la place est changee sur place ; le message suit son cours).
+        self.grip_cover(m);
         if let Some(r) = self.transport_wnd(m) {
             return Some(r);
         }
