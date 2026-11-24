@@ -84,12 +84,11 @@ impl Browser {
         self.draw_dock_tab(cv, g);
     }
 
-    /// L'onglet de la vue ancree, par-dessus le pied de la ligne d'etat.
+    /// Les onglets de la vue ancree, par-dessus le pied de la ligne d'etat.
     fn draw_dock_tab(&self, cv: &mut Canvas<'_>, g: &mut Gfx<'_>) {
-        if self.dock_handle {
-            let hot = self.tab_hover || matches!(self.grab, crate::Grab::Handle { .. });
-            cp_ui::handle::draw_tab(cv, g.text, g.th, self.tab_rect(), "Browser", hot);
-        }
+        let l = self.lay;
+        let grabbed = matches!(self.grab, crate::Grab::Handle { .. });
+        self.dock.draw(cv, g.text, g.th, l.w, l.h, grabbed);
     }
 
     /// Le bas seulement : la forme d'onde et la ligne d'etat (la tete de
@@ -810,15 +809,7 @@ impl Browser {
         };
         // L'onglet de la vue ancree tient un bout de la ligne : le texte
         // s'ecarte de lui.
-        let (rl, rr) = if self.dock_handle {
-            let k = cp_ui::handle::reserve(self.tab_rect(), self.scale);
-            match self.dock_corner {
-                cp_ui::handle::Corner::BottomLeft => (k, 0.0),
-                cp_ui::handle::Corner::BottomRight => (0.0, k),
-            }
-        } else {
-            (0.0, 0.0)
-        };
+        let (rl, rr) = self.dock.reserve(l.w, l.h, self.scale);
         let right = format!("{:+.1} dB", self.gain_db().max(-99.0));
         let rw = g.text.measure(f, &right) + pad + rr;
         g.text.draw_in(

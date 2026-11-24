@@ -679,6 +679,8 @@ pub enum Act {
     },
     /// La poignee de la vue est tiree : passer le glisser a REAPER.
     DockGrab,
+    /// Un autre onglet du docker est clique : montrer sa vue.
+    DockSwitch(usize),
     /// Ce qu'on entend a change ([`Arr::listen`], [`Arr::split`]).
     Listen,
     AddTrack,
@@ -994,10 +996,8 @@ pub struct Arr {
     pub focus_lane: Lane,
     /// Le bas des pistes a l'ecran (les traits s'y arretent).
     pub(crate) tracks_bottom: f32,
-    /// L'onglet de la vue ancree, montre (le module en decide), et son
-    /// coin (loin du bord qui redimensionne le docker).
-    pub dock_handle: bool,
-    pub dock_corner: cp_ui::handle::Corner,
+    /// Les onglets du docker de la vue ancree (le module les pose).
+    pub dock: cp_ui::handle::DockTabs,
 }
 
 /// Le magnetisme de REAPER : sa division, s'il est allume, et l'ecart
@@ -1283,8 +1283,7 @@ impl Arr {
             guide_q: None,
             damage: Vec::new(),
             tracks_bottom: 0.0,
-            dock_handle: false,
-            dock_corner: cp_ui::handle::Corner::BottomLeft,
+            dock: cp_ui::handle::DockTabs::new("Guitar Tab"),
             mouse: (0.0, 0.0, Mods::default()),
             focus_lane: Lane::Audio,
         }
@@ -1572,10 +1571,10 @@ impl Arr {
         }
     }
 
-    /// L'onglet de la vue ancree, au pied de la vue.
+    /// Les onglets de la vue ancree, au pied de la vue : la rangee.
     pub fn tab_rect(&self) -> (f32, f32, f32, f32) {
         let l = self.lay;
-        cp_ui::handle::tab_rect("Guitar Tab", self.dock_corner, l.w, l.h, self.scale)
+        self.dock.bounds(l.w, l.h, self.scale)
     }
 
     pub fn hit(&self, x: f32, y: f32) -> Hit {
@@ -2388,11 +2387,18 @@ impl Arr {
                 }
                 let h = self.hit(x, y);
                 self.set_hover(h);
+                let l = self.lay;
+                if self.dock.track(l.w, l.h, self.scale, x, y) {
+                    self.mark();
+                }
                 self.guide_at(x, y);
                 None
             }
             Ev::Leave => {
                 self.set_hover(Hit::None);
+                if self.dock.hot.take().is_some() {
+                    self.mark();
+                }
                 self.guide_q = None;
                 None
             }
@@ -2678,6 +2684,12 @@ impl Arr {
         let h = self.hit(x, y);
         self.dirty = true;
         if b == Button::Left && h == Hit::DockHandle {
+            let l = self.lay;
+            if let Some(cp_ui::handle::Press::Switch(i)) =
+                self.dock.press(l.w, l.h, self.scale, x, y)
+            {
+                return Some(Act::DockSwitch(i));
+            }
             self.drag = Some(Drag::Handle { x0: x, y0: y });
             return None;
         }

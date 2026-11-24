@@ -2273,8 +2273,9 @@ impl SelfTest {
                 self.keys_step = 6;
                 self.ui_at = Some(Instant::now());
             }
-            // Notre poignee : montree (seul dans son docker, REAPER cache ses
-            // onglets) ; appuyee puis tiree, le glisser passe a REAPER.
+            // Nos onglets : montres (seul dans son docker, REAPER cache ses
+            // onglets) ; l'onglet appuye puis tire, le glisser est a nous
+            // (docking.rs : zones de depot, puis l'API de REAPER).
             6 if t > 0.8 => {
                 let st = r
                     .ext_get("CP_Studio", "selftest_handle")
@@ -2303,6 +2304,7 @@ impl SelfTest {
                     }),
                     "la petite poignee de REAPER cachee sous la vue".to_string(),
                 );
+                r.ext_set("CP_Studio", "selftest_drag", "", false);
                 // L'onglet : en bas a gauche de la vue (en bas a droite dans
                 // un docker de droite), 20 px de haut a 96 DPI.
                 let s = cp_sys::ui::dpi(h) as f32 / 96.0;
@@ -2322,10 +2324,11 @@ impl SelfTest {
             7 if t > 0.4 => {
                 let cap = ui::capture_window();
                 let (d0, _, _) = self.grip.unwrap_or((0, 0, 0));
+                let st = r.ext_get("CP_Studio", "selftest_drag").unwrap_or_default();
                 self.say(
-                    ui::class_name(cap) == "WDLTabCtrl",
+                    cap == h && st.starts_with("zones="),
                     format!(
-                        "la poignee tiree passe le glisser a REAPER (souris tenue par {})",
+                        "l'onglet tire : le glisser est a nous (souris tenue par {}, {st})",
                         if cap.0 == 0 {
                             "personne".to_string()
                         } else {
@@ -2333,20 +2336,44 @@ impl SelfTest {
                         }
                     ),
                 );
-                // Le lacher sur sa propre poignee : la vue reste ou elle est.
-                if cap.0 != 0 {
-                    let cr = ui::window_rect(cap);
-                    let (cx, cy) = ((cr.right - cr.left) / 2, (cr.bottom - cr.top) / 2);
-                    cp_sys::win::post_message(cap, WM_MOUSEMOVE, MK_LBUTTON, lp(cx, cy));
-                    cp_sys::win::post_message(cap, WM_LBUTTONUP, 0, lp(cx, cy));
-                }
-                self.grip_api = Some((d0, d0));
+                // Le lacher sur la zone d'un autre bord : en bas, ou a
+                // droite si la vue est deja en bas.
+                let p0 = r.dock_position(d0);
+                let want = if p0 == 0 { 3 } else { 0 };
+                let main = r.main_hwnd();
+                let mc = ui::client_rect(main);
+                let (w, hh) = (mc.right - mc.left, mc.bottom - mc.top);
+                let s = cp_sys::ui::dpi(main) as f32 / 96.0;
+                let m = (24.0 * s) as i32;
+                let (zx, zy) = if want == 0 {
+                    (w / 2, hh - m)
+                } else {
+                    (w - m, hh / 2)
+                };
+                let (sx, sy) = ui::client_to_screen(main, zx, zy);
+                let (vx, vy) = ui::screen_to_client(h, sx, sy);
+                cp_sys::win::post_message(h, WM_MOUSEMOVE, MK_LBUTTON, lp(vx, vy));
+                cp_sys::win::post_message(h, WM_LBUTTONUP, 0, lp(vx, vy));
+                self.grip_api = Some((d0, want));
                 self.keys_step = 8;
                 self.ui_at = Some(Instant::now());
             }
-            8 if t > 0.6 => {
+            8 if t > 0.8 => {
                 let (d0, _, _) = self.grip.unwrap_or((0, 0, 0));
-                let mut now = r.dock_of(h);
+                let want = self.grip_api.map_or(0, |g| g.1);
+                let moved = r.dock_of(h);
+                self.say(
+                    moved.is_some_and(|d| d != d0 && r.dock_position(d) == want)
+                        && ui::capture_window().0 == 0,
+                    format!(
+                        "lache sur une zone : la vue change de docker ({d0} -> {}, place {want} attendue), souris rendue",
+                        moved.map_or("flottante".to_string(), |d| format!(
+                            "{d}, place {}",
+                            r.dock_position(d)
+                        ))
+                    ),
+                );
+                let mut now = moved;
                 if now != Some(d0) {
                     // Rendre a Cedric son docker, quoi qu'il arrive.
                     r.dock_set_target("cp_studio_browser", d0);
@@ -2356,9 +2383,9 @@ impl SelfTest {
                     now = r.dock_of(h);
                 }
                 self.say(
-                    now == Some(d0) && ui::capture_window().0 == 0,
+                    now == Some(d0),
                     format!(
-                        "lache sur place : docker {} (depart {d0}), souris rendue",
+                        "et revient a son docker de depart : {}",
                         now.map_or("flottante".to_string(), |d| d.to_string())
                     ),
                 );

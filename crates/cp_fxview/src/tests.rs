@@ -727,7 +727,7 @@ fn espace_va_a_reaper_hors_de_la_recherche() {
 #[test]
 fn l_onglet_de_la_vue_ancree() {
     let (mut b, mut v, cat, mut st, ch) = setup(760, 520);
-    v.dock_handle = true;
+    v.dock.shown = true;
     b.draw(&mut v, &cat, &st, &ch);
     let r = v.tab_rect();
     assert!(r.0 < 10.0 && r.1 + r.3 == 520.0);

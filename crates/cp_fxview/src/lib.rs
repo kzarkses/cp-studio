@@ -140,6 +140,8 @@ pub enum Act {
     /// garder.
     Changed,
     DockGrab,
+    /// Un autre onglet du docker est clique : montrer sa vue.
+    DockSwitch(usize),
     ViewMenu {
         x: f32,
         y: f32,
@@ -288,10 +290,8 @@ pub struct View {
     pub scale: f32,
     pub ctrl: bool,
     dirty: bool,
-    /// L'onglet de la vue ancree, montre (le module en decide), et son
-    /// coin (loin du bord qui redimensionne le docker).
-    pub dock_handle: bool,
-    pub dock_corner: cp_ui::handle::Corner,
+    /// Les onglets du docker de la vue ancree (le module les pose).
+    pub dock: cp_ui::handle::DockTabs,
     /// Les pastilles a l'ecran : (x, largeur) dans la rangee, sans le
     /// defilement ; puis le « + ».
     chip_x: Vec<(f32, f32)>,
@@ -332,8 +332,7 @@ impl View {
             scale: 1.0,
             ctrl: false,
             dirty: true,
-            dock_handle: false,
-            dock_corner: cp_ui::handle::Corner::BottomLeft,
+            dock: cp_ui::handle::DockTabs::new("FX Browser"),
             chip_x: Vec::new(),
             chip_add: (0.0, 0.0),
             nfx: 0,
@@ -359,13 +358,14 @@ impl View {
     }
 
     pub fn on_tab(&self, x: f32, y: f32) -> bool {
-        self.dock_handle && cp_ui::handle::over(self.tab_rect(), x, y)
+        let (w, h) = self.size;
+        self.dock.at(w, h, self.scale, x, y).is_some()
     }
 
-    /// L'onglet de la vue ancree, au pied de la vue.
+    /// Les onglets de la vue ancree, au pied de la vue : la rangee.
     pub fn tab_rect(&self) -> (f32, f32, f32, f32) {
         let (w, h) = self.size;
-        cp_ui::handle::tab_rect("FX Browser", self.dock_corner, w, h, self.scale)
+        self.dock.bounds(w, h, self.scale)
     }
 
     pub(crate) fn grabbing_handle(&self) -> bool {
@@ -776,11 +776,16 @@ impl View {
                     self.hover = hit;
                     self.mark();
                 }
+                let (w, h) = self.size;
+                if self.dock.track(w, h, self.scale, x, y) {
+                    self.mark();
+                }
                 self.drag_move(&l, x, y)
             }
             Ev::Leave => {
-                if self.hover != Hit::None {
+                if self.hover != Hit::None || self.dock.hot.is_some() {
                     self.hover = Hit::None;
+                    self.dock.hot = None;
                     self.mark();
                 }
                 None
@@ -863,6 +868,12 @@ impl View {
         }
         match hit {
             Hit::DockHandle => {
+                let (w, h) = self.size;
+                if let Some(cp_ui::handle::Press::Switch(i)) =
+                    self.dock.press(w, h, self.scale, x, y)
+                {
+                    return Some(Act::DockSwitch(i));
+                }
                 self.drag = Some(Drag::Handle { x0: x, y0: y });
                 None
             }

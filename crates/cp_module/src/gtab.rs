@@ -2624,6 +2624,11 @@ impl App {
                     self.dock_grab(h);
                 }
             }
+            GAct::DockSwitch(i) => {
+                if let Some(h) = self.gt.win.as_ref().map(|w| w.hwnd) {
+                    self.dock_switch(h, i);
+                }
+            }
             GAct::MoveItem { t, i, qn0, to } => {
                 // La prise et son MIDI bougent ensemble, en un pas
                 // d'annulation ; vers une autre guitare, le MIDI suit sur sa

@@ -36,6 +36,7 @@ use cp_sys::win::{self, Hwnd, WinMsg};
 use cp_ui::{Button, Ev, IconCache, Mods, Theme};
 
 mod clocksync;
+mod docking;
 mod editor;
 mod frame;
 mod fxb;
@@ -58,6 +59,8 @@ const WIN_PLACE_DOCK: u32 = 1005;
 const WIN_PLACE_FLOAT: u32 = 1006;
 /// La poignee de la vue tiree (passee a REAPER), et son reglage.
 const WIN_DOCK_GRAB: u32 = 1007;
+/// Un autre onglet du docker clique : 1100 + son rang.
+const WIN_DOCK_SWITCH: u32 = 1100;
 const WIN_HANDLE: u32 = 1010;
 
 pub(crate) mod msg {
@@ -284,6 +287,9 @@ impl BrowserHost for Adapter<'_> {
     fn dock_grab(&mut self) {
         *self.action = Some(WIN_DOCK_GRAB);
     }
+    fn dock_switch(&mut self, i: usize) {
+        *self.action = Some(WIN_DOCK_SWITCH + i.min(99) as u32);
+    }
     fn project_bpm(&mut self) -> f64 {
         self.r.master_tempo()
     }
@@ -437,8 +443,8 @@ pub(crate) struct App {
     /// Battements depuis le chargement : au demarrage de REAPER, on attend
     /// qu'il ait fini de se construire avant d'ouvrir (et d'ancrer).
     ticks: u32,
-    /// Un glisser de poignee passe a REAPER : sa poignee native, et quand.
-    grab: Option<(Hwnd, std::time::Instant)>,
+    /// Un onglet tire (docking.rs) : les zones de depot sont a l'ecran.
+    ddrag: Option<docking::DockDrag>,
     /// La petite poignee de REAPER masquee (grip.rs) : le battement de la
     /// derniere remise en page, et les lignes de journal deja ecrites.
     grip_relayout: u32,
@@ -778,6 +784,11 @@ impl App {
             Some(WIN_DOCK_GRAB) => {
                 if let Some(h) = self.view.as_ref().map(|v| v.hwnd) {
                     self.dock_grab(h);
+                }
+            }
+            Some(k @ WIN_DOCK_SWITCH..=1199) => {
+                if let Some(h) = self.view.as_ref().map(|v| v.hwnd) {
+                    self.dock_switch(h, (k - WIN_DOCK_SWITCH) as usize);
                 }
             }
             Some(k @ WIN_HANDLE..=1012) => self.set_handle_mode((k - WIN_HANDLE) as u8),
@@ -1264,32 +1275,6 @@ fn decode(st: &[u8]) -> Option<Saved> {
     Some(out)
 }
 
-/// La poignee de REAPER dans le docker d'une vue : son WDLTabCtrl reduit a
-/// quelques pixels (une seule fenetre dans le docker : REAPER cache ses
-/// onglets). Mesure du 2026-11-23 (auto-test, phase DockGrip).
-pub(crate) fn dock_grip(view: Hwnd) -> Option<Hwnd> {
-    let b = ui::parent(view);
-    if b.0 == 0 {
-        return None;
-    }
-    // Mince dans un sens : en bas dans un docker de cote (444 x 6), a
-    // GAUCHE dans le docker du bas (6 x toute la hauteur : l'Editor, journal
-    // du 2026-11-24, « marges gauche 6 »). La bande d'onglets pleine, elle,
-    // fait 15 px et plus. Cachee, c'est nous (grip.rs) : la vue la couvre.
-    let vr = ui::window_rect(view);
-    ui::children(b).into_iter().find(|&c| {
-        let r = ui::window_rect(c);
-        c != view
-            && ui::class_name(c) == "WDLTabCtrl"
-            && grip::thin(&r)
-            && (ui::is_visible(c) || grip::covers(&vr, &r))
-    })
-}
-
-fn lparam(x: i32, y: i32) -> isize {
-    ((y as u16 as isize) << 16) | (x as u16 as isize)
-}
-
 impl App {
     /// Le reglage de la poignee des vues : 0 auto (quand REAPER cache ses
     /// onglets), 1 toujours (ancree), 2 jamais.
@@ -1307,127 +1292,27 @@ impl App {
         self.handle_tick();
     }
 
-    /// La poignee d'une vue doit-elle se montrer ?
-    fn handle_wanted(&self, view: Hwnd, mode: u8) -> bool {
-        if mode == 2 || self.r.dock_of(view).is_none() {
-            return false;
-        }
-        mode == 1 || dock_grip(view).is_some()
-    }
-
-    /// Les poignees des vues suivent leur docker (une vue de plus dans le
-    /// docker : REAPER montre ses onglets, la poignee s'efface).
+    /// Les onglets des vues suivent leur docker (docking.rs).
     pub(crate) fn handle_tick(&mut self) {
-        let mode = self.handle_mode();
         if crate::gtab::selftest() {
+            let grip = self
+                .view
+                .as_ref()
+                .and_then(|v| self.dock_strip(v.hwnd))
+                .is_some();
             self.r.ext_set(
                 SECTION,
                 "selftest_handle",
                 &format!(
-                    "browser={} grip={}",
-                    self.browser.dock_handle as u8,
-                    self.view.as_ref().and_then(|v| dock_grip(v.hwnd)).is_some() as u8
+                    "browser={} grip={} tabs={}",
+                    self.browser.dock.shown as u8,
+                    grip as u8,
+                    self.browser.dock.names.join("|")
                 ),
                 false,
             );
         }
-        if let Some(h) = self.view.as_ref().map(|v| v.hwnd) {
-            let want = (self.handle_wanted(h, mode), self.tab_corner(h));
-            if want != (self.browser.dock_handle, self.browser.dock_corner) {
-                (self.browser.dock_handle, self.browser.dock_corner) = want;
-                let (w, hh, s) = (self.browser.lay.w, self.browser.lay.h, self.browser.scale);
-                self.browser.layout(w, hh, s);
-                self.browser.mark();
-                self.want_frames();
-            }
-        }
-        if let Some(h) = self.ed.win.as_ref().map(|w| w.hwnd) {
-            let want = (self.handle_wanted(h, mode), self.tab_corner(h));
-            if want != (self.ed.ed.dock_handle, self.ed.ed.dock_corner) {
-                (self.ed.ed.dock_handle, self.ed.ed.dock_corner) = want;
-                self.ed.ed.mark();
-                self.ed_render(true);
-            }
-        }
-        if let Some(h) = self.gt.win.as_ref().map(|w| w.hwnd) {
-            let want = (self.handle_wanted(h, mode), self.tab_corner(h));
-            if want != (self.gt.arr.dock_handle, self.gt.arr.dock_corner) {
-                (self.gt.arr.dock_handle, self.gt.arr.dock_corner) = want;
-                self.gt.arr.mark();
-                self.gtab_render(true);
-            }
-        }
-        if let Some(h) = self.ses.win.as_ref().map(|w| w.hwnd) {
-            let want = (self.handle_wanted(h, mode), self.tab_corner(h));
-            if want != (self.ses.view.dock_handle, self.ses.view.dock_corner) {
-                (self.ses.view.dock_handle, self.ses.view.dock_corner) = want;
-                self.ses.view.mark();
-                self.ses_render(true);
-            }
-        }
-        if let Some(h) = self.fxb.win.as_ref().map(|w| w.hwnd) {
-            let want = (self.handle_wanted(h, mode), self.tab_corner(h));
-            if want != (self.fxb.view.dock_handle, self.fxb.view.dock_corner) {
-                (self.fxb.view.dock_handle, self.fxb.view.dock_corner) = want;
-                self.fxb.view.mark();
-                self.fxb_render(true);
-            }
-        }
-    }
-
-    /// Le coin de l'onglet d'une vue : loin du bord qui redimensionne son
-    /// docker (en bas a droite dans un docker de droite).
-    fn tab_corner(&self, view: Hwnd) -> cp_ui::handle::Corner {
-        match self.r.dock_of(view).map(|d| self.r.dock_position(d)) {
-            Some(3) => cp_ui::handle::Corner::BottomRight,
-            _ => cp_ui::handle::Corner::BottomLeft,
-        }
-    }
-
-    /// La poignee d'une vue est tiree : le glisser passe a REAPER. Un
-    /// appui poste a sa poignee native (son WDLTabCtrl) : REAPER prend la
-    /// souris et deplace la vue comme si on avait saisi sa poignee.
-    pub(crate) fn dock_grab(&mut self, view: Hwnd) {
-        const WM_MOUSEMOVE: u32 = 0x0200;
-        const WM_LBUTTONDOWN: u32 = 0x0201;
-        const MK_LBUTTON: usize = 1;
-        let Some(grip) = dock_grip(view) else {
-            self.host
-                .info("poignee : pas de poignee native dans ce docker (ses onglets sont montres)");
-            return;
-        };
-        let r = ui::window_rect(grip);
-        let (gx, gy) = ((r.right - r.left) / 2, (r.bottom - r.top) / 2);
-        // Cachee sous la vue (grip.rs) : REAPER la reprend le temps du
-        // glisser ; le battement la recache dans le docker d'arrivee.
-        ui::show_window(grip, true);
-        ui::release_capture();
-        win::post_message(grip, WM_LBUTTONDOWN, MK_LBUTTON, lparam(gx, gy));
-        let (cx, cy) = ui::cursor_pos();
-        let (mx, my) = ui::screen_to_client(grip, cx, cy);
-        win::post_message(grip, WM_MOUSEMOVE, MK_LBUTTON, lparam(mx, my));
-        self.grab = Some((grip, std::time::Instant::now()));
-        self.host.info("poignee : glisser passe a REAPER");
-    }
-
-    /// Le glisser passe a REAPER : si le bouton est deja lache (un geste
-    /// tres court), REAPER attend encore son lacher ; on le lui donne, la
-    /// ou est la souris.
-    fn grab_tick(&mut self) {
-        const WM_LBUTTONUP: u32 = 0x0202;
-        let Some((grip, t0)) = self.grab else { return };
-        // L'auto-test n'a pas de vraie souris : il lache lui-meme.
-        let wait = if crate::gtab::selftest() { 10 } else { 30 };
-        if (ui::mouse_held() || crate::gtab::selftest()) && t0.elapsed().as_secs() < wait {
-            return;
-        }
-        if ui::capture_window() == grip {
-            let (cx, cy) = ui::cursor_pos();
-            let (mx, my) = ui::screen_to_client(grip, cx, cy);
-            win::post_message(grip, WM_LBUTTONUP, 0, lparam(mx, my));
-        }
-        self.grab = None;
-        self.handle_tick();
+        self.dock_tabs_tick();
     }
 }
 
@@ -1758,7 +1643,7 @@ impl Module for App {
             action: None,
             ops: Vec::new(),
             ticks: 0,
-            grab: None,
+            ddrag: None,
             grip_relayout: 0,
             grip_logs: 0,
             show_perf: false,
@@ -1915,7 +1800,7 @@ impl Module for App {
         }
         self.reaper_look();
         self.pointer_tick();
-        self.grab_tick();
+        self.dock_drag_tick();
         // Apres la pose des onglets des dockers (battement 15).
         if self.ticks > 15 {
             self.grip_tick();
@@ -2081,6 +1966,11 @@ impl Module for App {
         // REAPER place une vue ancree : elle couvre aussi sa petite poignee
         // (la place est changee sur place ; le message suit son cours).
         self.grip_cover(m);
+        // Un onglet tire : la souris est a sa vue, ses messages vont au
+        // glisser.
+        if let Some(r) = self.dock_drag_wnd(m) {
+            return Some(r);
+        }
         if let Some(r) = self.transport_wnd(m) {
             return Some(r);
         }

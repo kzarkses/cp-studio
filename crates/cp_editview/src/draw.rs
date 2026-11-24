@@ -167,13 +167,13 @@ impl Ed {
         // La tete de lecture et les curseurs sont des traits, poses par-dessus
         // la scene (`strokes`).
         self.draw_scrollbars(cv, th);
-        // L'onglet de la vue ancree : au pied du clavier, par-dessus la
-        // scene, et pousse apres elle (il l'emporte sur ce qu'il couvre).
-        if self.dock_handle {
-            let hot = self.hover == Hit::DockHandle
-                || matches!(self.drag, Some(crate::Drag::Handle { .. }));
+        // Les onglets de la vue ancree : au pied du clavier, par-dessus la
+        // scene, et pousses apres elle (ils l'emportent sur ce qu'ils
+        // couvrent).
+        if self.dock.shown {
+            let grabbed = matches!(self.drag, Some(crate::Drag::Handle { .. }));
+            self.dock.draw(cv, text, th, w, h, grabbed);
             let r = self.tab_rect();
-            cp_ui::handle::draw_tab(cv, text, th, r, "Editor", hot);
             bx.push((r.0, r.1, r.2, r.3, Hit::DockHandle));
         }
         // La palette du clic droit, par-dessus tout (ses cibles d'abord).

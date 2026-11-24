@@ -1241,7 +1241,7 @@ fn l_onglet_de_la_vue_ancree() {
     let mut v = riff();
     b.draw(&mut v);
     let snap = v.rect_of(Hit::Snap).unwrap();
-    v.dock_handle = true;
+    v.dock.shown = true;
     b.draw(&mut v);
     let r = v.rect_of(Hit::DockHandle).expect("l'onglet");
     assert!(r.0 < 10.0 && r.1 + r.3 == 760.0 && r.3 >= 18.0 && r.2 < 100.0);

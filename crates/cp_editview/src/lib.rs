@@ -293,6 +293,8 @@ pub enum Act {
     StepListen(bool),
     /// La poignee de la vue est tiree : passer le glisser a REAPER.
     DockGrab,
+    /// Un autre onglet du docker est clique : montrer sa vue.
+    DockSwitch(usize),
 }
 
 /// Une cible de la barre : rectangle et ce qu'elle est.
@@ -540,10 +542,8 @@ pub struct Ed {
     /// La note dont on montre les poignees du bend (survolee, ou qu'on
     /// vient de quitter vers une poignee).
     pub(crate) bend_note: Option<u64>,
-    /// L'onglet de la vue ancree, montre (le module en decide), et son
-    /// coin (loin du bord qui redimensionne le docker).
-    pub dock_handle: bool,
-    pub dock_corner: cp_ui::handle::Corner,
+    /// Les onglets du docker de la vue ancree (le module les pose).
+    pub dock: cp_ui::handle::DockTabs,
     /// La timeline de l'item seul : les mesures comptees depuis son debut
     /// (la grille, le magnetisme, la quantification aussi), la vue bornee a
     /// l'item ; sinon la timeline du projet.
@@ -610,8 +610,7 @@ impl Ed {
             pal_last: Cat::default(),
             euclid: EUCLID,
             bend_note: None,
-            dock_handle: false,
-            dock_corner: cp_ui::handle::Corner::BottomLeft,
+            dock: cp_ui::handle::DockTabs::new("Editor"),
             isolate: false,
         }
     }
@@ -1291,10 +1290,10 @@ impl Ed {
     // Les cibles
     // -----------------------------------------------------------------------
 
-    /// L'onglet de la vue ancree, au pied de la vue.
+    /// Les onglets de la vue ancree, au pied de la vue : la rangee.
     pub fn tab_rect(&self) -> (f32, f32, f32, f32) {
         let l = self.lay;
-        cp_ui::handle::tab_rect("Editor", self.dock_corner, l.w, l.h, self.scale)
+        self.dock.bounds(l.w, l.h, self.scale)
     }
 
     pub fn rect_of(&self, h: Hit) -> Option<(f32, f32, f32, f32)> {
@@ -1485,6 +1484,9 @@ impl Ed {
             Ev::Move { x, y, mods } => self.on_move(x, y, mods),
             Ev::Leave => {
                 self.set_hover(Hit::None);
+                if self.dock.hot.take().is_some() {
+                    self.mark();
+                }
                 self.guide_q = None;
                 Vec::new()
             }
@@ -1597,6 +1599,12 @@ impl Ed {
                 return self.down_bend(id, matches!(h, Hit::BendPeak(_)), x, y, m);
             }
             if h == Hit::DockHandle {
+                let l = self.lay;
+                if let Some(cp_ui::handle::Press::Switch(i)) =
+                    self.dock.press(l.w, l.h, self.scale, x, y)
+                {
+                    return vec![Act::DockSwitch(i)];
+                }
                 self.drag = Some(Drag::Handle { x0: x, y0: y });
                 return Vec::new();
             }
@@ -2106,6 +2114,10 @@ impl Ed {
         let Some(d) = self.drag.clone() else {
             let h = self.hit(x, y);
             self.set_hover(h);
+            let l = self.lay;
+            if self.dock.track(l.w, l.h, self.scale, x, y) {
+                self.mark();
+            }
             if self.palette.is_some() {
                 match h {
                     // Un groupe s'ouvre au survol, si l'on y va (pas en

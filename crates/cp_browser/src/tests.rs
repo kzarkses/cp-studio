@@ -32,6 +32,7 @@ struct Fake {
     real: Vec<(u32, u32)>,
     /// La poignee de la vue tiree (le glisser passe a REAPER).
     grabbed: usize,
+    switched: Vec<usize>,
 }
 
 /// Un long fichier synthetique : a gauche un La a 0,25, a droite la seconde
@@ -83,6 +84,7 @@ impl Fake {
             stretches: 0,
             real: Vec::new(),
             grabbed: 0,
+            switched: Vec::new(),
         }
     }
 
@@ -114,6 +116,9 @@ fn synth(path: &str) -> Vec<f32> {
 impl Host for Fake {
     fn dock_grab(&mut self) {
         self.grabbed += 1;
+    }
+    fn dock_switch(&mut self, i: usize) {
+        self.switched.push(i);
     }
     fn load(&mut self, path: &str) -> u32 {
         let t = self.next;
@@ -977,7 +982,7 @@ fn l_onglet_de_la_vue_ancree() {
         b.tip_at(x, y)
             .is_none_or(|t| !t.0.contains("another docker"))
     );
-    b.dock_handle = true;
+    b.dock.shown = true;
     b.layout(460.0, 520.0, 1.0);
     assert_eq!(
         (b.lay.search_x, b.lay.list_h, b.lay.status_y),
@@ -989,7 +994,7 @@ fn l_onglet_de_la_vue_ancree() {
     assert!(!b.on_tab(r.0 + r.2 + 2.0, y) && !b.on_tab(x, r.1 - 2.0));
     let mods = Mods::default();
     b.event(&mut h, &Ev::Move { x, y, mods });
-    assert!(b.tab_hover);
+    assert!(b.dock.hot.is_some());
     b.event(
         &mut h,
         &Ev::Move {
@@ -998,12 +1003,12 @@ fn l_onglet_de_la_vue_ancree() {
             mods,
         },
     );
-    assert!(!b.tab_hover);
+    assert!(b.dock.hot.is_none());
     // Un docker de droite : le coin de droite.
-    b.dock_corner = cp_ui::handle::Corner::BottomRight;
+    b.dock.corner = cp_ui::handle::Corner::BottomRight;
     let rr = b.tab_rect();
     assert!(rr.0 + rr.2 > 450.0 && b.on_tab(455.0, y) && !b.on_tab(x, y));
-    b.dock_corner = cp_ui::handle::Corner::BottomLeft;
+    b.dock.corner = cp_ui::handle::Corner::BottomLeft;
     let ev = |b: &mut Browser, h: &mut Fake, e: Ev| {
         b.event(h, &e);
     };
@@ -1062,6 +1067,23 @@ fn l_onglet_de_la_vue_ancree() {
         },
     );
     assert_eq!(h.grabbed, 1);
+    // Deux vues dans le docker : un clic sur l'autre onglet la montre, sans
+    // glisser.
+    b.dock.names = vec!["Browser".into(), "FX Browser".into()];
+    let r2 = b.dock.rects(b.lay.w, b.lay.h, 1.0)[1];
+    ev(
+        &mut b,
+        &mut h,
+        Ev::Down {
+            x: r2.0 + 5.0,
+            y: r2.1 + 5.0,
+            b: Button::Left,
+            dbl: false,
+            mods,
+        },
+    );
+    assert_eq!((h.switched.as_slice(), h.grabbed), (&[1usize][..], 1));
+    b.dock.names.truncate(1);
     let mut sc = Screen::new(460, 520);
     sc.shot(&mut b, &mut h, "poignee");
 }

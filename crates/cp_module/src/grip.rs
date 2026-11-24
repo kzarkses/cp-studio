@@ -1,9 +1,11 @@
-//! La petite poignee de REAPER sous nos vues ancrees, masquee.
+//! La bande d'onglets de REAPER sous nos vues ancrees, masquee.
 //!
 //! Seule dans son docker, une vue garde une poignee de REAPER : un
 //! WDLTabCtrl de 6 px, en bas dans un docker de cote, a gauche dans celui du
-//! bas. Notre lisere fait le meme travail : la bande est cachee et la vue
-//! prend sa place. Deux temps :
+//! bas. Plusieurs vues : la bande d'onglets pleine (15 px, verticale a
+//! gauche dans un docker de gauche). Nos onglets font le meme travail
+//! (docking.rs) : dans un docker qui ne tient QUE des vues CP, la bande est
+//! cachee et la vue montree prend sa place. Deux temps :
 //! - quand REAPER place la vue (WM_WINDOWPOSCHANGING), elle s'etend de
 //!   l'epaisseur de la bande, de son cote, jusqu'au bord du docker. Deja au
 //!   bord, rien ne change : rejouer la mise en page ne l'etend pas deux fois ;
@@ -67,22 +69,31 @@ pub(crate) fn extend(mut r: Rect, g: &Rect, v: &Rect, pc: &Rect) -> Rect {
 impl App {
     /// Nos vues ouvertes.
     pub(crate) fn cp_views(&self) -> Vec<Hwnd> {
-        [
-            self.view.as_ref().map(|v| v.hwnd),
-            self.ed.win.as_ref().map(|w| w.hwnd),
-            self.gt.win.as_ref().map(|w| w.hwnd),
-            self.ses.win.as_ref().map(|w| w.hwnd),
-            self.fxb.win.as_ref().map(|w| w.hwnd),
-        ]
-        .into_iter()
-        .flatten()
-        .collect()
+        self.view_refs().into_iter().map(|v| v.hwnd).collect()
     }
 
-    /// La bande de REAPER s'efface quand notre lisere la remplace (le
+    /// La bande de REAPER s'efface quand nos onglets la remplacent (le
     /// reglage « jamais » la lui rend).
     fn grip_hide_wanted(&self) -> bool {
         self.handle_mode() != 2
+    }
+
+    /// La bande de REAPER que la vue remplace : la petite poignee, ou la
+    /// bande pleine d'un docker qui ne tient que nos vues ; montree, ou
+    /// cachee sous la vue (c'est nous).
+    pub(crate) fn dock_strip(&self, view: Hwnd) -> Option<Hwnd> {
+        let host = ui::parent(view);
+        if host.0 == 0 {
+            return None;
+        }
+        let cp_only = self.dock_group(view).is_some_and(|g| g.cp_only);
+        let vr = ui::window_rect(view);
+        // Dans un docker qui ne tient que nos vues, une bande cachee est la
+        // notre, couverte ou pas encore (une vue qu'on vient de montrer).
+        tab_ctrls(host, view).into_iter().find(|&c| {
+            let r = ui::window_rect(c);
+            cp_only || (thin(&r) && (ui::is_visible(c) || covers(&vr, &r)))
+        })
     }
 
     /// REAPER place une de nos vues : elle couvre aussi sa petite poignee.
@@ -96,7 +107,7 @@ impl App {
         let Some(r) = win::pos_changing(m) else {
             return;
         };
-        let Some(g) = crate::dock_grip(m.hwnd) else {
+        let Some(g) = self.dock_strip(m.hwnd) else {
             return;
         };
         let host = ui::parent(m.hwnd);
@@ -116,29 +127,31 @@ impl App {
     /// rejouee si une vue ne couvre pas ce qu'elle doit (une fois par
     /// seconde au plus).
     pub(crate) fn grip_tick(&mut self) {
-        let want = self.grip_hide_wanted() && self.grab.is_none();
+        let want = self.grip_hide_wanted() && !self.dock_dragging();
         for v in self.cp_views() {
-            if self.r.dock_of(v).is_none() {
+            // La vue montree de son docker seulement : celles qu'il cache ne
+            // couvrent rien (elles feraient remontrer la bande).
+            if !ui::is_visible(v) {
                 continue;
             }
+            let Some(group) = self.dock_group(v) else {
+                continue;
+            };
             let host = ui::parent(v);
-            if host.0 == 0 {
-                continue;
-            }
             let vr = ui::window_rect(v);
             let mut relayout = false;
             for c in tab_ctrls(host, v) {
                 let cr = ui::window_rect(c);
                 let shown = ui::is_visible(c);
-                if want && thin(&cr) {
+                if want && (thin(&cr) || group.cp_only) {
                     // La bande ne se cache que sous la vue : la mise en page
                     // la voit montree, et c'est sur elle que la vue s'etend.
                     if !covers(&vr, &cr) {
-                        if shown {
-                            // La vue s'etend elle-meme (REAPER ne replace
-                            // pas une vue dont la place n'a pas change) ;
-                            // ses mises en page suivantes passent par
-                            // `grip_cover`.
+                        // La vue s'etend elle-meme sur la place de la bande,
+                        // montree ou deja cachee (REAPER ne replace pas une
+                        // vue dont la place n'a pas change) ; ses mises en
+                        // page suivantes passent par `grip_cover`.
+                        {
                             let (x0, y0) = ui::screen_to_client(host, vr.left, vr.top);
                             let (x1, y1) = ui::screen_to_client(host, vr.right, vr.bottom);
                             let here = Rect {
@@ -158,10 +171,6 @@ impl App {
                                 );
                                 self.grip_say(v, "couverte");
                             }
-                        } else {
-                            // Cachee sans etre couverte : montree d'abord,
-                            // la vue s'etend au battement suivant.
-                            ui::show_window(c, true);
                         }
                     } else if shown {
                         ui::show_window(c, false);
@@ -174,7 +183,7 @@ impl App {
                     }
                     // Une vue qui deborde sur des onglets montres : la mise
                     // en page de REAPER la remet a sa place.
-                    relayout |= self.grab.is_none() && overlaps(&vr, &cr);
+                    relayout |= !self.dock_dragging() && overlaps(&vr, &cr);
                 }
             }
             if relayout && self.ticks.saturating_sub(self.grip_relayout) >= 30 {

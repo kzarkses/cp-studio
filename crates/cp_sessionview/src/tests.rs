@@ -651,7 +651,7 @@ fn l_onglet_de_la_vue_ancree() {
     let (tx, _) = center(&v, &ses, &th, Hit::Tool(Tool::Clock));
     let (x, y) = (12.0, 630.0);
     assert_ne!(v.hit(&ses, &th, x, y), Hit::DockHandle);
-    v.dock_handle = true;
+    v.dock.shown = true;
     b.draw(&mut v, &ses, &strips, 0);
     let r = v.tab_rect();
     assert!(r.0 < 10.0 && r.1 + r.3 == 640.0);

@@ -88,6 +88,8 @@ pub trait Host {
     fn window_action(&mut self, _id: u32) {}
     /// La poignee de la vue est tiree : passer le glisser a REAPER.
     fn dock_grab(&mut self) {}
+    /// Un autre onglet du docker est clique : montrer sa vue.
+    fn dock_switch(&mut self, _i: usize) {}
 
     // --- V2 (par defaut : absent)
     /// Le tempo du projet.
@@ -260,12 +262,8 @@ const CACHE_MAX: usize = 12;
 const CACHE_BYTES: i64 = 1_500_000_000;
 
 pub struct Browser {
-    /// Le lisere de la vue ancree, montre (le module en decide).
-    pub dock_handle: bool,
-    /// Le coin de l'onglet (loin du bord qui redimensionne le docker).
-    pub dock_corner: cp_ui::handle::Corner,
-    /// La souris est sur l'onglet de la vue.
-    pub tab_hover: bool,
+    /// Les onglets du docker de la vue ancree (le module les pose).
+    pub dock: cp_ui::handle::DockTabs,
     pub tree: Tree,
     pub rows: Vec<Row>,
     pub hits: Vec<Hit>,
@@ -348,9 +346,7 @@ impl Browser {
             rows: Vec::new(),
             hits: Vec::new(),
             search: TextField::default(),
-            dock_handle: false,
-            dock_corner: cp_ui::handle::Corner::BottomLeft,
-            tab_hover: false,
+            dock: cp_ui::handle::DockTabs::new("Browser"),
             focus: Focus::List,
             scroll: Scroll::default(),
             sel: None,
@@ -1477,15 +1473,17 @@ impl Browser {
             && y < self.lay.list_y + self.lay.list_h
     }
 
-    /// Le point est-il sur le lisere de la vue ancree ?
+    /// Le point est-il sur les onglets de la vue ancree ?
     pub fn on_tab(&self, x: f32, y: f32) -> bool {
-        self.dock_handle && cp_ui::handle::over(self.tab_rect(), x, y)
+        let l = self.lay;
+        self.dock.at(l.w, l.h, self.scale, x, y).is_some()
     }
 
-    /// L'onglet de la vue ancree (au pied de la vue, sur la ligne d'etat).
+    /// Les onglets de la vue ancree (au pied de la vue, sur la ligne
+    /// d'etat) : la rangee entiere.
     pub fn tab_rect(&self) -> (f32, f32, f32, f32) {
         let l = self.lay;
-        cp_ui::handle::tab_rect("Browser", self.dock_corner, l.w, l.h, self.scale)
+        self.dock.bounds(l.w, l.h, self.scale)
     }
 
     fn in_search(&self, x: f32, y: f32) -> bool {
@@ -1602,9 +1600,8 @@ impl Browser {
                 self.dirty = true;
             }
             Ev::Move { x, y, .. } => {
-                let on = self.on_tab(x, y) && self.grab == Grab::None;
-                if on != self.tab_hover {
-                    self.tab_hover = on;
+                let l = self.lay;
+                if self.grab == Grab::None && self.dock.track(l.w, l.h, self.scale, x, y) {
                     self.dirty = true;
                 }
                 if let Grab::Handle { x0, y0 } = self.grab {
@@ -1659,9 +1656,9 @@ impl Browser {
                 self.dirty = true;
             }
             Ev::Leave => {
-                if self.hover.is_some() || self.tab_hover {
+                if self.hover.is_some() || self.dock.hot.is_some() {
                     self.hover = None;
-                    self.tab_hover = false;
+                    self.dock.hot = None;
                     self.dirty = true;
                 }
             }
@@ -1673,10 +1670,14 @@ impl Browser {
 
     fn down(&mut self, h: &mut dyn Host, x: f32, y: f32, b: Button, dbl: bool, mods: Mods) {
         self.dirty = true;
-        if self.on_tab(x, y) {
-            match b {
-                Button::Left => self.grab = Grab::Handle { x0: x, y0: y },
-                Button::Right => self.window_menu(h, x, y),
+        let l = self.lay;
+        if let Some(p) = self.dock.press(l.w, l.h, self.scale, x, y) {
+            match (b, p) {
+                (Button::Left, cp_ui::handle::Press::Switch(i)) => h.dock_switch(i),
+                (Button::Left, cp_ui::handle::Press::Grab) => {
+                    self.grab = Grab::Handle { x0: x, y0: y }
+                }
+                (Button::Right, _) => self.window_menu(h, x, y),
                 _ => {}
             }
             return;

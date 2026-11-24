@@ -35,6 +35,7 @@ pub mod image;
 pub mod items;
 pub mod midi_in;
 pub mod module;
+pub mod overlay;
 pub mod paged;
 pub mod pcm;
 pub mod pitch;

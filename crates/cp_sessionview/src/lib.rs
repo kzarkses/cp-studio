@@ -234,8 +234,10 @@ pub enum Act {
         y: f32,
     },
     AddFx(usize),
-    /// Le lisere de la vue est tire : passer le glisser a REAPER.
+    /// L'onglet de la vue est tire : le module la deplace.
     DockGrab,
+    /// Un autre onglet du docker est clique : montrer sa vue.
+    DockSwitch(usize),
     /// Le menu de la vue (ou elle vit), sous la souris.
     ViewMenu {
         x: f32,
@@ -325,10 +327,8 @@ pub struct View {
     dirty: bool,
     /// Le nombre d'effets de chaque colonne (la geometrie des tranches).
     fx_counts: Vec<usize>,
-    /// L'onglet de la vue ancree, montre (le module en decide), et son
-    /// coin (loin du bord qui redimensionne le docker).
-    pub dock_handle: bool,
-    pub dock_corner: cp_ui::handle::Corner,
+    /// Les onglets du docker de la vue ancree (le module les pose).
+    pub dock: cp_ui::handle::DockTabs,
 }
 
 impl Default for View {
@@ -376,8 +376,7 @@ impl View {
             ctrl: false,
             dirty: true,
             fx_counts: Vec::new(),
-            dock_handle: false,
-            dock_corner: cp_ui::handle::Corner::BottomLeft,
+            dock: cp_ui::handle::DockTabs::new("Session"),
         }
     }
 
@@ -395,13 +394,15 @@ impl View {
 
     /// Le point est-il sur l'onglet de la vue ancree ? (le curseur)
     pub fn on_tab(&self, x: f32, y: f32) -> bool {
-        self.dock_handle && cp_ui::handle::over(self.tab_rect(), x, y)
+        let (w, h) = self.size;
+        self.dock.at(w, h, self.scale, x, y).is_some()
     }
 
-    /// L'onglet de la vue ancree, au pied de la vue (sur la ligne d'etat).
+    /// Les onglets de la vue ancree, au pied de la vue (sur la ligne
+    /// d'etat) : la rangee.
     pub fn tab_rect(&self) -> (f32, f32, f32, f32) {
         let (w, h) = self.size;
-        cp_ui::handle::tab_rect("Session", self.dock_corner, w, h, self.scale)
+        self.dock.bounds(w, h, self.scale)
     }
 
     /// L'onglet est saisi.
@@ -777,6 +778,9 @@ impl View {
                     self.hover = hv;
                     self.dirty = true;
                 }
+                if self.dock.track(w, h, self.scale, *x, *y) {
+                    self.dirty = true;
+                }
                 self.drag_move(ses, strips, &l, *x, *y, *mods)
             }
             Ev::Down { x, y, b, dbl, mods } => {
@@ -803,8 +807,9 @@ impl View {
             }
             Ev::Key { vk, mods, .. } => self.key(ses, th, *vk, *mods),
             Ev::Leave => {
-                if self.hover != Hit::None {
+                if self.hover != Hit::None || self.dock.hot.is_some() {
                     self.hover = Hit::None;
+                    self.dock.hot = None;
                     self.dirty = true;
                 }
                 None
@@ -849,6 +854,12 @@ impl View {
         }
         match hit {
             Hit::DockHandle => {
+                let (w, h) = self.size;
+                if let Some(cp_ui::handle::Press::Switch(i)) =
+                    self.dock.press(w, h, self.scale, x, y)
+                {
+                    return Some(Act::DockSwitch(i));
+                }
                 self.drag = Some(Drag::Handle { x0: x, y0: y });
                 None
             }

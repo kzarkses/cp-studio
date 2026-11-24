@@ -500,6 +500,11 @@ impl App {
                     self.dock_grab(h);
                 }
             }
+            Act::DockSwitch(i) => {
+                if let Some(h) = self.fxb.win.as_ref().map(|w| w.hwnd) {
+                    self.dock_switch(h, i);
+                }
+            }
             Act::ViewMenu { x, y } => {
                 if let Some(h) = self.fxb.win.as_ref().map(|w| w.hwnd) {
                     let (sx, sy) = ui::client_to_screen(h, x as i32, y as i32);

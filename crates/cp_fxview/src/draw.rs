@@ -67,11 +67,8 @@ impl View {
                 cv.fill_rect(r.x, r.y, r.w, r.h, c);
             }
         }
-        // L'onglet de la vue ancree, par-dessus son coin du bas.
-        if self.dock_handle {
-            let hot = self.hover == Hit::DockHandle || self.grabbing_handle();
-            cp_ui::handle::draw_tab(cv, text, th, self.tab_rect(), "FX Browser", hot);
-        }
+        // Les onglets de la vue ancree, par-dessus son coin du bas.
+        self.dock.draw(cv, text, th, w, h, self.grabbing_handle());
         if let Some(m) = msg {
             self.draw_msg(cv, text, th, &l, m);
         }

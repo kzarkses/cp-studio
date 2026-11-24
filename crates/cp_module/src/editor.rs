@@ -481,6 +481,11 @@ impl App {
                         self.dock_grab(h);
                     }
                 }
+                Act::DockSwitch(i) => {
+                    if let Some(h) = self.ed.win.as_ref().map(|w| w.hwnd) {
+                        self.dock_switch(h, i);
+                    }
+                }
                 Act::Play => r.main_on_command(40044),
                 Act::Undo | Act::Redo => {
                     r.main_on_command(if a == Act::Undo { 40029 } else { 40030 });

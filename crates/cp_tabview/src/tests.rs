@@ -2562,7 +2562,7 @@ fn l_onglet_de_la_vue_ancree() {
     let mut v = arranger();
     b.draw(&mut v);
     let before: Vec<_> = v.boxes.iter().map(|b| (b.0, b.1, b.2, b.3)).collect();
-    v.dock_handle = true;
+    v.dock.shown = true;
     b.draw(&mut v);
     let r = v
         .boxes

@@ -55,11 +55,9 @@ impl View {
             self.draw_mixer(cv, text, icons, th, ses, strips, &l);
         }
         self.draw_status(cv, text, th, ses, &l, msg);
-        // L'onglet de la vue ancree, par-dessus le pied de la ligne d'etat.
-        if self.dock_handle {
-            let hot = self.hover == Hit::DockHandle || self.grabbing_handle();
-            cp_ui::handle::draw_tab(cv, text, th, self.tab_rect(), "Session", hot);
-        }
+        // Les onglets de la vue ancree, par-dessus le pied de la ligne
+        // d'etat.
+        self.dock.draw(cv, text, th, w, h, self.grabbing_handle());
         self.draw_ghost(cv, text, th, ses, &l);
     }
 
@@ -874,15 +872,7 @@ impl View {
         cv.fill_rect(0.0, y, l.w, 1.0, th.seam);
         let pad = (8.0 * s).round();
         // L'onglet de la vue ancree tient un bout de la ligne.
-        let (rl, rr) = if self.dock_handle {
-            let k = cp_ui::handle::reserve(self.tab_rect(), s);
-            match self.dock_corner {
-                cp_ui::handle::Corner::BottomLeft => (k, 0.0),
-                cp_ui::handle::Corner::BottomRight => (0.0, k),
-            }
-        } else {
-            (0.0, 0.0)
-        };
+        let (rl, rr) = self.dock.reserve(l.w, l.h, s);
         let line = match msg {
             Some(m) => m.to_string(),
             None => {
