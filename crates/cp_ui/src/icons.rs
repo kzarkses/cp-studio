@@ -5,12 +5,23 @@
 //! dessin de Lucide, nos traits ont les memes bouts et jointures ronds). Elle
 //! est rasterisee UNE fois par taille en masque de couverture, puis teintee a
 //! chaque pose.
+//!
+//! Le masque est cuit en grand (6 a 16 fois) puis reduit par moyenne : la
+//! couverture de chaque pixel est l'aire vraie du trait. Le rasteriseur, lui,
+//! unit les morceaux d'un trait (un rectangle par segment, un disque par
+//! sommet) en ADDITIONNANT leurs couvertures : la ou deux morceaux se
+//! recouvrent sur un bord, le pixel comptait deux fois. A la taille d'une
+//! icone, c'etaient des coins en pate, des anneaux remplis, des courbes
+//! bosselees et trop grasses. Cuit en grand, l'erreur tombe sous le seizieme
+//! de pixel.
 
 use std::collections::HashMap;
+use std::hash::{Hash, Hasher};
 
-use cp_gfx::{Canvas, Color, Path, Scratch, Surface, rgb};
+use cp_gfx::path::Seg;
+use cp_gfx::{Canvas, Color, Path, Pt, Scratch, Surface, pt, rgb};
 
-use crate::svg::{Xf, shapes};
+use crate::svg::{Xf, hint, path_data, shapes};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Icon {
@@ -210,52 +221,96 @@ impl Icon {
     }
 }
 
-/// Les masques deja rasterises, par (icone, taille en px, plein).
+/// Un masque de couverture carre : son cote en px et ses valeurs (0..255).
+pub type MaskPx = (i32, Vec<u8>);
+
+/// Les masques deja rasterises, par (icone, taille en px, plein), et les
+/// glyphes donnes en SVG (la palette), par (empreinte, taille).
 #[derive(Default)]
 pub struct IconCache {
-    masks: HashMap<(Icon, u16, bool), (i32, Vec<u8>)>,
+    masks: HashMap<(Icon, u16, bool), MaskPx>,
+    glyphs: HashMap<(u64, u16), MaskPx>,
     scratch: Scratch,
+}
+
+/// Le chemin agrandi `k` fois.
+fn scaled(p: &Path, k: f32) -> Path {
+    let s = |q: Pt| pt(q.x * k, q.y * k);
+    Path {
+        segs: p
+            .segs
+            .iter()
+            .map(|seg| match *seg {
+                Seg::Move(q) => Seg::Move(s(q)),
+                Seg::Line(q) => Seg::Line(s(q)),
+                Seg::Quad(c, q) => Seg::Quad(s(c), s(q)),
+                Seg::Cubic(a, b, q) => Seg::Cubic(s(a), s(b), s(q)),
+                Seg::Close => Seg::Close,
+            })
+            .collect(),
+    }
+}
+
+/// Le masque d'un dessin de `n` x `n` px : `fill` rempli, `stroke` trace.
+/// Les chemins sont en px exacts ; `sw24` est l'epaisseur du trait sur la
+/// grille de 24.
+fn render(stroke: &Path, fill: &Path, n: i32, sw24: f32, sc: &mut Scratch) -> MaskPx {
+    let n = n.max(1);
+    let k = n as f32 / 24.0;
+    // En petit, une epaisseur fractionnaire (1,25 px a 15 px) grise deux
+    // pixels : on trace en pixels ENTIERS, les ancres calees sur la grille.
+    // Au-dela de 32 px, le trace exact est deja net.
+    let (w, grid) = if n <= 32 {
+        let w = (sw24 * k).round().max(1.0);
+        (w, Some(if w as i32 % 2 == 1 { 0.5 } else { 0.0 }))
+    } else {
+        (sw24 * k, None)
+    };
+    // Environ 256 px de cote en grand : le cout reste borne a toute taille.
+    let ss = (256 / n).clamp(6, 16);
+    let big = n * ss;
+    let prep = |p: &Path| match grid {
+        Some(g) => scaled(&hint(p, g), ss as f32),
+        None => scaled(p, ss as f32),
+    };
+    let mut s = Surface::new(big, big);
+    {
+        let mut cv = Canvas::new(&mut s, sc);
+        if !fill.segs.is_empty() {
+            cv.fill_path(&prep(fill), rgb(255, 255, 255));
+        }
+        if !stroke.segs.is_empty() {
+            cv.stroke_path(&prep(stroke), w * ss as f32, rgb(255, 255, 255));
+        }
+    }
+    let mut acc = vec![0u32; (n * n) as usize];
+    for y in 0..big {
+        let row = &s.px[(y * big) as usize..((y + 1) * big) as usize];
+        let out = &mut acc[((y / ss) * n) as usize..((y / ss + 1) * n) as usize];
+        for (x, &px) in row.iter().enumerate() {
+            out[x / ss as usize] += px >> 24;
+        }
+    }
+    let d = (ss * ss) as u32;
+    (n, acc.iter().map(|&v| ((v + d / 2) / d) as u8).collect())
 }
 
 impl IconCache {
     /// Le masque de l'icone a `size` px (carre). `filled` : rempli au lieu de
     /// trace (une etoile de favori).
-    pub fn mask(&mut self, icon: Icon, size: u16, filled: bool) -> &(i32, Vec<u8>) {
+    pub fn mask(&mut self, icon: Icon, size: u16, filled: bool) -> &MaskPx {
         let sc = &mut self.scratch;
         self.masks.entry((icon, size, filled)).or_insert_with(|| {
             let n = size.max(1) as i32;
-            let mut s = Surface::new(n, n);
-            let k = n as f32 / 24.0;
-            // Lucide trace en 2 sur 24. En petit, une epaisseur fractionnaire
-            // (1,25 px a 15 px) grise deux pixels : c'etait le flou. On trace
-            // en pixels ENTIERS, les points cales sur la grille ; au-dela de
-            // 32 px, le trace exact est deja net.
-            let (w, grid) = if n <= 32 {
-                let w = (2.0 * k).round().max(1.0);
-                (w, Some(if w as i32 % 2 == 1 { 0.5 } else { 0.0 }))
-            } else {
-                (2.0 * k, None)
-            };
             let mut p = Path::new();
-            shapes(
-                icon.svg(),
-                Xf {
-                    k,
-                    ox: 0.0,
-                    oy: 0.0,
-                    grid,
-                },
-                &mut p,
-            );
-            {
-                let mut cv = Canvas::new(&mut s, sc);
-                if filled {
-                    cv.fill_path(&p, rgb(255, 255, 255));
-                }
-                cv.stroke_path(&p, w, rgb(255, 255, 255));
-            }
-            let mask = s.px.iter().map(|&px| (px >> 24) as u8).collect();
-            (n, mask)
+            let xf = Xf {
+                k: n as f32 / 24.0,
+                ox: 0.0,
+                oy: 0.0,
+            };
+            shapes(icon.svg(), xf, &mut p);
+            let empty = Path::new();
+            render(&p, if filled { &p } else { &empty }, n, 2.0, sc)
         })
     }
 
@@ -272,6 +327,45 @@ impl IconCache {
         filled: bool,
     ) {
         let (n, m) = self.mask(icon, size, filled);
+        let n = *n;
+        cv.draw_mask(m, n, n, x.round() as i32, y.round() as i32, c);
+    }
+
+    /// Le masque d'un glyphe donne en donnees SVG (`d`) sur une grille de
+    /// 24 : `stroke` trace en `sw24`, `fill` rempli.
+    pub fn glyph_mask(&mut self, stroke: &str, fill: &str, sw24: f32, size: u16) -> &MaskPx {
+        let mut h = std::hash::DefaultHasher::new();
+        (stroke, fill, sw24.to_bits()).hash(&mut h);
+        let sc = &mut self.scratch;
+        self.glyphs.entry((h.finish(), size)).or_insert_with(|| {
+            let n = size.max(1) as i32;
+            let xf = Xf {
+                k: n as f32 / 24.0,
+                ox: 0.0,
+                oy: 0.0,
+            };
+            let (mut ps, mut pf) = (Path::new(), Path::new());
+            path_data(stroke, xf, &mut ps);
+            path_data(fill, xf, &mut pf);
+            render(&ps, &pf, n, sw24, sc)
+        })
+    }
+
+    /// Pose un glyphe SVG (voir [`IconCache::glyph_mask`]), coin haut-gauche
+    /// en (x, y), teinte `c`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn draw_glyph(
+        &mut self,
+        cv: &mut Canvas<'_>,
+        stroke: &str,
+        fill: &str,
+        sw24: f32,
+        x: f32,
+        y: f32,
+        size: u16,
+        c: Color,
+    ) {
+        let (n, m) = self.glyph_mask(stroke, fill, sw24, size);
         let n = *n;
         cv.draw_mask(m, n, n, x.round() as i32, y.round() as i32, c);
     }
@@ -341,6 +435,63 @@ mod tests {
             let ink: u32 = m.iter().map(|&v| v as u32).sum();
             assert!(ink > 255 * 10, "{i:?} presque vide");
             assert!(ink < 255 * (*n * *n) as u32 / 2, "{i:?} trop pleine");
+        }
+    }
+
+    /// Un anneau couvre son aire vraie (2 pi r w). Le rasteriseur additionne
+    /// les couvertures des morceaux d'un trait qui se recouvrent : rendu
+    /// directement, l'anneau de 48 px etait encre a 108 %.
+    #[test]
+    fn un_anneau_couvre_son_aire_vraie() {
+        let mut c = IconCache::default();
+        let (_, m) = c.mask(Icon::Circle, 48, false);
+        let ink: f64 = m.iter().map(|&v| v as f64 / 255.0).sum();
+        // Rayon 10 et trait 2 sur 24, a 48 px : 20 et 4.
+        let want = std::f64::consts::TAU * 20.0 * 4.0;
+        assert!(
+            (ink - want).abs() / want < 0.02,
+            "{ink:.1} px encres contre {want:.1}"
+        );
+    }
+
+    /// Un carre cale a des bords nets a toute petite taille : sur sa
+    /// colonne et sa ligne du milieu, deux pixels pleins (les deux bords) et
+    /// rien d'autre. La largeur et le rayon exacts d'un rectangle laissaient
+    /// un bord a cheval sur deux pixels gris.
+    #[test]
+    fn un_carre_cale_a_des_bords_nets() {
+        let mut c = IconCache::default();
+        for size in 12u16..=24 {
+            let (n, m) = c.mask(Icon::Stop, size, false);
+            let n = *n as usize;
+            let mid = n / 2;
+            for (sens, line) in [
+                (
+                    "colonne",
+                    (0..n).map(|y| m[y * n + mid]).collect::<Vec<u8>>(),
+                ),
+                ("ligne", m[mid * n..(mid + 1) * n].to_vec()),
+            ] {
+                let full = line.iter().filter(|&&v| v >= 250).count();
+                let grey = line.iter().filter(|&&v| v > 5 && v < 250).count();
+                let w = if size >= 18 { 4 } else { 2 };
+                assert!(
+                    full == w && grey == 0,
+                    "{size} px, {sens} du milieu : {line:?}"
+                );
+            }
+        }
+    }
+
+    /// Un glyphe donne en SVG (la palette) passe par le meme rendu qu'une
+    /// icone : meme dessin, meme masque.
+    #[test]
+    fn un_glyphe_svg_se_rend_comme_l_icone() {
+        let mut c = IconCache::default();
+        for size in [13u16, 16, 18, 40] {
+            let a = c.mask(Icon::Plus, size, false).clone();
+            let b = c.glyph_mask("M5 12h14M12 5v14", "", 2.0, size).clone();
+            assert_eq!(a, b, "{size} px");
         }
     }
 

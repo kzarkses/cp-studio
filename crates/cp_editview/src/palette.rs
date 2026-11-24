@@ -7,7 +7,7 @@ use cp_gfx::Canvas;
 use cp_gfx::text::TextCache;
 use cp_palette::{Area, BEND, BEND_OPS, Ctx, Host, PalHit, circ, icon, icon_t};
 use cp_roll::Note;
-use cp_ui::Theme;
+use cp_ui::{IconCache, Theme};
 
 pub use cp_palette::{Cat, Glyph, Op, bend_curve, euclid_hits};
 
@@ -279,6 +279,7 @@ impl Ed {
         &mut self,
         cv: &mut Canvas<'_>,
         text: &mut TextCache,
+        icons: &mut IconCache,
         th: &Theme,
         bx: &mut Vec<HBox>,
     ) {
@@ -292,7 +293,7 @@ impl Ed {
             h: l.h,
             top: l.bar_h,
         };
-        let (r, cells) = cp_palette::draw(cv, text, th, p, &ops, pal_hit(self.hover), area);
+        let (r, cells) = cp_palette::draw(cv, text, icons, th, p, &ops, pal_hit(self.hover), area);
         for (x, y, w, h, ph) in cells {
             let hit = match ph {
                 PalHit::Frame => Hit::Palette,

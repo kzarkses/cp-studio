@@ -1,10 +1,9 @@
 //! Le dessin de la palette : ses deux lignes (les groupes, puis les icones du
 //! groupe ouvert), ses cibles.
 
+use cp_gfx::Canvas;
 use cp_gfx::text::{Align, Font, TextCache};
-use cp_gfx::{Canvas, Path};
-use cp_ui::Theme;
-use cp_ui::svg::{Xf, path_data};
+use cp_ui::{IconCache, Theme};
 
 use crate::{Glyph, Op, Palette};
 
@@ -119,9 +118,11 @@ pub fn layout<P>(
 
 /// Dessine la palette (par-dessus tout) ; rend son cadre et ses cibles,
 /// le fond en premier.
+#[allow(clippy::too_many_arguments)]
 pub fn draw<P>(
     cv: &mut Canvas<'_>,
     text: &mut TextCache,
+    icons: &mut IconCache,
     th: &Theme,
     p: &Palette<P>,
     ops: &[Op],
@@ -203,24 +204,19 @@ pub fn draw<P>(
                 text.draw_in(cv, fc, cx, cy, cw, ch, &t, fg, Align::Center);
             }
             Glyph::Icon { s: st, f, t } => {
-                let size = s(17.0);
-                let k = size / 24.0;
-                let xf = Xf {
-                    k,
-                    ox: (cx + (cw - size) * 0.5).round(),
-                    oy: (cy + (ch - size) * 0.5).round(),
-                    grid: None,
-                };
-                if !st.is_empty() {
-                    let mut pth = Path::new();
-                    path_data(&st, xf, &mut pth);
-                    cv.stroke_path(&pth, (1.75 * k).max(1.0), fg);
-                }
-                if !f.is_empty() {
-                    let mut pth = Path::new();
-                    path_data(&f, xf, &mut pth);
-                    cv.fill_path(&pth, fg);
-                }
+                // Cuit une fois par taille et cale sur les pixels, comme les
+                // icones (trace en direct, il etait flou et empate).
+                let size = s(17.0).round();
+                icons.draw_glyph(
+                    cv,
+                    &st,
+                    &f,
+                    1.75,
+                    cx + (cw - size) * 0.5,
+                    cy + (ch - size) * 0.5,
+                    size as u16,
+                    fg,
+                );
                 if !t.is_empty() {
                     text.draw_in(
                         cv,

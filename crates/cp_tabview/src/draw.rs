@@ -648,7 +648,7 @@ impl Arr {
             self.draw_panel(cv, text, icons, th, &mut bx);
         }
         // La palette du clic droit, par-dessus tout.
-        self.draw_tab_palette(cv, text, th, &mut bx);
+        self.draw_tab_palette(cv, text, icons, th, &mut bx);
         self.boxes = bx;
     }
 

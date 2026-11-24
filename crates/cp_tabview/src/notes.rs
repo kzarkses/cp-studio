@@ -16,7 +16,7 @@ use cp_palette::{Area, Cat, Ctx, Glyph, Host, Op, PalHit, circ, dots, icon, icon
 use cp_roll::Roll;
 use cp_tab::doc::{self, TNote};
 use cp_tab::fret::{self, Tuning};
-use cp_ui::Theme;
+use cp_ui::{IconCache, Theme};
 
 use crate::{Act, Arr, HBox, Hit, Item, Mark, Pick, Sel};
 
@@ -982,6 +982,7 @@ impl Arr {
         &mut self,
         cv: &mut Canvas<'_>,
         text: &mut TextCache,
+        icons: &mut IconCache,
         th: &Theme,
         bx: &mut Vec<HBox>,
     ) {
@@ -1004,7 +1005,7 @@ impl Arr {
         let Some(p) = self.palette.as_ref() else {
             return;
         };
-        let (r, cells) = cp_palette::draw(cv, text, th, p, &ops, hover, area);
+        let (r, cells) = cp_palette::draw(cv, text, icons, th, p, &ops, hover, area);
         for (x, y, w, h, ph) in cells {
             bx.push((
                 x,

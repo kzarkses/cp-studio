@@ -1,9 +1,11 @@
 //! Le sous-ensemble de SVG des icones Lucide : `path` (M L H V C S Q T A Z,
 //! absolus et relatifs), `circle`, `ellipse`, `rect` (coins `rx`), `line`,
 //! `polyline`. Tout devient un [`Path`] dans le repere 24 x 24 de l'icone, mis
-//! a l'echelle `k` et deplace en (ox, oy).
+//! a l'echelle `k` et deplace en (ox, oy). Puis [`hint`] cale le chemin sur
+//! les pixels.
 
-use cp_gfx::Path;
+use cp_gfx::path::Seg;
+use cp_gfx::{Path, Pt, pt};
 
 struct Tok<'a> {
     s: &'a [u8],
@@ -73,32 +75,75 @@ impl<'a> Tok<'a> {
     }
 }
 
-/// Transforme les coordonnees de l'icone.
+/// Transforme les coordonnees de l'icone (exactes : le calage sur les pixels
+/// se fait apres, sur le chemin entier, par [`hint`]).
 #[derive(Clone, Copy)]
 pub struct Xf {
     pub k: f32,
     pub ox: f32,
     pub oy: f32,
-    /// Le calage sur les pixels (l'« hinting » d'une police) : chaque point
-    /// tombe sur la grille `n + grid` (0,5 pour un trait d'epaisseur impaire,
-    /// 0 pour une paire), et le trait couvre des pixels entiers au lieu d'en
-    /// griser deux. `None` : les coordonnees exactes.
-    pub grid: Option<f32>,
 }
 
 impl Xf {
-    fn snap(&self, v: f32) -> f32 {
-        match self.grid {
-            Some(g) => (v - g).round() + g,
-            None => v,
-        }
-    }
     fn x(&self, v: f32) -> f32 {
-        self.snap(self.ox + v * self.k)
+        self.ox + v * self.k
     }
     fn y(&self, v: f32) -> f32 {
-        self.snap(self.oy + v * self.k)
+        self.oy + v * self.k
     }
+}
+
+/// Le calage sur les pixels (l'« hinting » d'une police) : chaque point
+/// d'ANCRAGE tombe sur la grille `n + g` (0,5 pour un trait d'epaisseur
+/// impaire, 0 pour une paire), et le trait couvre des pixels entiers au lieu
+/// d'en griser deux. Les points de CONTROLE suivent leur ancre du meme
+/// deplacement : la courbe garde sa forme. (Caler aussi les controles, ou
+/// garder la largeur et le rayon exacts d'un rectangle ou d'un cercle, faisait
+/// des coins en pate et des bords gris.)
+pub fn hint(p: &Path, g: f32) -> Path {
+    let snap = |q: Pt| pt((q.x - g).round() + g, (q.y - g).round() + g);
+    let moved = |c: Pt, a: Pt, s: Pt| pt(c.x + s.x - a.x, c.y + s.y - a.y);
+    let mut out = Path::new();
+    // L'ancre courante, exacte et calee ; celle du debut du sous-chemin.
+    let (mut a, mut a_s) = (pt(0.0, 0.0), pt(0.0, 0.0));
+    let mut start = (a, a_s);
+    for seg in &p.segs {
+        match *seg {
+            Seg::Move(q) => {
+                let qs = snap(q);
+                out.segs.push(Seg::Move(qs));
+                (a, a_s) = (q, qs);
+                start = (a, a_s);
+            }
+            Seg::Line(q) => {
+                let qs = snap(q);
+                out.segs.push(Seg::Line(qs));
+                (a, a_s) = (q, qs);
+            }
+            Seg::Quad(c, q) => {
+                // Un seul controle pour deux ancres : la moyenne des deux
+                // deplacements.
+                let qs = snap(q);
+                let m = pt(
+                    0.5 * (a_s.x - a.x + qs.x - q.x),
+                    0.5 * (a_s.y - a.y + qs.y - q.y),
+                );
+                out.segs.push(Seg::Quad(pt(c.x + m.x, c.y + m.y), qs));
+                (a, a_s) = (q, qs);
+            }
+            Seg::Cubic(c1, c2, q) => {
+                let qs = snap(q);
+                out.segs
+                    .push(Seg::Cubic(moved(c1, a, a_s), moved(c2, q, qs), qs));
+                (a, a_s) = (q, qs);
+            }
+            Seg::Close => {
+                out.segs.push(Seg::Close);
+                (a, a_s) = start;
+            }
+        }
+    }
+    out
 }
 
 /// Un arc elliptique SVG (parametrage par extremites) en cubiques.

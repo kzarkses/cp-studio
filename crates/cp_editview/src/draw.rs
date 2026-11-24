@@ -168,7 +168,7 @@ impl Ed {
         // la scene (`strokes`).
         self.draw_scrollbars(cv, th);
         // La palette du clic droit, par-dessus tout (ses cibles d'abord).
-        self.draw_palette(cv, text, th, &mut bx);
+        self.draw_palette(cv, text, icons, th, &mut bx);
         self.boxes = bx;
     }
 
