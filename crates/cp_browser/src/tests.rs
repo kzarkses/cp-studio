@@ -961,43 +961,49 @@ fn un_depot_relit_un_dossier_deja_lu_et_ignore_la_casse() {
     let _ = std::fs::remove_file(&txt);
 }
 
-/// Le lisere de la vue ancree : le bord haut, sans place prise (la
-/// recherche ne bouge pas), allume au survol, une infobulle ; un clic ne
-/// fait rien, un glisser passe la main a REAPER. Sous le lisere, la barre
-/// reste a ses boutons.
+/// L'onglet de la vue ancree : en bas a gauche, sur la ligne d'etat, sans
+/// place prise (la barre et la liste ne bougent pas), allume au survol, une
+/// infobulle ; un clic ne fait rien, un glisser passe la main a REAPER.
+/// Dans un docker de droite, il passe en bas a droite.
 #[test]
-fn le_lisere_de_la_vue_ancree() {
+fn l_onglet_de_la_vue_ancree() {
     let root = library();
     let mut h = Fake::new();
     let mut b = Browser::new(places(&root), Path::new("."), Vec::new());
     b.layout(460.0, 520.0, 1.0);
-    let x0 = b.lay.search_x;
-    let y = 1.0;
+    let before = b.lay;
+    let (x, y) = (10.0, 510.0);
     assert!(
-        b.tip_at(200.0, y)
+        b.tip_at(x, y)
             .is_none_or(|t| !t.0.contains("another docker"))
     );
     b.dock_handle = true;
     b.layout(460.0, 520.0, 1.0);
-    assert_eq!(b.lay.search_x, x0);
-    assert!(b.tip_at(200.0, y).unwrap().0.contains("another docker"));
-    let mid = b.lay.bar_h * 0.5;
-    assert!(
-        b.tip_at(10.0, mid)
-            .is_none_or(|t| !t.0.contains("another docker"))
+    assert_eq!(
+        (b.lay.search_x, b.lay.list_h, b.lay.status_y),
+        (before.search_x, before.list_h, before.status_y)
     );
+    let r = b.tab_rect();
+    assert!(r.0 < 10.0 && r.1 + r.3 == 520.0 && r.1 >= b.lay.status_y);
+    assert!(b.tip_at(x, y).unwrap().0.contains("another docker"));
+    assert!(!b.on_tab(r.0 + r.2 + 2.0, y) && !b.on_tab(x, r.1 - 2.0));
     let mods = Mods::default();
-    b.event(&mut h, &Ev::Move { x: 200.0, y, mods });
-    assert!(b.grip_hover);
+    b.event(&mut h, &Ev::Move { x, y, mods });
+    assert!(b.tab_hover);
     b.event(
         &mut h,
         &Ev::Move {
             x: 200.0,
-            y: mid,
+            y: 300.0,
             mods,
         },
     );
-    assert!(!b.grip_hover);
+    assert!(!b.tab_hover);
+    // Un docker de droite : le coin de droite.
+    b.dock_corner = cp_ui::handle::Corner::BottomRight;
+    let rr = b.tab_rect();
+    assert!(rr.0 + rr.2 > 450.0 && b.on_tab(455.0, y) && !b.on_tab(x, y));
+    b.dock_corner = cp_ui::handle::Corner::BottomLeft;
     let ev = |b: &mut Browser, h: &mut Fake, e: Ev| {
         b.event(h, &e);
     };

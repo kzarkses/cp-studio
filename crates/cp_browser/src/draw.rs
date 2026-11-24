@@ -70,11 +70,6 @@ impl Browser {
         let l = self.lay;
         cv.clear(th.bg);
         self.draw_bar(cv, g);
-        // Le lisere de la vue ancree, par-dessus le haut de la barre.
-        if self.dock_handle {
-            let hot = self.grip_hover || matches!(self.grab, crate::Grab::Handle { .. });
-            cp_ui::handle::draw_grip(cv, th, l.w, hot);
-        }
         cv.fill_rect(0.0, l.bar_h, l.w, 1.0, th.seam);
         self.thumbs_pending.set(false);
         self.draw_list(cv, g, h);
@@ -86,6 +81,15 @@ impl Browser {
                 std::path::Path::new(&self.wave.path),
             )));
         self.draw_status(cv, g, rate);
+        self.draw_dock_tab(cv, g);
+    }
+
+    /// L'onglet de la vue ancree, par-dessus le pied de la ligne d'etat.
+    fn draw_dock_tab(&self, cv: &mut Canvas<'_>, g: &mut Gfx<'_>) {
+        if self.dock_handle {
+            let hot = self.tab_hover || matches!(self.grab, crate::Grab::Handle { .. });
+            cp_ui::handle::draw_tab(cv, g.text, g.th, self.tab_rect(), "Browser", hot);
+        }
     }
 
     /// Le bas seulement : la forme d'onde et la ligne d'etat (la tete de
@@ -101,6 +105,7 @@ impl Browser {
                 std::path::Path::new(&self.wave.path),
             )));
         self.draw_status(cv, g, rate);
+        self.draw_dock_tab(cv, g);
     }
 
     fn draw_bar(&mut self, cv: &mut Canvas<'_>, g: &mut Gfx<'_>) {
@@ -803,14 +808,25 @@ impl Browser {
         } else {
             th.text_dim
         };
+        // L'onglet de la vue ancree tient un bout de la ligne : le texte
+        // s'ecarte de lui.
+        let (rl, rr) = if self.dock_handle {
+            let k = cp_ui::handle::reserve(self.tab_rect(), self.scale);
+            match self.dock_corner {
+                cp_ui::handle::Corner::BottomLeft => (k, 0.0),
+                cp_ui::handle::Corner::BottomRight => (0.0, k),
+            }
+        } else {
+            (0.0, 0.0)
+        };
         let right = format!("{:+.1} dB", self.gain_db().max(-99.0));
-        let rw = g.text.measure(f, &right) + pad;
+        let rw = g.text.measure(f, &right) + pad + rr;
         g.text.draw_in(
             cv,
             f,
             l.w - rw,
             l.status_y,
-            rw - pad,
+            rw - pad - rr,
             l.status_h,
             &right,
             th.text_faint,
@@ -819,9 +835,9 @@ impl Browser {
         g.text.draw_in(
             cv,
             f,
-            pad,
+            pad + rl,
             l.status_y,
-            l.w - rw - 2.0 * pad,
+            l.w - rw - 2.0 * pad - rl,
             l.status_h,
             &left,
             col,

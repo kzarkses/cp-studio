@@ -2300,12 +2300,19 @@ impl SelfTest {
                     }),
                     "la petite poignee de REAPER cachee sous la vue".to_string(),
                 );
-                // Le lisere : le bord haut de la vue (ses 4 premiers px), au
-                // milieu de sa largeur.
+                // L'onglet : en bas a gauche de la vue (en bas a droite dans
+                // un docker de droite), 20 px de haut a 96 DPI.
+                let s = cp_sys::ui::dpi(h) as f32 / 96.0;
                 let cr = ui::client_rect(h);
-                let (x, y) = ((cr.right - cr.left) / 2, 1);
+                let right = r.dock_of(h).map(|d| r.dock_position(d)) == Some(3);
+                let x = if right {
+                    cr.right - cr.left - (16.0 * s) as i32
+                } else {
+                    (16.0 * s) as i32
+                };
+                let y = cr.bottom - cr.top - (10.0 * s) as i32;
                 cp_sys::win::post_message(h, WM_LBUTTONDOWN, MK_LBUTTON, lp(x, y));
-                cp_sys::win::post_message(h, WM_MOUSEMOVE, MK_LBUTTON, lp(x + 30, y + 20));
+                cp_sys::win::post_message(h, WM_MOUSEMOVE, MK_LBUTTON, lp(x + 30, y - 20));
                 self.keys_step = 7;
                 self.ui_at = Some(Instant::now());
             }

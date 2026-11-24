@@ -636,11 +636,11 @@ fn beaucoup_de_colonnes_defilent() {
     b.shot(&mut v, &ses, &[], 0, "04_defilement");
 }
 
-/// Le lisere de la vue ancree : le bord haut, au-dessus des outils (qui
-/// restent dessous) ; un clic ne fait rien, un glisser passe la main a
+/// L'onglet de la vue ancree : en bas a gauche, sur la ligne d'etat (les
+/// outils ne bougent pas) ; un clic ne fait rien, un glisser passe la main a
 /// REAPER, un clic droit ouvre le menu de la vue.
 #[test]
-fn le_lisere_de_la_vue_ancree() {
+fn l_onglet_de_la_vue_ancree() {
     let mut e = Null { now: 0 };
     let (ses, strips) = session(&mut e);
     let mut v = View::new();
@@ -648,19 +648,21 @@ fn le_lisere_de_la_vue_ancree() {
     let th = Theme::dark(1.0);
     let m = Mods::default();
     b.draw(&mut v, &ses, &strips, 0);
-    let (tx, ty) = center(&v, &ses, &th, Hit::Tool(Tool::Clock));
-    assert_ne!(v.hit(&ses, &th, 300.0, 1.0), Hit::DockHandle);
+    let (tx, _) = center(&v, &ses, &th, Hit::Tool(Tool::Clock));
+    let (x, y) = (12.0, 630.0);
+    assert_ne!(v.hit(&ses, &th, x, y), Hit::DockHandle);
     v.dock_handle = true;
     b.draw(&mut v, &ses, &strips, 0);
-    assert_eq!(v.hit(&ses, &th, 300.0, 1.0), Hit::DockHandle);
-    assert!(v.on_grip(1.0) && !v.on_grip(ty));
+    let r = v.tab_rect();
+    assert!(r.0 < 10.0 && r.1 + r.3 == 640.0);
+    assert_eq!(v.hit(&ses, &th, x, y), Hit::DockHandle);
+    assert!(v.on_tab(x, y) && !v.on_tab(300.0, 1.0));
     assert_eq!(center(&v, &ses, &th, Hit::Tool(Tool::Clock)).0, tx);
     assert!(
         v.label(&ses, Hit::DockHandle)
             .unwrap()
             .contains("another docker")
     );
-    let (x, y) = (300.0, 1.0);
     // Un clic : rien.
     assert_eq!(
         v.event(&ses, &strips, &th, &down(x, y, Button::Left, m)),

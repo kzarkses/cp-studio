@@ -50,10 +50,6 @@ impl View {
         self.clamp_scrolls(&l);
         cv.fill_rect(0.0, 0.0, w, h, th.bg);
         self.draw_top(cv, text, icons, th, st, &l);
-        if self.dock_handle {
-            let hot = self.hover == Hit::DockHandle || self.grabbing_handle();
-            cp_ui::handle::draw_grip(cv, th, w, hot);
-        }
         self.draw_chips(cv, text, icons, th, st, &l);
         if let Some(sd) = l.side {
             self.draw_side(cv, text, icons, th, &l, sd);
@@ -70,6 +66,11 @@ impl View {
                 let c = if hot { th.accent.fade(0.6) } else { th.seam };
                 cv.fill_rect(r.x, r.y, r.w, r.h, c);
             }
+        }
+        // L'onglet de la vue ancree, par-dessus son coin du bas.
+        if self.dock_handle {
+            let hot = self.hover == Hit::DockHandle || self.grabbing_handle();
+            cp_ui::handle::draw_tab(cv, text, th, self.tab_rect(), "FX Browser", hot);
         }
         if let Some(m) = msg {
             self.draw_msg(cv, text, th, &l, m);

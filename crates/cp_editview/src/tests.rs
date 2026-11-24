@@ -1231,26 +1231,25 @@ fn les_bends_de_l_editeur_et_leurs_poignees() {
     assert!(ok.contains(&101) && !ok.contains(&102));
 }
 
-/// Le lisere de la vue ancree : le bord haut sur toute la largeur, sans
+/// L'onglet de la vue ancree : en bas a gauche, au pied du clavier, sans
 /// place prise (la barre ne bouge pas), le curseur de deplacement ; un clic
 /// ne fait rien, un glisser de quelques pixels passe la main a REAPER ; un
-/// clic droit ouvre le menu de la vue. Sous lui, les boutons restent.
+/// clic droit ouvre le menu de la vue.
 #[test]
-fn le_lisere_de_la_vue_ancree() {
+fn l_onglet_de_la_vue_ancree() {
     let mut b = Bench::new(1280, 760);
     let mut v = riff();
     b.draw(&mut v);
     let snap = v.rect_of(Hit::Snap).unwrap();
     v.dock_handle = true;
     b.draw(&mut v);
-    let r = v.rect_of(Hit::DockHandle).expect("le lisere");
-    assert_eq!((r.0, r.1, r.2), (0.0, 0.0, 1280.0));
-    assert!(r.3 >= 3.0 && r.3 <= snap.1);
+    let r = v.rect_of(Hit::DockHandle).expect("l'onglet");
+    assert!(r.0 < 10.0 && r.1 + r.3 == 760.0 && r.3 >= 18.0 && r.2 < 100.0);
     assert_eq!(v.rect_of(Hit::Snap).unwrap(), snap);
-    assert_eq!(v.hit(snap.0 + 4.0, snap.1 + snap.3 * 0.5), Hit::Snap);
-    assert_eq!(v.pointer(600.0, 1.0, m0()), cp_ui::Pointer::ItemMove);
+    let (x, y) = (r.0 + 10.0, r.1 + r.3 * 0.5);
+    assert_eq!(v.hit(x, y), Hit::DockHandle);
+    assert_eq!(v.pointer(x, y, m0()), cp_ui::Pointer::ItemMove);
     assert!(v.label(Hit::DockHandle).unwrap().contains("another docker"));
-    let (x, y) = (600.0, 1.0);
     down(&mut v, x, y, Button::Left, m0());
     assert!(mv(&mut v, x + 2.0, y, m0()).is_empty());
     assert!(up(&mut v, x + 2.0, y, Button::Left, m0()).is_empty());

@@ -138,20 +138,6 @@ impl Ed {
         let mut bx: Vec<HBox> = Vec::new();
         cv.fill_rect(0.0, 0.0, w, h, th.bg);
         self.draw_bar(cv, text, icons, th, &mut bx);
-        // Le lisere de la vue ancree : par-dessus le haut de la barre, et
-        // pousse apres ses boutons (il l'emporte sur eux dans sa bande).
-        if self.dock_handle {
-            let hot = self.hover == Hit::DockHandle
-                || matches!(self.drag, Some(crate::Drag::Handle { .. }));
-            cp_ui::handle::draw_grip(cv, th, w, hot);
-            bx.push((
-                0.0,
-                0.0,
-                w,
-                cp_ui::handle::grip_h(th.scale),
-                Hit::DockHandle,
-            ));
-        }
         cv.fill_rect(0.0, self.lay.bar_h, w, 2.0, th.seam);
         self.draw_ruler(cv, text, th);
         match self.clip {
@@ -181,6 +167,15 @@ impl Ed {
         // La tete de lecture et les curseurs sont des traits, poses par-dessus
         // la scene (`strokes`).
         self.draw_scrollbars(cv, th);
+        // L'onglet de la vue ancree : au pied du clavier, par-dessus la
+        // scene, et pousse apres elle (il l'emporte sur ce qu'il couvre).
+        if self.dock_handle {
+            let hot = self.hover == Hit::DockHandle
+                || matches!(self.drag, Some(crate::Drag::Handle { .. }));
+            let r = self.tab_rect();
+            cp_ui::handle::draw_tab(cv, text, th, r, "Editor", hot);
+            bx.push((r.0, r.1, r.2, r.3, Hit::DockHandle));
+        }
         // La palette du clic droit, par-dessus tout (ses cibles d'abord).
         self.draw_palette(cv, text, icons, th, &mut bx);
         self.boxes = bx;

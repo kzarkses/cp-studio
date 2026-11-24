@@ -994,8 +994,10 @@ pub struct Arr {
     pub focus_lane: Lane,
     /// Le bas des pistes a l'ecran (les traits s'y arretent).
     pub(crate) tracks_bottom: f32,
-    /// La poignee de la vue ancree, montree (le module en decide).
+    /// L'onglet de la vue ancree, montre (le module en decide), et son
+    /// coin (loin du bord qui redimensionne le docker).
     pub dock_handle: bool,
+    pub dock_corner: cp_ui::handle::Corner,
 }
 
 /// Le magnetisme de REAPER : sa division, s'il est allume, et l'ecart
@@ -1282,6 +1284,7 @@ impl Arr {
             damage: Vec::new(),
             tracks_bottom: 0.0,
             dock_handle: false,
+            dock_corner: cp_ui::handle::Corner::BottomLeft,
             mouse: (0.0, 0.0, Mods::default()),
             focus_lane: Lane::Audio,
         }
@@ -1567,6 +1570,12 @@ impl Arr {
                 self.dirty = true;
             }
         }
+    }
+
+    /// L'onglet de la vue ancree, au pied de la vue.
+    pub fn tab_rect(&self) -> (f32, f32, f32, f32) {
+        let l = self.lay;
+        cp_ui::handle::tab_rect("Guitar Tab", self.dock_corner, l.w, l.h, self.scale)
     }
 
     pub fn hit(&self, x: f32, y: f32) -> Hit {
@@ -2681,6 +2690,7 @@ impl Arr {
                 | Hit::Mute(t)
                 | Hit::Solo(t)
                 | Hit::Tuning(t) => Some(Act::TrackMenu { t, x, y }),
+                Hit::DockHandle => Some(Act::ViewMenu { x, y }),
                 _ if y < self.lay.bar_h => Some(Act::ViewMenu { x, y }),
                 _ => {
                     // Dans les pistes : le lasso, comme dans l'arrangement

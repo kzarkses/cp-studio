@@ -325,8 +325,10 @@ pub struct View {
     dirty: bool,
     /// Le nombre d'effets de chaque colonne (la geometrie des tranches).
     fx_counts: Vec<usize>,
-    /// Le lisere de la vue ancree, montre (le module en decide).
+    /// L'onglet de la vue ancree, montre (le module en decide), et son
+    /// coin (loin du bord qui redimensionne le docker).
     pub dock_handle: bool,
+    pub dock_corner: cp_ui::handle::Corner,
 }
 
 impl Default for View {
@@ -375,6 +377,7 @@ impl View {
             dirty: true,
             fx_counts: Vec::new(),
             dock_handle: false,
+            dock_corner: cp_ui::handle::Corner::BottomLeft,
         }
     }
 
@@ -390,12 +393,18 @@ impl View {
         self.drag.is_some()
     }
 
-    /// Le point est-il sur le lisere de la vue ancree ? (le curseur)
-    pub fn on_grip(&self, y: f32) -> bool {
-        self.dock_handle && cp_ui::handle::over_grip(y, self.scale)
+    /// Le point est-il sur l'onglet de la vue ancree ? (le curseur)
+    pub fn on_tab(&self, x: f32, y: f32) -> bool {
+        self.dock_handle && cp_ui::handle::over(self.tab_rect(), x, y)
     }
 
-    /// Le lisere est saisi.
+    /// L'onglet de la vue ancree, au pied de la vue (sur la ligne d'etat).
+    pub fn tab_rect(&self) -> (f32, f32, f32, f32) {
+        let (w, h) = self.size;
+        cp_ui::handle::tab_rect("Session", self.dock_corner, w, h, self.scale)
+    }
+
+    /// L'onglet est saisi.
     pub(crate) fn grabbing_handle(&self) -> bool {
         matches!(self.drag, Some(Drag::Handle { .. }))
     }
@@ -501,8 +510,8 @@ impl View {
     pub fn hit(&self, ses: &Session, th: &Theme, x: f32, y: f32) -> Hit {
         let (w, h) = self.size;
         let l = self.layout(th, w, h);
-        // Le lisere passe avant les outils (il est au-dessus d'eux).
-        if self.dock_handle && cp_ui::handle::over_grip(y, th.scale) {
+        // L'onglet passe avant ce qu'il couvre (il est dessine par-dessus).
+        if self.on_tab(x, y) {
             return Hit::DockHandle;
         }
         if y < l.header_y {

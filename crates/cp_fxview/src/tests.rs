@@ -725,19 +725,22 @@ fn espace_va_a_reaper_hors_de_la_recherche() {
 }
 
 #[test]
-fn le_lisere_de_la_vue_ancree() {
+fn l_onglet_de_la_vue_ancree() {
     let (mut b, mut v, cat, mut st, ch) = setup(760, 520);
     v.dock_handle = true;
     b.draw(&mut v, &cat, &st, &ch);
-    assert_eq!(v.hit(&b.th, &st, 300.0, 1.0), Hit::DockHandle);
+    let r = v.tab_rect();
+    assert!(r.0 < 10.0 && r.1 + r.3 == 520.0);
+    assert_eq!(v.hit(&b.th, &st, 12.0, 510.0), Hit::DockHandle);
+    assert_ne!(v.hit(&b.th, &st, 300.0, 1.0), Hit::DockHandle);
     b.ev(
         &mut v,
         &cat,
         &mut st,
         &ch,
         Ev::Down {
-            x: 300.0,
-            y: 1.0,
+            x: 12.0,
+            y: 510.0,
             b: Button::Left,
             dbl: false,
             mods: none(),
@@ -749,8 +752,8 @@ fn le_lisere_de_la_vue_ancree() {
         &mut st,
         &ch,
         Ev::Move {
-            x: 312.0,
-            y: 8.0,
+            x: 24.0,
+            y: 502.0,
             mods: none(),
         },
     );

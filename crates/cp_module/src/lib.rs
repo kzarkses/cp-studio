@@ -1101,8 +1101,8 @@ impl App {
         let (x, y) = ui::screen_to_client(hwnd, sx, sy);
         let l = &self.browser.lay;
         let (x, y) = (x as f32, y as f32);
-        // Le lisere de la vue ancree : le curseur de REAPER pour deplacer.
-        if self.browser.on_grip(y) {
+        // L'onglet de la vue ancree : le curseur de REAPER pour deplacer.
+        if self.browser.on_tab(x, y) {
             ui::set_pointer(cp_ui::Pointer::ItemMove);
             return;
         }
@@ -1332,9 +1332,9 @@ impl App {
             );
         }
         if let Some(h) = self.view.as_ref().map(|v| v.hwnd) {
-            let want = self.handle_wanted(h, mode);
-            if want != self.browser.dock_handle {
-                self.browser.dock_handle = want;
+            let want = (self.handle_wanted(h, mode), self.tab_corner(h));
+            if want != (self.browser.dock_handle, self.browser.dock_corner) {
+                (self.browser.dock_handle, self.browser.dock_corner) = want;
                 let (w, hh, s) = (self.browser.lay.w, self.browser.lay.h, self.browser.scale);
                 self.browser.layout(w, hh, s);
                 self.browser.mark();
@@ -1342,36 +1342,45 @@ impl App {
             }
         }
         if let Some(h) = self.ed.win.as_ref().map(|w| w.hwnd) {
-            let want = self.handle_wanted(h, mode);
-            if want != self.ed.ed.dock_handle {
-                self.ed.ed.dock_handle = want;
+            let want = (self.handle_wanted(h, mode), self.tab_corner(h));
+            if want != (self.ed.ed.dock_handle, self.ed.ed.dock_corner) {
+                (self.ed.ed.dock_handle, self.ed.ed.dock_corner) = want;
                 self.ed.ed.mark();
                 self.ed_render(true);
             }
         }
         if let Some(h) = self.gt.win.as_ref().map(|w| w.hwnd) {
-            let want = self.handle_wanted(h, mode);
-            if want != self.gt.arr.dock_handle {
-                self.gt.arr.dock_handle = want;
+            let want = (self.handle_wanted(h, mode), self.tab_corner(h));
+            if want != (self.gt.arr.dock_handle, self.gt.arr.dock_corner) {
+                (self.gt.arr.dock_handle, self.gt.arr.dock_corner) = want;
                 self.gt.arr.mark();
                 self.gtab_render(true);
             }
         }
         if let Some(h) = self.ses.win.as_ref().map(|w| w.hwnd) {
-            let want = self.handle_wanted(h, mode);
-            if want != self.ses.view.dock_handle {
-                self.ses.view.dock_handle = want;
+            let want = (self.handle_wanted(h, mode), self.tab_corner(h));
+            if want != (self.ses.view.dock_handle, self.ses.view.dock_corner) {
+                (self.ses.view.dock_handle, self.ses.view.dock_corner) = want;
                 self.ses.view.mark();
                 self.ses_render(true);
             }
         }
         if let Some(h) = self.fxb.win.as_ref().map(|w| w.hwnd) {
-            let want = self.handle_wanted(h, mode);
-            if want != self.fxb.view.dock_handle {
-                self.fxb.view.dock_handle = want;
+            let want = (self.handle_wanted(h, mode), self.tab_corner(h));
+            if want != (self.fxb.view.dock_handle, self.fxb.view.dock_corner) {
+                (self.fxb.view.dock_handle, self.fxb.view.dock_corner) = want;
                 self.fxb.view.mark();
                 self.fxb_render(true);
             }
+        }
+    }
+
+    /// Le coin de l'onglet d'une vue : loin du bord qui redimensionne son
+    /// docker (en bas a droite dans un docker de droite).
+    fn tab_corner(&self, view: Hwnd) -> cp_ui::handle::Corner {
+        match self.r.dock_of(view).map(|d| self.r.dock_position(d)) {
+            Some(3) => cp_ui::handle::Corner::BottomRight,
+            _ => cp_ui::handle::Corner::BottomLeft,
         }
     }
 

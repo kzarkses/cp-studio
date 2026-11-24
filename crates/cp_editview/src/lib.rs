@@ -540,8 +540,10 @@ pub struct Ed {
     /// La note dont on montre les poignees du bend (survolee, ou qu'on
     /// vient de quitter vers une poignee).
     pub(crate) bend_note: Option<u64>,
-    /// La poignee de la vue ancree, montree (le module en decide).
+    /// L'onglet de la vue ancree, montre (le module en decide), et son
+    /// coin (loin du bord qui redimensionne le docker).
     pub dock_handle: bool,
+    pub dock_corner: cp_ui::handle::Corner,
     /// La timeline de l'item seul : les mesures comptees depuis son debut
     /// (la grille, le magnetisme, la quantification aussi), la vue bornee a
     /// l'item ; sinon la timeline du projet.
@@ -609,6 +611,7 @@ impl Ed {
             euclid: EUCLID,
             bend_note: None,
             dock_handle: false,
+            dock_corner: cp_ui::handle::Corner::BottomLeft,
             isolate: false,
         }
     }
@@ -1288,6 +1291,12 @@ impl Ed {
     // Les cibles
     // -----------------------------------------------------------------------
 
+    /// L'onglet de la vue ancree, au pied de la vue.
+    pub fn tab_rect(&self) -> (f32, f32, f32, f32) {
+        let l = self.lay;
+        cp_ui::handle::tab_rect("Editor", self.dock_corner, l.w, l.h, self.scale)
+    }
+
     pub fn rect_of(&self, h: Hit) -> Option<(f32, f32, f32, f32)> {
         if let Some(b) = self.boxes.iter().rev().find(|b| b.4 == h) {
             return Some((b.0, b.1, b.2, b.3));
@@ -1616,6 +1625,7 @@ impl Ed {
                     Vec::new()
                 }
                 Hit::Key(p) => self.audition(p, false),
+                Hit::DockHandle => vec![Act::ViewMenu { x, y }],
                 _ if y < self.lay.bar_h => vec![Act::ViewMenu { x, y }],
                 _ => Vec::new(),
             };

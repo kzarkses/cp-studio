@@ -288,8 +288,10 @@ pub struct View {
     pub scale: f32,
     pub ctrl: bool,
     dirty: bool,
-    /// Le lisere de la vue ancree, montre (le module en decide).
+    /// L'onglet de la vue ancree, montre (le module en decide), et son
+    /// coin (loin du bord qui redimensionne le docker).
     pub dock_handle: bool,
+    pub dock_corner: cp_ui::handle::Corner,
     /// Les pastilles a l'ecran : (x, largeur) dans la rangee, sans le
     /// defilement ; puis le « + ».
     chip_x: Vec<(f32, f32)>,
@@ -331,6 +333,7 @@ impl View {
             ctrl: false,
             dirty: true,
             dock_handle: false,
+            dock_corner: cp_ui::handle::Corner::BottomLeft,
             chip_x: Vec::new(),
             chip_add: (0.0, 0.0),
             nfx: 0,
@@ -355,8 +358,14 @@ impl View {
         matches!(self.drag, Some(Drag::Rows { moved: true, .. }))
     }
 
-    pub fn on_grip(&self, y: f32) -> bool {
-        self.dock_handle && cp_ui::handle::over_grip(y, self.scale)
+    pub fn on_tab(&self, x: f32, y: f32) -> bool {
+        self.dock_handle && cp_ui::handle::over(self.tab_rect(), x, y)
+    }
+
+    /// L'onglet de la vue ancree, au pied de la vue.
+    pub fn tab_rect(&self) -> (f32, f32, f32, f32) {
+        let (w, h) = self.size;
+        cp_ui::handle::tab_rect("FX Browser", self.dock_corner, w, h, self.scale)
     }
 
     pub(crate) fn grabbing_handle(&self) -> bool {
@@ -529,7 +538,8 @@ impl View {
     pub fn hit(&self, th: &Theme, st: &Store, x: f32, y: f32) -> Hit {
         let (w, h) = self.size;
         let l = self.layout(th, st, w, h);
-        if self.dock_handle && cp_ui::handle::over_grip(y, th.scale) {
+        // L'onglet passe avant ce qu'il couvre (il est dessine par-dessus).
+        if self.on_tab(x, y) {
             return Hit::DockHandle;
         }
         if y < l.chips.y {

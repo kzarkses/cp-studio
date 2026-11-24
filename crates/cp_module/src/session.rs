@@ -2222,11 +2222,11 @@ impl App {
             }
             msg::ERASEBKGND => Some(1),
             msg::GETDLGCODE => Some(0x0004 | 0x0080 | 0x0001),
-            // Le lisere de la vue ancree : le curseur de REAPER pour
+            // L'onglet de la vue ancree : le curseur de REAPER pour
             // deplacer ; ailleurs, celui de la fenetre.
             msg::SETCURSOR if (m.lp & 0xFFFF) == 1 => {
-                let (_, cy) = Self::mouse_over(hwnd)?;
-                if self.ses.view.on_grip(cy) {
+                let (cx, cy) = Self::mouse_over(hwnd)?;
+                if self.ses.view.on_tab(cx, cy) {
                     ui::set_pointer(cp_ui::Pointer::ItemMove);
                     Some(1)
                 } else {

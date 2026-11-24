@@ -2553,11 +2553,11 @@ fn jeu_libre_le_pdf_va_a_la_ligne_dans_un_silence() {
     assert_eq!(pages, 1);
 }
 
-/// Le lisere de la vue ancree : le bord haut sur toute la largeur, sans
-/// place prise ; un glisser passe la main a REAPER, un clic droit ouvre le
-/// menu de la vue.
+/// L'onglet de la vue ancree : en bas a gauche, au pied des en-tetes des
+/// pistes, sans place prise ; un glisser passe la main a REAPER, un clic
+/// droit ouvre le menu de la vue.
 #[test]
-fn le_lisere_de_la_vue_ancree() {
+fn l_onglet_de_la_vue_ancree() {
     let mut b = Bench::new(1600, 900);
     let mut v = arranger();
     b.draw(&mut v);
@@ -2568,9 +2568,8 @@ fn le_lisere_de_la_vue_ancree() {
         .boxes
         .iter()
         .find(|b| b.4 == Hit::DockHandle)
-        .expect("le lisere");
-    assert_eq!((r.0, r.1, r.2), (0.0, 0.0, 1600.0));
-    assert!(r.3 >= 3.0 && r.3 <= 6.0);
+        .expect("l'onglet");
+    assert!(r.0 < 10.0 && r.1 + r.3 == 900.0 && r.3 >= 18.0 && r.2 < 120.0);
     // Rien d'autre n'a bouge.
     let after: Vec<_> = v
         .boxes
@@ -2579,7 +2578,7 @@ fn le_lisere_de_la_vue_ancree() {
         .map(|b| (b.0, b.1, b.2, b.3))
         .collect();
     assert_eq!(before, after);
-    let (x, y) = (800.0, 1.0);
+    let (x, y) = (r.0 + 10.0, r.1 + r.3 * 0.5);
     assert_eq!(v.hit(x, y), Hit::DockHandle);
     assert_eq!(v.pointer(x, y, Mods::default()), cp_ui::Pointer::ItemMove);
     let mods = Mods::default();

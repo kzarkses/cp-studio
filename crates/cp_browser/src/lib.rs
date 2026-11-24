@@ -262,8 +262,10 @@ const CACHE_BYTES: i64 = 1_500_000_000;
 pub struct Browser {
     /// Le lisere de la vue ancree, montre (le module en decide).
     pub dock_handle: bool,
-    /// La souris est sur le lisere.
-    pub grip_hover: bool,
+    /// Le coin de l'onglet (loin du bord qui redimensionne le docker).
+    pub dock_corner: cp_ui::handle::Corner,
+    /// La souris est sur l'onglet de la vue.
+    pub tab_hover: bool,
     pub tree: Tree,
     pub rows: Vec<Row>,
     pub hits: Vec<Hit>,
@@ -347,7 +349,8 @@ impl Browser {
             hits: Vec::new(),
             search: TextField::default(),
             dock_handle: false,
-            grip_hover: false,
+            dock_corner: cp_ui::handle::Corner::BottomLeft,
+            tab_hover: false,
             focus: Focus::List,
             scroll: Scroll::default(),
             sel: None,
@@ -1475,8 +1478,14 @@ impl Browser {
     }
 
     /// Le point est-il sur le lisere de la vue ancree ?
-    pub fn on_grip(&self, y: f32) -> bool {
-        self.dock_handle && cp_ui::handle::over_grip(y, self.scale)
+    pub fn on_tab(&self, x: f32, y: f32) -> bool {
+        self.dock_handle && cp_ui::handle::over(self.tab_rect(), x, y)
+    }
+
+    /// L'onglet de la vue ancree (au pied de la vue, sur la ligne d'etat).
+    pub fn tab_rect(&self) -> (f32, f32, f32, f32) {
+        let l = self.lay;
+        cp_ui::handle::tab_rect("Browser", self.dock_corner, l.w, l.h, self.scale)
     }
 
     fn in_search(&self, x: f32, y: f32) -> bool {
@@ -1487,15 +1496,14 @@ impl Browser {
     /// sont pas a l'ecran) : son texte et le rectangle qu'elle explique.
     pub fn tip_at(&self, x: f32, y: f32) -> Option<(String, (f32, f32, f32, f32))> {
         let l = self.lay;
+        if self.on_tab(x, y) {
+            return Some((cp_ui::handle::HANDLE_TIP.into(), self.tab_rect()));
+        }
         if y >= l.bar_h {
             return None;
         }
         let b = |bx: f32, w: f32| (bx, 0.0, w, l.bar_h);
         let on = |v: bool| if v { "on" } else { "off" };
-        if self.on_grip(y) {
-            let gh = cp_ui::handle::grip_h(self.scale);
-            return Some((cp_ui::handle::HANDLE_TIP.into(), (0.0, 0.0, l.w, gh)));
-        }
         if self.btn_hit(x, y, l.view_x) {
             return Some((
                 format!(
@@ -1594,9 +1602,9 @@ impl Browser {
                 self.dirty = true;
             }
             Ev::Move { x, y, .. } => {
-                let on = self.on_grip(y) && self.grab == Grab::None;
-                if on != self.grip_hover {
-                    self.grip_hover = on;
+                let on = self.on_tab(x, y) && self.grab == Grab::None;
+                if on != self.tab_hover {
+                    self.tab_hover = on;
                     self.dirty = true;
                 }
                 if let Grab::Handle { x0, y0 } = self.grab {
@@ -1651,9 +1659,9 @@ impl Browser {
                 self.dirty = true;
             }
             Ev::Leave => {
-                if self.hover.is_some() || self.grip_hover {
+                if self.hover.is_some() || self.tab_hover {
                     self.hover = None;
-                    self.grip_hover = false;
+                    self.tab_hover = false;
                     self.dirty = true;
                 }
             }
@@ -1665,8 +1673,12 @@ impl Browser {
 
     fn down(&mut self, h: &mut dyn Host, x: f32, y: f32, b: Button, dbl: bool, mods: Mods) {
         self.dirty = true;
-        if b == Button::Left && self.on_grip(y) {
-            self.grab = Grab::Handle { x0: x, y0: y };
+        if self.on_tab(x, y) {
+            match b {
+                Button::Left => self.grab = Grab::Handle { x0: x, y0: y },
+                Button::Right => self.window_menu(h, x, y),
+                _ => {}
+            }
             return;
         }
         if self.in_search(x, y) && b == Button::Left {
