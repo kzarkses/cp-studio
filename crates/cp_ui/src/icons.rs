@@ -98,6 +98,22 @@ pub enum Icon {
     Tag,
     /// Le navigateur d'effets : une piece de puzzle.
     Puzzle,
+    /// Tenir une piste (FX Constellation).
+    Lock,
+    LockOpen,
+    /// Enregistrer (une disquette).
+    Save,
+    /// Les reglages (deux curseurs).
+    Settings,
+    /// Ouvrir la fenetre d'un effet.
+    Maximize,
+    /// Les axes X / Y.
+    Move,
+    /// Les portees.
+    Ruler,
+    /// Les bases.
+    Gauge,
+    ChevronLeft,
 }
 
 impl Icon {
@@ -255,6 +271,29 @@ impl Icon {
             Icon::Tag => {
                 r#"<path d="M12.586 2.586A2 2 0 0 0 11.172 2H4a2 2 0 0 0-2 2v7.172a2 2 0 0 0 .586 1.414l8.704 8.704a2.426 2.426 0 0 0 3.42 0l6.58-6.58a2.426 2.426 0 0 0 0-3.42z" /><circle cx="7.5" cy="7.5" r="1.2" />"#
             }
+            Icon::Lock => {
+                r#"<rect width="18" height="11" x="3" y="11" rx="2" ry="2" /><path d="M7 11V7a5 5 0 0 1 10 0v4" />"#
+            }
+            Icon::LockOpen => {
+                r#"<rect width="18" height="11" x="3" y="11" rx="2" ry="2" /><path d="M7 11V7a5 5 0 0 1 9.9-1" />"#
+            }
+            Icon::Save => {
+                r#"<path d="M15.2 3a2 2 0 0 1 1.4.6l3.8 3.8a2 2 0 0 1 .6 1.4V19a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z" /><path d="M17 21v-7a1 1 0 0 0-1-1H8a1 1 0 0 0-1 1v7" /><path d="M7 3v4a1 1 0 0 0 1 1h7" />"#
+            }
+            Icon::Settings => {
+                r#"<path d="M20 7h-9" /><path d="M14 17H5" /><circle cx="17" cy="17" r="3" /><circle cx="7" cy="7" r="3" />"#
+            }
+            Icon::Maximize => {
+                r#"<path d="M15 3h6v6" /><path d="m21 3-7 7" /><path d="m3 21 7-7" /><path d="M9 21H3v-6" />"#
+            }
+            Icon::Move => {
+                r#"<path d="M12 2v20" /><path d="m15 19-3 3-3-3" /><path d="m19 9 3 3-3 3" /><path d="M2 12h20" /><path d="m5 9-3 3 3 3" /><path d="m9 5 3-3 3 3" />"#
+            }
+            Icon::Ruler => {
+                r#"<path d="M21.3 15.3a2.4 2.4 0 0 1 0 3.4l-2.6 2.6a2.4 2.4 0 0 1-3.4 0L2.7 8.7a2.41 2.41 0 0 1 0-3.4l2.6-2.6a2.41 2.41 0 0 1 3.4 0Z" /><path d="m14.5 12.5 2-2" /><path d="m11.5 9.5 2-2" /><path d="m8.5 6.5 2-2" /><path d="m17.5 15.5 2-2" />"#
+            }
+            Icon::Gauge => r#"<path d="m12 14 4-4" /><path d="M3.34 19a10 10 0 1 1 17.32 0" />"#,
+            Icon::ChevronLeft => r#"<path d="m15 18-6-6 6-6" />"#,
         }
     }
 }
@@ -475,6 +514,15 @@ mod tests {
             Icon::Link,
             Icon::Tag,
             Icon::Puzzle,
+            Icon::Lock,
+            Icon::LockOpen,
+            Icon::Save,
+            Icon::Settings,
+            Icon::Maximize,
+            Icon::Move,
+            Icon::Ruler,
+            Icon::Gauge,
+            Icon::ChevronLeft,
         ];
         for i in all {
             let (n, m) = c.mask(i, 24, false);

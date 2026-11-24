@@ -1,0 +1,18 @@
+[package]
+name = "cp_fxcview"
+description = "La vue de FX Constellation : barre de commande, pad, ROLL, macros, parametres, rack des sources, Sound Gen, sequenceur (sans Windows)"
+edition.workspace = true
+version.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+cp_fxc = { path = "../cp_fxc" }
+cp_gfx = { path = "../cp_gfx" }
+cp_ui = { path = "../cp_ui" }
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+cp_sys = { path = "../cp_sys" }
