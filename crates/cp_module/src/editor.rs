@@ -987,7 +987,7 @@ impl App {
         self.ed_open();
     }
 
-    fn ed_place_entries(&self) -> Vec<ui::MenuEntry> {
+    pub(crate) fn ed_place_entries(&self) -> Vec<ui::MenuEntry> {
         let p = self.ed.place;
         let open = self.ed.win.is_some();
         let items = [
@@ -1039,7 +1039,7 @@ impl App {
         ui::flat_to_tree(&items)
     }
 
-    fn ed_place_pick(&mut self, id: u32) {
+    pub(crate) fn ed_place_pick(&mut self, id: u32) {
         match id {
             k @ 20..=22 => self.set_handle_mode((k - 20) as u8),
             1 => self.queue(WinOp::EdPlace(Place::Arrange)),
@@ -1048,14 +1048,6 @@ impl App {
             4 => self.queue(WinOp::EdClose),
             _ => {}
         }
-    }
-
-    /// Depuis le transport (son icone) : le popover vient avec la vue du
-    /// transport ; d'ici la, le menu du systeme.
-    pub(crate) fn ed_place_menu_at(&mut self, owner: Hwnd, sx: i32, sy: i32) {
-        let e = self.ed_place_entries();
-        let id = ui::popup_tree(owner, sx, sy, &e);
-        self.ed_place_pick(id);
     }
 
     fn ed_want_frames(&mut self, on: bool) {

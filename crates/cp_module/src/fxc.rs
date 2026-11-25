@@ -636,14 +636,6 @@ impl App {
         self.fxc_place_pick(id);
     }
 
-    /// Depuis le transport (son icone) : le popover vient avec la vue du
-    /// transport ; d'ici la, le menu du systeme.
-    pub(crate) fn fxc_place_menu_at(&mut self, owner: Hwnd, sx: i32, sy: i32) {
-        let e = self.fxc_place_entries();
-        let id = ui::popup_tree(owner, sx, sy, &e);
-        self.fxc_place_pick(id);
-    }
-
     pub(crate) fn fxc_theme(&self) -> Theme {
         self.fxc
             .win

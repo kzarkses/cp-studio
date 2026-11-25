@@ -817,20 +817,6 @@ impl Reaper {
         true
     }
 
-    /// Une boite de REAPER ; rend le bouton (1 OK, 2 Annuler, 6 Oui, 7 Non).
-    pub fn xc_message(&self, title: &str, text: &str, kind: i32) -> i32 {
-        type F = unsafe extern "C" fn(*const c_char, *const c_char, i32) -> i32;
-        let (Some(f), Ok(t), Ok(m)) = (
-            self.xf::<F>(c"ShowMessageBox"),
-            CString::new(title),
-            CString::new(text),
-        ) else {
-            return 0;
-        };
-        // SAFETY: chaines vivantes pendant l'appel (boite modale).
-        unsafe { f(m.as_ptr(), t.as_ptr(), kind) }
-    }
-
     /// Le parametre porte-t-il une enveloppe d'automation ?
     pub fn xc_has_envelope(&self, t: Tk, fx: usize, k: usize) -> bool {
         type F = unsafe extern "C" fn(P, i32, i32, bool) -> P;

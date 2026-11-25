@@ -3728,7 +3728,7 @@ impl App {
         self.gtab_open();
     }
 
-    fn gtab_place_entries(&self) -> Vec<ui::MenuEntry> {
+    pub(crate) fn gtab_place_entries(&self) -> Vec<ui::MenuEntry> {
         let p = self.gt.place;
         let open = self.gt.win.is_some();
         let items = [
@@ -3780,7 +3780,7 @@ impl App {
         ui::flat_to_tree(&items)
     }
 
-    fn gtab_place_pick(&mut self, id: u32) {
+    pub(crate) fn gtab_place_pick(&mut self, id: u32) {
         match id {
             k @ 20..=22 => self.set_handle_mode((k - 20) as u8),
             1 => self.queue(WinOp::GtabPlace(Place::Arrange)),
@@ -3789,14 +3789,6 @@ impl App {
             4 => self.queue(WinOp::GtabClose),
             _ => {}
         }
-    }
-
-    /// Depuis le transport (son icone) : le popover vient avec la vue du
-    /// transport ; d'ici la, le menu du systeme.
-    pub(crate) fn gtab_place_menu_at(&mut self, owner: Hwnd, sx: i32, sy: i32) {
-        let e = self.gtab_place_entries();
-        let id = ui::popup_tree(owner, sx, sy, &e);
-        self.gtab_place_pick(id);
     }
 
     fn gtab_place_menu(&mut self, x: f32, y: f32) {

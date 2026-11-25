@@ -1916,6 +1916,48 @@ impl SelfTest {
                 self.ui_at = Some(Instant::now());
                 false
             }
+            // Les popovers du transport : poses sur l'ecran (la barre est trop
+            // basse), la souris tenue, le clavier a eux ; photographies.
+            5 => {
+                if t < 2.5 {
+                    return false;
+                }
+                act("tpop_open");
+                let st = out();
+                self.say(
+                    field(&st, "open") == "1"
+                        && field(&st, "capture") == "1"
+                        && field(&st, "shown") == "1",
+                    format!(
+                        "CP Transport : le menu de la barre s'ouvre en popover sur l'ecran ({st})"
+                    ),
+                );
+                let img = field(&st, "img");
+                let _ = fs::write(dir().join("snap6.txt"), format!("{img}\n"));
+                self.keys_step = 6;
+                self.ui_at = Some(Instant::now());
+                false
+            }
+            6 => {
+                if t < 2.5 {
+                    return false;
+                }
+                act("tpop_check");
+                let st = out();
+                let bpm = field(&st, "bpm").parse::<f64>().unwrap_or(0.0);
+                self.say(
+                    field(&st, "esc_closed") == "1"
+                        && field(&st, "ask") == "1"
+                        && field(&st, "done") == "1"
+                        && (bpm - 133.0).abs() < 0.05,
+                    format!(
+                        "CP Transport : Echap ferme le menu, le tempo se saisit au clavier ({st})"
+                    ),
+                );
+                self.keys_step = 7;
+                self.ui_at = Some(Instant::now());
+                false
+            }
             _ => {
                 if t < 3.0 {
                     return false;

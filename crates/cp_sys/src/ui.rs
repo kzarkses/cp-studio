@@ -70,10 +70,6 @@ unsafe extern "system" {
     fn IsChild(parent: Raw, h: Raw) -> i32;
     fn IsWindowVisible(h: Raw) -> i32;
     fn IsIconic(h: Raw) -> i32;
-    fn CreatePopupMenu() -> Raw;
-    fn AppendMenuW(m: Raw, flags: u32, id: usize, text: *const u16) -> i32;
-    fn TrackPopupMenu(m: Raw, flags: u32, x: i32, y: i32, res: i32, h: Raw, r: *const Rect) -> i32;
-    fn DestroyMenu(m: Raw) -> i32;
     fn OpenClipboard(h: Raw) -> i32;
     fn EmptyClipboard() -> i32;
     fn SetClipboardData(fmt: u32, mem: Raw) -> Raw;
@@ -88,6 +84,18 @@ unsafe extern "system" {
     fn MapWindowPoints(from: Raw, to: Raw, pts: *mut Point, n: u32) -> i32;
     fn ShowWindow(h: Raw, cmd: i32) -> i32;
     fn UpdateWindow(h: Raw) -> i32;
+    fn MonitorFromPoint(p: Point, flags: u32) -> Raw;
+    fn GetMonitorInfoW(m: Raw, info: *mut MonitorInfo) -> i32;
+    fn GetForegroundWindow() -> Raw;
+    fn GetWindowThreadProcessId(h: Raw, pid: *mut u32) -> u32;
+}
+
+#[repr(C)]
+struct MonitorInfo {
+    size: u32,
+    monitor: Rect,
+    work: Rect,
+    flags: u32,
 }
 
 #[link(name = "gdi32")]
@@ -116,6 +124,7 @@ unsafe extern "system" {
     fn GlobalLock(m: Raw) -> Raw;
     fn GlobalUnlock(m: Raw) -> i32;
     fn GlobalFree(m: Raw) -> Raw;
+    fn GetCurrentThreadId() -> u32;
 }
 
 #[link(name = "dwmapi")]
@@ -439,6 +448,39 @@ pub fn dpi(h: Hwnd) -> u32 {
 // La souris
 // ---------------------------------------------------------------------------
 
+/// La zone de travail (sans la barre des taches) de l'ecran sous le point
+/// d'ecran (`x`, `y`) : (gauche, haut, largeur, hauteur).
+pub fn work_area(x: i32, y: i32) -> (i32, i32, i32, i32) {
+    const MONITOR_DEFAULTTONEAREST: u32 = 2;
+    let mut mi = MonitorInfo {
+        size: size_of::<MonitorInfo>() as u32,
+        monitor: Rect::default(),
+        work: Rect::default(),
+        flags: 0,
+    };
+    // SAFETY: structure complete, sa taille posee ; un moniteur existe
+    // toujours (le plus proche).
+    let ok = unsafe {
+        let m = MonitorFromPoint(Point { x, y }, MONITOR_DEFAULTTONEAREST);
+        !m.is_null() && GetMonitorInfoW(m, &mut mi) != 0
+    };
+    if !ok {
+        return (0, 0, 1920, 1080);
+    }
+    let r = mi.work;
+    (r.left, r.top, r.right - r.left, r.bottom - r.top)
+}
+
+/// La fenetre au premier plan est-elle de ce fil (REAPER et ses fenetres,
+/// pas une autre application) ?
+pub fn foreground_is_ours() -> bool {
+    // SAFETY: aucune precondition ; un handle nul rend 0.
+    unsafe {
+        let f = GetForegroundWindow();
+        !f.is_null() && GetWindowThreadProcessId(f, null_mut()) == GetCurrentThreadId()
+    }
+}
+
 pub fn capture(h: Hwnd) {
     // SAFETY: aucune precondition.
     unsafe { SetCapture(h.raw()) };
@@ -681,7 +723,9 @@ pub fn key_text(vk: u32, scan: u32) -> Option<String> {
 // Les menus
 // ---------------------------------------------------------------------------
 
-/// Une ligne de menu : `None` = separateur.
+/// Une ligne de menu : `None` = separateur. Les menus sont des popovers
+/// maison ([`cp_ui::pop`]) : jamais un menu de Windows (regle de Cedric,
+/// 2026-11-25 ; il n'y a plus de quoi en ouvrir un).
 pub struct MenuItem<'a> {
     pub id: u32,
     pub text: &'a str,
@@ -689,59 +733,7 @@ pub struct MenuItem<'a> {
     pub enabled: bool,
 }
 
-/// Un menu contextuel a l'ecran (x, y). Rend l'identifiant choisi (0 = rien).
-/// Modal : il tourne sa propre boucle jusqu'au choix.
-pub fn popup_menu(owner: Hwnd, x: i32, y: i32, items: &[Option<MenuItem<'_>>]) -> u32 {
-    const MF_STRING: u32 = 0;
-    const MF_SEPARATOR: u32 = 0x800;
-    const MF_CHECKED: u32 = 0x8;
-    const MF_GRAYED: u32 = 0x1;
-    const TPM_RETURNCMD: u32 = 0x100;
-    const TPM_RIGHTBUTTON: u32 = 0x2;
-    // SAFETY: menu cree puis detruit ici.
-    let m = unsafe { CreatePopupMenu() };
-    if m.is_null() {
-        return 0;
-    }
-    for it in items {
-        match it {
-            None => {
-                // SAFETY: menu vivant.
-                unsafe { AppendMenuW(m, MF_SEPARATOR, 0, null()) };
-            }
-            Some(i) => {
-                let w = wide(i.text);
-                let mut f = MF_STRING;
-                if i.checked {
-                    f |= MF_CHECKED;
-                }
-                if !i.enabled {
-                    f |= MF_GRAYED;
-                }
-                // SAFETY: chaine terminee par zero, vivante pendant l'appel.
-                unsafe { AppendMenuW(m, f, i.id as usize, w.as_ptr()) };
-            }
-        }
-    }
-    // SAFETY: menu vivant ; TPM_RETURNCMD rend le choix au lieu de le poster.
-    let r = unsafe {
-        TrackPopupMenu(
-            m,
-            TPM_RETURNCMD | TPM_RIGHTBUTTON,
-            x,
-            y,
-            0,
-            owner.raw(),
-            null(),
-        )
-    };
-    // SAFETY: le menu cree ci-dessus.
-    unsafe { DestroyMenu(m) };
-    r.max(0) as u32
-}
-
-/// Un menu plat ([`popup_menu`]) en lignes de menu en arbre (pour un
-/// popover maison).
+/// Un menu plat en lignes de menu en arbre (pour un popover maison).
 pub fn flat_to_tree(items: &[Option<MenuItem<'_>>]) -> Vec<MenuEntry> {
     items
         .iter()
@@ -821,79 +813,6 @@ impl MenuEntry {
             enabled: false,
         }
     }
-}
-
-fn build_menu(entries: &[MenuEntry]) -> *mut c_void {
-    const MF_STRING: u32 = 0;
-    const MF_SEPARATOR: u32 = 0x800;
-    const MF_CHECKED: u32 = 0x8;
-    const MF_GRAYED: u32 = 0x1;
-    const MF_POPUP: u32 = 0x10;
-    // SAFETY: menu cree ici ; l'appelant le detruit (avec ses sous-menus).
-    let m = unsafe { CreatePopupMenu() };
-    if m.is_null() {
-        return m;
-    }
-    for e in entries {
-        match e {
-            MenuEntry::Sep => {
-                // SAFETY: menu vivant.
-                unsafe { AppendMenuW(m, MF_SEPARATOR, 0, null()) };
-            }
-            MenuEntry::Item {
-                id,
-                text,
-                checked,
-                enabled,
-            } => {
-                let w = wide(text);
-                let mut f = MF_STRING;
-                if *checked {
-                    f |= MF_CHECKED;
-                }
-                if !*enabled {
-                    f |= MF_GRAYED;
-                }
-                // SAFETY: chaine terminee par zero, vivante pendant l'appel.
-                unsafe { AppendMenuW(m, f, *id as usize, w.as_ptr()) };
-            }
-            MenuEntry::Sub(text, sub) => {
-                let sm = build_menu(sub);
-                if sm.is_null() {
-                    continue;
-                }
-                let w = wide(text);
-                // SAFETY: le sous-menu appartient desormais au menu.
-                unsafe { AppendMenuW(m, MF_STRING | MF_POPUP, sm as usize, w.as_ptr()) };
-            }
-        }
-    }
-    m
-}
-
-/// Un menu en arbre a l'ecran (x, y). Rend l'identifiant choisi (0 = rien).
-pub fn popup_tree(owner: Hwnd, x: i32, y: i32, entries: &[MenuEntry]) -> u32 {
-    const TPM_RETURNCMD: u32 = 0x100;
-    const TPM_RIGHTBUTTON: u32 = 0x2;
-    let m = build_menu(entries);
-    if m.is_null() {
-        return 0;
-    }
-    // SAFETY: menu vivant ; TPM_RETURNCMD rend le choix.
-    let r = unsafe {
-        TrackPopupMenu(
-            m,
-            TPM_RETURNCMD | TPM_RIGHTBUTTON,
-            x,
-            y,
-            0,
-            owner.raw(),
-            null(),
-        )
-    };
-    // SAFETY: le menu cree ci-dessus (ses sous-menus avec lui).
-    unsafe { DestroyMenu(m) };
-    r.max(0) as u32
 }
 
 // ---------------------------------------------------------------------------

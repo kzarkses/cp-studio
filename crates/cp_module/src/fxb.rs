@@ -1343,7 +1343,7 @@ impl App {
     }
 
     /// Les choix de place de la fenetre (et la poignee du docker).
-    fn fxb_place_entries(&self) -> Vec<MenuEntry> {
+    pub(crate) fn fxb_place_entries(&self) -> Vec<MenuEntry> {
         let p = self.fxb.place;
         let open = self.fxb.win.is_some();
         let items = [
@@ -1375,7 +1375,7 @@ impl App {
         ui::flat_to_tree(&items)
     }
 
-    fn fxb_place_pick(&mut self, id: u32) {
+    pub(crate) fn fxb_place_pick(&mut self, id: u32) {
         match id {
             k @ 20..=22 => self.set_handle_mode((k - 20) as u8),
             1 => self.queue(WinOp::FxbPlace(Place::Arrange)),
@@ -1390,14 +1390,6 @@ impl App {
     fn fxb_place_menu(&mut self, x: f32, y: f32) {
         let e = self.fxb_place_entries();
         let id = self.fxb_tree(x, y, &e);
-        self.fxb_place_pick(id);
-    }
-
-    /// Depuis le transport (son icone) : le popover vient avec la vue du
-    /// transport ; d'ici la, le menu du systeme.
-    pub(crate) fn fxb_place_menu_at(&mut self, owner: Hwnd, sx: i32, sy: i32) {
-        let e = self.fxb_place_entries();
-        let id = ui::popup_tree(owner, sx, sy, &e);
         self.fxb_place_pick(id);
     }
 

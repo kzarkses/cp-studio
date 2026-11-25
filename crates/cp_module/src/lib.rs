@@ -52,6 +52,7 @@ mod grip;
 mod gtab;
 mod items;
 mod native;
+mod screenpop;
 mod session;
 mod tuner;
 mod tview;
@@ -98,6 +99,7 @@ pub(crate) mod msg {
     pub const MBUTTONDBLCLK: u32 = 0x0209;
     pub const MOUSEWHEEL: u32 = 0x020A;
     pub const MOUSEHWHEEL: u32 = 0x020E;
+    pub const CAPTURECHANGED: u32 = 0x0215;
     pub const MOUSELEAVE: u32 = 0x02A3;
 }
 

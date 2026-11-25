@@ -80,6 +80,8 @@ impl App {
                     "snap hwnd={h} full_ms={full:.2} pad_ms={part:.2} pad_fulls={fulls} pop={pop} carry={carry} moving={moving} clock={clock} src_ms={src_ms:.2}"
                 )
             }
+            // Les popovers du transport (poses sur l'ecran).
+            s @ ("tpop_open" | "tpop_check") => self.transport_selftest_pop(s),
             s => format!("unknown step {s}"),
         };
         r.ext_set(SECTION, "selftest_fxc", &out, false);

@@ -227,11 +227,12 @@ impl App {
         self.tp.t.mark();
     }
 
-    pub(crate) fn tuner_ask_a4(&mut self) {
+    /// Le La de reference, en popover sur l'ecran (sous le menu de la barre
+    /// qui l'a demande : le geste se rejoue avec la valeur).
+    pub(crate) fn tuner_ask_a4(&mut self, x: f32, y: f32) {
         let cur = format!("{}", self.tp.tu.a4);
         if let Some(v) = self
-            .r
-            .user_inputs("Tuner reference", 1, "A4 (Hz)", &cur)
+            .transport_ask("Tuner reference: A4 (Hz)", &cur, x, y)
             .and_then(|s| s.trim().replace(',', ".").parse::<f64>().ok())
             .filter(|v| (400.0..=480.0).contains(v))
         {

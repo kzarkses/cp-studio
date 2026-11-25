@@ -1,8 +1,8 @@
 //! Le transport de REAPER vu d'une extension : l'etat de lecture, la position,
-//! le tempo, la signature, la vitesse, l'etat des actions, et les petites
-//! boites de REAPER (choisir une action, saisir une valeur).
+//! le tempo, la signature, la vitesse, l'etat des actions, et la liste des
+//! actions de REAPER (choisir une action).
 
-use std::ffi::{CStr, CString, c_char, c_void};
+use std::ffi::{CStr, c_char, c_void};
 use std::ptr::null_mut;
 
 use crate::reaper::Reaper;
@@ -309,33 +309,5 @@ impl Reaper {
             Some(f) => unsafe { f(mode, 0, 0) },
             None => -1,
         }
-    }
-
-    /// La petite boite de saisie de REAPER (modale) : `captions` et `values`
-    /// separes par des virgules. `None` si annulee.
-    pub fn user_inputs(&self, title: &str, n: i32, captions: &str, values: &str) -> Option<String> {
-        type F = unsafe extern "C" fn(*const c_char, i32, *const c_char, *mut c_char, i32) -> bool;
-        // SAFETY: bool GetUserInputs(const char*, int, const char*, char*, int).
-        let f = unsafe { self.api::<F>(c"GetUserInputs") }?;
-        let (t, c) = (CString::new(title).ok()?, CString::new(captions).ok()?);
-        let mut buf = vec![0u8; 1024];
-        let v = values.as_bytes();
-        let k = v.len().min(1023);
-        buf[..k].copy_from_slice(&v[..k]);
-        // SAFETY: tampon de 1024 octets annonce comme tel.
-        let ok = unsafe {
-            f(
-                t.as_ptr(),
-                n,
-                c.as_ptr(),
-                buf.as_mut_ptr() as *mut c_char,
-                1024,
-            )
-        };
-        if !ok {
-            return None;
-        }
-        let end = buf.iter().position(|&b| b == 0).unwrap_or(buf.len());
-        Some(String::from_utf8_lossy(&buf[..end]).into_owned())
     }
 }

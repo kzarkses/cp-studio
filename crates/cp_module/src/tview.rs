@@ -1,6 +1,7 @@
 //! La fenetre de CP Transport : posee a la place du transport de REAPER (la
-//! place native que tient le chargeur), sans clavier, redessinee quand l'etat
-//! de lecture change (a la cadence de l'ecran pendant la lecture).
+//! place native que tient le chargeur), ses touches rendues a REAPER (sauf a
+//! ses popovers, poses sur l'ecran : `crate::screenpop`), redessinee quand
+//! l'etat de lecture change (a la cadence de l'ecran pendant la lecture).
 
 use std::path::PathBuf;
 
@@ -9,7 +10,7 @@ use cp_gfx::text::TextCache;
 use cp_gfx::{Canvas, Surface};
 use cp_sys::font::GdiGlyphs;
 use cp_sys::transport::{fmt, play};
-use cp_sys::ui::{self, MenuItem};
+use cp_sys::ui::{self, MenuEntry, MenuItem};
 use cp_sys::win::{self, Hwnd, WinMsg};
 use cp_theme::{Frames, ThemeFiles};
 use cp_transport::{Act, Glyph, Item, RecMode, Skin, Status, ViewTab, fmt_bpm, initials};
@@ -107,6 +108,14 @@ pub(crate) struct TPart {
     pub tu: crate::tuner::Tuner,
     /// La clock MIDI externe et ce qu'elle a fait au transport.
     pub clock: crate::clocksync::ClockSync,
+    /// Les menus et les saisies du transport : un popover pose sur l'ecran
+    /// (la barre est trop basse pour en tenir un).
+    pub sp: crate::screenpop::ScreenPop<Act>,
+    /// Son theme (celui de REAPER, comme les popovers des vues), pris a
+    /// l'ouverture.
+    pop_theme: Option<Theme>,
+    /// La souris, dans la barre (une saisie s'ouvre la ou on a clique).
+    mouse: (f32, f32),
 }
 
 impl TPart {
@@ -136,6 +145,9 @@ impl TPart {
             hover: (cp_transport::Hit::None, std::time::Instant::now()),
             tu: crate::tuner::Tuner::new(r),
             clock: crate::clocksync::ClockSync::load(*r),
+            sp: Default::default(),
+            pop_theme: None,
+            mouse: (0.0, 0.0),
         }
     }
 }
@@ -267,7 +279,6 @@ impl App {
                 .error("CP Transport : la fenetre n'a pas pu etre creee");
             return;
         };
-        self.host.set_keyless(hwnd, true);
         if !self.host.place_take(PLACE_TRANSPORT, Some(hwnd), false) {
             self.host.destroy_window(hwnd);
             self.r.show_console_msg(
@@ -284,6 +295,12 @@ impl App {
     }
 
     pub(crate) fn transport_adopt(&mut self, hwnd: Hwnd) {
+        // Pas « sans clavier » : un clic y revendique les touches, et le
+        // transport les rend toutes a REAPER (0) sauf quand un de ses popovers
+        // est ouvert. Ses raccourcis restent donc a REAPER (Espace apres un
+        // clic sur Loop), et une saisie du tempo recoit ses chiffres. Ici, et
+        // pas a la creation seule : un module recharge reprend la fenetre.
+        self.host.set_keyless(hwnd, false);
         let scale = ui::dpi(hwnd) as f32 / 96.0;
         self.tp.view = Some(TView {
             hwnd,
@@ -626,6 +643,14 @@ impl App {
             self.refresh_items();
         }
         self.transport_tip();
+        // La souris partie ailleurs (une autre application) : le popover se
+        // ferme.
+        if self.tp.sp.is_open() {
+            self.tp.sp.guard();
+            if !self.tp.sp.is_open() {
+                self.transport_pop_render();
+            }
+        }
         let tabs = self.view_tabs();
         if tabs != self.tp.t.views {
             self.tp.t.views = tabs;
@@ -741,6 +766,14 @@ impl App {
     // -----------------------------------------------------------------------
 
     fn transport_act(&mut self, a: Act) {
+        // Le geste que rejouera une question (menu, saisie).
+        let top = self.tp.sp.ph.ask.begin(&a);
+        self.transport_act_one(a);
+        self.tp.sp.ph.ask.end(top);
+        self.transport_pop_render();
+    }
+
+    fn transport_act_one(&mut self, a: Act) {
         let r = self.r;
         match a {
             Act::Start => r.main_on_command(cmd::GO_START),
@@ -754,7 +787,8 @@ impl App {
             Act::SetBpm { bpm, done } => r.set_bpm(bpm, done),
             Act::EditBpm => {
                 let cur = fmt_bpm(self.tp.t.st.bpm);
-                if let Some(v) = r.user_inputs("CP Transport", 1, "Tempo (BPM)", &cur) {
+                let (mx, my) = self.tp.mouse;
+                if let Some(v) = self.transport_ask("Tempo (BPM)", &cur, mx, my) {
                     if let Ok(b) = v.trim().replace(',', ".").parse::<f64>() {
                         r.set_bpm(b, true);
                     }
@@ -786,36 +820,36 @@ impl App {
                 5 => crate::WinOp::FxbOpen,
                 _ => crate::WinOp::FxcOpen,
             }),
-            Act::ViewMenu { i, x, y } => {
-                if i == 1 {
-                    self.browser_place_menu(x, y);
-                } else if i == 2 {
-                    if let Some(h) = self.tp.view.as_ref().map(|v| v.hwnd) {
-                        let (sx, sy) = ui::client_to_screen(h, x as i32, y as i32);
-                        self.gtab_place_menu_at(h, sx, sy);
-                    }
-                } else if i == 3 {
-                    if let Some(h) = self.tp.view.as_ref().map(|v| v.hwnd) {
-                        let (sx, sy) = ui::client_to_screen(h, x as i32, y as i32);
-                        self.ed_place_menu_at(h, sx, sy);
-                    }
-                } else if i == 4 {
-                    if let Some(h) = self.tp.view.as_ref().map(|v| v.hwnd) {
-                        let (sx, sy) = ui::client_to_screen(h, x as i32, y as i32);
-                        self.ses_place_menu_at(h, sx, sy);
-                    }
-                } else if i == 5 {
-                    if let Some(h) = self.tp.view.as_ref().map(|v| v.hwnd) {
-                        let (sx, sy) = ui::client_to_screen(h, x as i32, y as i32);
-                        self.fxb_place_menu_at(h, sx, sy);
-                    }
-                } else if i == 6 {
-                    if let Some(h) = self.tp.view.as_ref().map(|v| v.hwnd) {
-                        let (sx, sy) = ui::client_to_screen(h, x as i32, y as i32);
-                        self.fxc_place_menu_at(h, sx, sy);
-                    }
+            // La place d'une vue, depuis son icone : le popover de l'ecran.
+            Act::ViewMenu { i, x, y } => match i {
+                1 => self.browser_place_menu(x, y),
+                2 => {
+                    let e = self.gtab_place_entries();
+                    let id = self.transport_menu(x, y, &e);
+                    self.gtab_place_pick(id);
                 }
-            }
+                3 => {
+                    let e = self.ed_place_entries();
+                    let id = self.transport_menu(x, y, &e);
+                    self.ed_place_pick(id);
+                }
+                4 => {
+                    let e = self.ses_place_entries();
+                    let id = self.transport_menu(x, y, &e);
+                    self.ses_place_pick(id);
+                }
+                5 => {
+                    let e = self.fxb_place_entries();
+                    let id = self.transport_menu(x, y, &e);
+                    self.fxb_place_pick(id);
+                }
+                6 => {
+                    let e = self.fxc_place_entries();
+                    let id = self.transport_menu(x, y, &e);
+                    self.fxc_place_pick(id);
+                }
+                _ => {}
+            },
         }
         let st = self.read_status();
         self.tp.t.set_status(st);
@@ -830,10 +864,49 @@ impl App {
         }
     }
 
-    fn menu_at(&self, x: f32, y: f32, items: &[Option<MenuItem<'_>>]) -> u32 {
-        let Some(v) = &self.tp.view else { return 0 };
-        let (sx, sy) = ui::client_to_screen(v.hwnd, x as i32, y as i32);
-        ui::popup_menu(v.hwnd, sx, sy, items)
+    fn menu_at(&mut self, x: f32, y: f32, items: &[Option<MenuItem<'_>>]) -> u32 {
+        let e = ui::flat_to_tree(items);
+        self.transport_menu(x, y, &e)
+    }
+
+    /// Un menu sous le point (`x`, `y`) de la barre, en popover sur l'ecran :
+    /// 0 tant que le choix n'est pas fait (le geste se rejouera avec lui).
+    pub(crate) fn transport_menu(&mut self, x: f32, y: f32, e: &[MenuEntry]) -> u32 {
+        let Some(h) = self.tp.view.as_ref().map(|v| v.hwnd) else {
+            return 0;
+        };
+        self.tp.sp.menu(h, x, y, e)
+    }
+
+    /// Une valeur a saisir, en popover sur l'ecran.
+    pub(crate) fn transport_ask(
+        &mut self,
+        title: &str,
+        cur: &str,
+        x: f32,
+        y: f32,
+    ) -> Option<String> {
+        let h = self.tp.view.as_ref().map(|v| v.hwnd)?;
+        self.tp.sp.text(h, title, cur, x, y)
+    }
+
+    /// Pose le popover a l'ecran (ou l'en retire).
+    pub(crate) fn transport_pop_render(&mut self) {
+        // Ferme, son image est deja retiree (`ScreenPop::close`).
+        if !self.tp.sp.is_open() {
+            self.tp.pop_theme = None;
+            return;
+        }
+        if self.tp.pop_theme.is_none() {
+            let sc = self.tp.view.as_ref().map_or(1.0, |v| v.theme.scale);
+            self.tp.pop_theme = Some(self.reaper_theme(sc));
+        }
+        let Some(th) = self.tp.pop_theme.clone() else {
+            return;
+        };
+        self.tp
+            .sp
+            .render(&th, &mut self.text, &mut self.icons, &mut self.scratch);
     }
 
     fn item_menu(&mut self, i: usize, x: f32, y: f32) {
@@ -957,95 +1030,60 @@ impl App {
     }
 
     fn bar_menu(&mut self, x: f32, y: f32) {
+        use cp_transport::TunerMode;
         let tm = self.tp.tu.mode;
-        let a4 = format!("Tuner reference: A4 = {} Hz...", self.tp.tu.a4);
         // La clock MIDI externe : suivre le tempo et le depart d'une autre
         // machine (Ableton, une boite a rythmes) sur une entree MIDI.
         let ins = self.r.midi_inputs();
         let cur = self.tp.clock.dev;
-        let names: Vec<String> = ins
-            .iter()
-            .map(|(_, n)| format!("External MIDI clock: {n}"))
-            .collect();
-        let mut clock: Vec<Option<MenuItem<'_>>> = vec![
-            None,
-            Some(MenuItem {
-                id: M_CLOCK_OFF,
-                text: "External MIDI clock: off",
-                checked: cur < 0,
-                enabled: true,
-            }),
-        ];
-        for ((i, _), n) in ins.iter().zip(&names) {
-            clock.push(Some(MenuItem {
-                id: M_CLOCK_DEV + *i as u32,
-                text: n,
-                checked: cur == *i,
-                enabled: true,
-            }));
+        let mut clock = vec![MenuEntry::check(M_CLOCK_OFF, "Off", cur < 0)];
+        for (i, n) in &ins {
+            clock.push(MenuEntry::check(
+                M_CLOCK_DEV + *i as u32,
+                n.clone(),
+                cur == *i,
+            ));
         }
         // Le retard du maitre : ce qui reste a caler a l'oreille (la
         // latence de la carte est deja comptee).
-        let delays: Vec<String> = DELAYS
-            .iter()
-            .map(|d| format!("Clock delay: {d:+.0} ms"))
-            .collect();
-        clock.push(None);
-        for (k, (d, t)) in DELAYS.iter().zip(&delays).enumerate() {
-            clock.push(Some(MenuItem {
+        clock.push(MenuEntry::Sep);
+        for (k, d) in DELAYS.iter().enumerate() {
+            clock.push(MenuEntry::Item {
                 id: M_CLOCK_DELAY + k as u32,
-                text: t,
+                text: format!("Delay {d:+.0} ms"),
                 checked: (self.tp.clock.delay_ms - d).abs() < 1e-9,
                 enabled: cur >= 0,
-            }));
+            });
         }
-        let items = [
-            Some(MenuItem {
-                id: M_ADD,
-                text: "Add action...",
-                checked: false,
-                enabled: true,
-            }),
-            None,
-            Some(MenuItem {
-                id: M_TUNER_CLOCK,
-                text: "Tuner: in the clock, when stopped",
-                checked: tm == cp_transport::TunerMode::Clock,
-                enabled: true,
-            }),
-            Some(MenuItem {
-                id: M_TUNER_SLOT,
-                text: "Tuner: its own place, in the middle",
-                checked: tm == cp_transport::TunerMode::Slot,
-                enabled: true,
-            }),
-            Some(MenuItem {
-                id: M_TUNER_OFF,
-                text: "Tuner: off",
-                checked: tm == cp_transport::TunerMode::Off,
-                enabled: true,
-            }),
-            Some(MenuItem {
+        let tuner = vec![
+            MenuEntry::check(
+                M_TUNER_CLOCK,
+                "In the clock, when stopped",
+                tm == TunerMode::Clock,
+            ),
+            MenuEntry::check(
+                M_TUNER_SLOT,
+                "Its own place, in the middle",
+                tm == TunerMode::Slot,
+            ),
+            MenuEntry::check(M_TUNER_OFF, "Off", tm == TunerMode::Off),
+            MenuEntry::Sep,
+            MenuEntry::Item {
                 id: M_TUNER_A4,
-                text: &a4,
+                text: format!("Reference: A4 = {} Hz…", self.tp.tu.a4),
                 checked: false,
-                enabled: tm != cp_transport::TunerMode::Off,
-            }),
-            None,
-            Some(MenuItem {
-                id: M_CLOSE,
-                text: "Close CP Transport (show REAPER's transport)",
-                checked: false,
-                enabled: true,
-            }),
+                enabled: tm != TunerMode::Off,
+            },
         ];
-        let mut all: Vec<Option<MenuItem<'_>>> = items.into_iter().collect();
-        let close = all.pop();
-        all.pop();
-        all.extend(clock);
-        all.push(None);
-        all.extend(close);
-        let k = self.menu_at(x, y, &all);
+        let e = vec![
+            MenuEntry::item(M_ADD, "Add action…"),
+            MenuEntry::Sep,
+            MenuEntry::Sub("Tuner".into(), tuner),
+            MenuEntry::Sub("External MIDI clock".into(), clock),
+            MenuEntry::Sep,
+            MenuEntry::item(M_CLOSE, "Close CP Transport (show REAPER's transport)"),
+        ];
+        let k = self.transport_menu(x, y, &e);
         if (M_CLOCK_DELAY..M_CLOCK_DELAY + DELAYS.len() as u32).contains(&k) {
             let d = DELAYS[(k - M_CLOCK_DELAY) as usize];
             self.tp.clock.delay_ms = d;
@@ -1065,10 +1103,10 @@ impl App {
         match k {
             M_ADD => self.add_item(),
             M_CLOSE => self.queue(crate::WinOp::TransportOff),
-            M_TUNER_OFF => self.tuner_set_mode(cp_transport::TunerMode::Off),
-            M_TUNER_CLOCK => self.tuner_set_mode(cp_transport::TunerMode::Clock),
-            M_TUNER_SLOT => self.tuner_set_mode(cp_transport::TunerMode::Slot),
-            M_TUNER_A4 => self.tuner_ask_a4(),
+            M_TUNER_OFF => self.tuner_set_mode(TunerMode::Off),
+            M_TUNER_CLOCK => self.tuner_set_mode(TunerMode::Clock),
+            M_TUNER_SLOT => self.tuner_set_mode(TunerMode::Slot),
+            M_TUNER_A4 => self.tuner_ask_a4(x, y),
             _ => {}
         }
     }
@@ -1116,6 +1154,14 @@ impl App {
     // Les messages de la fenetre
     // -----------------------------------------------------------------------
 
+    /// Un evenement pour le popover ouvert ; sa reponse rejoue le geste.
+    fn transport_pop_feed(&mut self, ev: Ev) {
+        if let Some(Some(a)) = self.tp.sp.feed(&ev) {
+            self.transport_act(a);
+        }
+        self.transport_pop_render();
+    }
+
     pub(crate) fn transport_wnd(&mut self, m: &WinMsg) -> Option<isize> {
         let hwnd = self.tp.view.as_ref()?.hwnd;
         if m.hwnd != hwnd {
@@ -1128,8 +1174,52 @@ impl App {
                 self.transport_on_frame();
                 return Some(0);
             }
-            // Jamais le clavier : tout va a REAPER.
-            cp_abi::WM_CP_ACCEL => return Some(0),
+            // Le clavier va a REAPER, sauf a un popover ouvert.
+            cp_abi::WM_CP_ACCEL => {
+                let Some(k) = cp_sys::module::key_event(m) else {
+                    return Some(0);
+                };
+                let vk = k.wp as u32;
+                let down = matches!(k.message, msg::KEYDOWN | msg::SYSKEYDOWN);
+                let chr = matches!(k.message, msg::CHAR | msg::SYSCHAR);
+                return Some(match self.tp.sp.key(vk, md, down, chr) {
+                    Some(crate::ask::KeyDo::Feed) => {
+                        if md.ctrl && vk == 0x56 {
+                            if let (Some(t), Some(p)) =
+                                (ui::clipboard_text(hwnd), self.tp.sp.ph.pop.as_mut())
+                            {
+                                p.paste(&t);
+                            }
+                            self.transport_pop_render();
+                        } else {
+                            self.transport_pop_feed(Ev::Key {
+                                vk,
+                                mods: md,
+                                text: None,
+                            });
+                        }
+                        1
+                    }
+                    Some(crate::ask::KeyDo::Code(c)) => c,
+                    None => 0,
+                });
+            }
+            msg::CHAR => {
+                if let Some(c) = char::from_u32(m.wp as u32) {
+                    if self.tp.sp.is_open() {
+                        self.transport_pop_feed(Ev::Char(c));
+                    }
+                }
+                return Some(0);
+            }
+            // La souris prise par un autre : le popover se ferme.
+            msg::CAPTURECHANGED => {
+                if self.tp.sp.is_open() && m.lp != hwnd.0 {
+                    self.tp.sp.close();
+                    self.transport_pop_render();
+                }
+                return Some(0);
+            }
             msg::SIZE => {
                 self.tp.t.mark();
                 self.transport_render(true);
@@ -1183,7 +1273,8 @@ impl App {
                 }
             }
             msg::LBUTTONUP | msg::RBUTTONUP => {
-                if ui::has_capture(hwnd) {
+                // Un popover ouvert garde la souris jusqu'au choix.
+                if ui::has_capture(hwnd) && !self.tp.sp.is_open() {
                     ui::release_capture();
                 }
                 Ev::Up {
@@ -1214,6 +1305,15 @@ impl App {
             }
             _ => return None,
         };
+        if let Ev::Move { x, y, .. } | Ev::Down { x, y, .. } | Ev::Up { x, y, .. } = ev {
+            self.tp.mouse = (x, y);
+        }
+        // Un popover ouvert prend la souris (ses coordonnees passent sur
+        // l'ecran) ; sa reponse rejoue le geste.
+        if self.tp.sp.is_open() {
+            self.transport_pop_feed(ev);
+            return Some(0);
+        }
         if matches!(ev, Ev::Down { .. } | Ev::Leave) {
             if let Some(t) = &mut self.tp.tip {
                 t.hide();
@@ -1230,5 +1330,55 @@ impl App {
             None => self.transport_render(false),
         }
         Some(0)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// L'auto-test des popovers du transport
+// ---------------------------------------------------------------------------
+
+impl App {
+    /// « tpop_open » : le menu de la barre s'ouvre sur l'ecran, la souris
+    /// tenue ; « tpop_check » : Echap le ferme et rend la souris, puis le
+    /// tempo se saisit au clavier (133, remis ensuite).
+    pub(crate) fn transport_selftest_pop(&mut self, step: &str) -> String {
+        let Some(h) = self.tp.view.as_ref().map(|v| v.hwnd) else {
+            return "tpop no_transport".into();
+        };
+        let key = |vk: u32| Ev::Key {
+            vk,
+            mods: cp_ui::Mods::default(),
+            text: None,
+        };
+        match step {
+            "tpop_open" => {
+                self.tp.sp.close();
+                self.transport_act(Act::BarMenu { x: 40.0, y: 18.0 });
+                let img = self.tp.sp.image_window().map_or(0, |w| w.0);
+                format!(
+                    "tpop open={} capture={} shown={} img={img}",
+                    self.tp.sp.is_open() as u8,
+                    ui::has_capture(h) as u8,
+                    (img != 0) as u8
+                )
+            }
+            _ => {
+                let still = self.tp.sp.is_open() as u8;
+                self.transport_pop_feed(key(cp_ui::vk::ESCAPE));
+                let closed = (!self.tp.sp.is_open() && !ui::has_capture(h)) as u8;
+                let bpm0 = self.read_status().bpm;
+                self.tp.mouse = (120.0, 18.0);
+                self.transport_act(Act::EditBpm);
+                let ask = self.tp.sp.is_open() as u8;
+                for c in "133".chars() {
+                    self.transport_pop_feed(Ev::Char(c));
+                }
+                self.transport_pop_feed(key(cp_ui::vk::RETURN));
+                let bpm = self.read_status().bpm;
+                let done = !self.tp.sp.is_open() as u8;
+                self.r.set_bpm(bpm0, true);
+                format!("tpop still={still} esc_closed={closed} ask={ask} bpm={bpm:.1} done={done}")
+            }
+        }
     }
 }
