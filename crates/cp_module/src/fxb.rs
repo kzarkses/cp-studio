@@ -50,7 +50,7 @@ pub(crate) struct FWin {
     theme_key: Vec<Option<(u8, u8, u8)>>,
     tracking: bool,
     closing: bool,
-    tip: Option<ui::Tooltip>,
+    tip: Option<crate::tip::Tip>,
     hover: (Hit, Instant),
 }
 
@@ -1527,10 +1527,17 @@ impl App {
             return;
         };
         if w.tip.is_none() {
-            w.tip = ui::Tooltip::new(w.hwnd);
+            w.tip = crate::tip::Tip::new(w.hwnd);
         }
         if let Some(t) = &mut w.tip {
-            t.show(&text, sx + 12, sy + 20);
+            t.show(
+                &text,
+                sx + 12,
+                sy + 20,
+                &w.theme,
+                &mut self.text,
+                &mut self.scratch,
+            );
         }
     }
 

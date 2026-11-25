@@ -1861,6 +1861,59 @@ fn shadow(cv: &mut Canvas<'_>, th: &Theme, r: R) {
     }
 }
 
+// ---------------------------------------------------------------------------
+// L'infobulle
+// ---------------------------------------------------------------------------
+
+/// Les lignes d'une infobulle (un saut de ligne, ou le retour-saut d'un
+/// texte de Windows).
+fn tip_lines(s: &str) -> Vec<&str> {
+    s.lines().map(str::trim_end).collect()
+}
+
+/// La taille d'une infobulle dans le style des popovers (une ligne par saut
+/// de ligne ; la premiere en clair, les suivantes estompees).
+pub fn tip_size(th: &Theme, text: &mut TextCache, s: &str) -> (f32, f32) {
+    let f = th.font_small();
+    let (px, py, lh) = (th.s(9.0), th.s(6.0), th.s(17.0));
+    let lines = tip_lines(s);
+    let w = lines
+        .iter()
+        .map(|l| text.measure(f, l))
+        .fold(0.0f32, f32::max);
+    (
+        (w + 2.0 * px).ceil(),
+        (lines.len().max(1) as f32 * lh + 2.0 * py).ceil(),
+    )
+}
+
+/// Dessine une infobulle, son coin haut-gauche en (`x`, `y`) ; son ombre
+/// deborde de 12 px.
+pub fn draw_tip(cv: &mut Canvas<'_>, th: &Theme, text: &mut TextCache, s: &str, x: f32, y: f32) {
+    let (w, h) = tip_size(th, text, s);
+    let p = Pal::of(th);
+    let r = R::new(x, y, w, h);
+    shadow(cv, th, r);
+    let rad = th.s(7.0);
+    rrect(cv, r.x, r.y, r.w, r.h, rad, p.bg);
+    rline(cv, r.x, r.y, r.w, r.h, rad, 1.0, p.line);
+    let f = th.font_small();
+    let (px, py, lh) = (th.s(9.0), th.s(6.0), th.s(17.0));
+    for (i, l) in tip_lines(s).iter().enumerate() {
+        text.draw_in(
+            cv,
+            f,
+            x + px,
+            y + py + i as f32 * lh,
+            w - 2.0 * px,
+            lh,
+            l,
+            if i == 0 { p.text } else { p.dim },
+            Align::Left,
+        );
+    }
+}
+
 fn body(cv: &mut Canvas<'_>, th: &Theme, p: &Pal, r: R) {
     let rad = th.s(10.0);
     rrect(cv, r.x, r.y, r.w, r.h, rad, p.bg);

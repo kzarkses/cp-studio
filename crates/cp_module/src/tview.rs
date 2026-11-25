@@ -102,7 +102,7 @@ pub(crate) struct TPart {
     /// Battements depuis la derniere relecture des icones.
     since_items: u32,
     /// L'infobulle, et la cible survolee depuis quand.
-    tip: Option<ui::Tooltip>,
+    tip: Option<crate::tip::Tip>,
     hover: (cp_transport::Hit, std::time::Instant),
     /// L'accordeur.
     pub tu: crate::tuner::Tuner,
@@ -689,11 +689,15 @@ impl App {
             return;
         };
         if self.tp.tip.is_none() {
-            self.tp.tip = ui::Tooltip::new(hwnd);
+            self.tp.tip = crate::tip::Tip::new(hwnd);
         }
         let (sx, sy) = ui::client_to_screen(hwnd, x as i32, (y + bh) as i32 + 6);
+        // Le theme de REAPER, comme les infobulles des vues (celui du
+        // transport est son habillage).
+        let sc = self.tp.view.as_ref().map_or(1.0, |v| v.theme.scale);
+        let th = self.reaper_theme(sc);
         if let Some(t) = &mut self.tp.tip {
-            t.show(&text, sx, sy);
+            t.show(&text, sx, sy, &th, &mut self.text, &mut self.scratch);
         }
     }
 

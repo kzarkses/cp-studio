@@ -40,7 +40,7 @@ pub(crate) struct EWin {
     theme_key: Vec<Option<(u8, u8, u8)>>,
     tracking: bool,
     closing: bool,
-    tip: Option<ui::Tooltip>,
+    tip: Option<crate::tip::Tip>,
     hover: (Hit, Instant),
     tip_text: String,
 }
@@ -858,11 +858,11 @@ impl App {
             }
         };
         if w.tip.is_none() {
-            w.tip = ui::Tooltip::new(w.hwnd);
+            w.tip = crate::tip::Tip::new(w.hwnd);
         }
         let (sx, sy) = ui::client_to_screen(w.hwnd, x as i32, y as i32 + 6);
         if let Some(t) = &mut w.tip {
-            t.show(&text.replace('\n', "\r\n"), sx, sy);
+            t.show(&text, sx, sy, &w.theme, &mut self.text, &mut self.scratch);
         }
         w.tip_text = text;
     }

@@ -5,7 +5,7 @@
 //! supposent rien d'un handle (Windows echoue proprement sur un handle mort).
 
 use std::ffi::c_void;
-use std::ptr::{null, null_mut};
+use std::ptr::null_mut;
 
 use crate::win::{Hwnd, Rect, wide};
 
@@ -959,207 +959,6 @@ impl Drop for VBlank {
 }
 
 // ---------------------------------------------------------------------------
-// L'infobulle
-// ---------------------------------------------------------------------------
-
-#[repr(C)]
-struct ToolInfoW {
-    size: u32,
-    flags: u32,
-    hwnd: Raw,
-    id: usize,
-    rect: Rect,
-    hinst: Raw,
-    text: *mut u16,
-    lparam: isize,
-    reserved: Raw,
-}
-
-#[repr(C)]
-struct InitCc {
-    size: u32,
-    icc: u32,
-}
-
-#[link(name = "comctl32")]
-unsafe extern "system" {
-    fn InitCommonControlsEx(i: *const InitCc) -> i32;
-}
-
-#[link(name = "user32")]
-unsafe extern "system" {
-    #[link_name = "CreateWindowExW"]
-    fn CreateWindowExW2(
-        ex: u32,
-        class: *const u16,
-        title: *const u16,
-        style: u32,
-        x: i32,
-        y: i32,
-        w: i32,
-        h: i32,
-        parent: Raw,
-        menu: Raw,
-        inst: Raw,
-        param: Raw,
-    ) -> Raw;
-    #[link_name = "SendMessageW"]
-    fn SendMessageW2(h: Raw, msg: u32, wp: usize, lp: isize) -> isize;
-    #[link_name = "DestroyWindow"]
-    fn DestroyWindow2(h: Raw) -> i32;
-}
-
-/// Une infobulle de Windows, posee ou on veut (« tracking ») : le texte d'une
-/// icone, sous elle. Son code est celui de Windows (comctl32) : un module
-/// recharge peut en tenir une sans rien confier a Windows de son propre code.
-pub struct Tooltip {
-    h: Hwnd,
-    owner: Hwnd,
-    shown: bool,
-}
-
-const WM_USER: u32 = 0x0400;
-const TTM_TRACKACTIVATE: u32 = WM_USER + 17;
-const TTM_TRACKPOSITION: u32 = WM_USER + 18;
-const TTM_SETMAXTIPWIDTH: u32 = WM_USER + 24;
-const TTM_ADDTOOLW: u32 = WM_USER + 50;
-const TTM_UPDATETIPTEXTW: u32 = WM_USER + 57;
-const TTF_IDISHWND: u32 = 0x0001;
-const TTF_TRACK: u32 = 0x0020;
-const TTF_ABSOLUTE: u32 = 0x0080;
-
-impl Tooltip {
-    pub fn new(owner: Hwnd) -> Option<Tooltip> {
-        let icc = InitCc { size: 8, icc: 0xFF };
-        let class = wide("tooltips_class32");
-        const WS_POPUP: u32 = 0x8000_0000;
-        const TTS_ALWAYSTIP: u32 = 0x01;
-        const TTS_NOPREFIX: u32 = 0x02;
-        const WS_EX_TOPMOST: u32 = 0x0008;
-        const CW_USEDEFAULT: i32 = 0x8000_0000_u32 as i32;
-        // SAFETY: structures completes, chaines terminees par zero ; la
-        // classe est celle de comctl32.
-        let h = unsafe {
-            InitCommonControlsEx(&icc);
-            CreateWindowExW2(
-                WS_EX_TOPMOST,
-                class.as_ptr(),
-                null(),
-                WS_POPUP | TTS_ALWAYSTIP | TTS_NOPREFIX,
-                CW_USEDEFAULT,
-                CW_USEDEFAULT,
-                CW_USEDEFAULT,
-                CW_USEDEFAULT,
-                owner.raw(),
-                null_mut(),
-                null_mut(),
-                null_mut(),
-            )
-        };
-        if h.is_null() {
-            return None;
-        }
-        let mut empty = [0u16; 1];
-        let ti = ToolInfoW {
-            size: size_of::<ToolInfoW>() as u32,
-            flags: TTF_IDISHWND | TTF_TRACK | TTF_ABSOLUTE,
-            hwnd: owner.raw(),
-            id: owner.0 as usize,
-            rect: Rect::default(),
-            hinst: null_mut(),
-            text: empty.as_mut_ptr(),
-            lparam: 0,
-            reserved: null_mut(),
-        };
-        // SAFETY: TOOLINFOW complet ; la bulle recopie le texte.
-        unsafe {
-            SendMessageW2(h, TTM_ADDTOOLW, 0, &ti as *const ToolInfoW as isize);
-            SendMessageW2(h, TTM_SETMAXTIPWIDTH, 0, 480);
-        }
-        Some(Tooltip {
-            h: Hwnd(h as isize),
-            owner,
-            shown: false,
-        })
-    }
-
-    /// Montre `text` avec son coin haut-gauche en (`sx`, `sy`) (ecran).
-    pub fn show(&mut self, text: &str, sx: i32, sy: i32) {
-        let mut t = wide(text);
-        let ti = ToolInfoW {
-            size: size_of::<ToolInfoW>() as u32,
-            flags: TTF_IDISHWND | TTF_TRACK | TTF_ABSOLUTE,
-            hwnd: self.owner.raw(),
-            id: self.owner.0 as usize,
-            rect: Rect::default(),
-            hinst: null_mut(),
-            text: t.as_mut_ptr(),
-            lparam: 0,
-            reserved: null_mut(),
-        };
-        let pos = ((sy as u16 as u32) << 16 | (sx as u16 as u32)) as isize;
-        // SAFETY: la bulle vit ; TOOLINFOW complet, texte recopie pendant
-        // l'appel.
-        unsafe {
-            SendMessageW2(
-                self.h.raw(),
-                TTM_UPDATETIPTEXTW,
-                0,
-                &ti as *const ToolInfoW as isize,
-            );
-            SendMessageW2(self.h.raw(), TTM_TRACKPOSITION, 0, pos);
-            if !self.shown {
-                SendMessageW2(
-                    self.h.raw(),
-                    TTM_TRACKACTIVATE,
-                    1,
-                    &ti as *const ToolInfoW as isize,
-                );
-            }
-        }
-        self.shown = true;
-    }
-
-    pub fn hide(&mut self) {
-        if !self.shown {
-            return;
-        }
-        let ti = ToolInfoW {
-            size: size_of::<ToolInfoW>() as u32,
-            flags: TTF_IDISHWND | TTF_TRACK | TTF_ABSOLUTE,
-            hwnd: self.owner.raw(),
-            id: self.owner.0 as usize,
-            rect: Rect::default(),
-            hinst: null_mut(),
-            text: null_mut(),
-            lparam: 0,
-            reserved: null_mut(),
-        };
-        // SAFETY: la bulle vit ; TOOLINFOW complet.
-        unsafe {
-            SendMessageW2(
-                self.h.raw(),
-                TTM_TRACKACTIVATE,
-                0,
-                &ti as *const ToolInfoW as isize,
-            );
-        }
-        self.shown = false;
-    }
-
-    pub fn is_shown(&self) -> bool {
-        self.shown
-    }
-}
-
-impl Drop for Tooltip {
-    fn drop(&mut self) {
-        // SAFETY: la fenetre creee par `new`.
-        unsafe { DestroyWindow2(self.h.raw()) };
-    }
-}
-
-// ---------------------------------------------------------------------------
 // Les fenetres du processus, et leur mise en page
 // ---------------------------------------------------------------------------
 
@@ -1171,6 +970,8 @@ unsafe extern "system" {
     fn GetWindowThreadProcessId3(h: Raw, pid: *mut u32) -> u32;
     #[link_name = "IsZoomed"]
     fn IsZoomed3(h: Raw) -> i32;
+    #[link_name = "SendMessageW"]
+    fn SendMessageW2(h: Raw, msg: u32, wp: usize, lp: isize) -> isize;
 }
 
 #[link(name = "kernel32")]

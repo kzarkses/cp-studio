@@ -5,7 +5,8 @@
 //! Sa classe est une classe de Windows (« STATIC ») et son image passe par
 //! `UpdateLayeredWindow` : Windows ne rappelle jamais notre code pour la
 //! peindre. Un module recharge peut donc en tenir une sans rien confier a
-//! Windows de son propre code (comme l'infobulle, `ui::Tooltip`).
+//! Windows de son propre code. Les popovers du transport et les infobulles
+//! de toutes les vues sont des images posees ainsi.
 
 use std::ffi::c_void;
 use std::ptr::{null, null_mut};
@@ -255,6 +256,20 @@ impl Overlay {
 
     pub fn hwnd(&self) -> Hwnd {
         self.h
+    }
+
+    /// Cache l'image (elle se remontre a la prochaine pose).
+    pub fn hide(&mut self) {
+        const SW_HIDE: i32 = 0;
+        if self.shown {
+            // SAFETY: notre fenetre ; sans effet si elle est morte.
+            unsafe { OvShowWindow(self.h.0 as Raw, SW_HIDE) };
+            self.shown = false;
+        }
+    }
+
+    pub fn is_shown(&self) -> bool {
+        self.shown
     }
 }
 

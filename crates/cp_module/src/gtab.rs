@@ -111,7 +111,7 @@ pub(crate) struct GWin {
     tracking: bool,
     closing: bool,
     /// L'infobulle, la cible survolee et depuis quand, le texte montre.
-    tip: Option<ui::Tooltip>,
+    tip: Option<crate::tip::Tip>,
     hover: (cp_tabview::Hit, Instant),
     tip_text: String,
 }
@@ -3524,7 +3524,7 @@ impl App {
             return;
         }
         if w.tip.is_none() {
-            w.tip = ui::Tooltip::new(w.hwnd);
+            w.tip = crate::tip::Tip::new(w.hwnd);
         }
         // L'aide est au bord droit : sa bulle s'ouvre vers la gauche.
         let tx = if h == cp_tabview::Hit::Help {
@@ -3534,7 +3534,7 @@ impl App {
         };
         let (sx, sy) = ui::client_to_screen(w.hwnd, tx as i32, (y + bh) as i32 + 6);
         if let Some(t) = &mut w.tip {
-            t.show(&text.replace('\n', "\r\n"), sx, sy);
+            t.show(&text, sx, sy, &w.theme, &mut self.text, &mut self.scratch);
         }
         w.tip_text = text;
     }

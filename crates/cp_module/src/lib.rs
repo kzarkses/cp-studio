@@ -54,6 +54,7 @@ mod items;
 mod native;
 mod screenpop;
 mod session;
+mod tip;
 mod tuner;
 mod tview;
 
@@ -386,7 +387,7 @@ struct View {
     /// L'infobulle : ce qu'elle explique (et depuis quand la souris y est),
     /// et la bulle de Windows.
     tip_key: Option<(String, std::time::Instant)>,
-    tip: Option<ui::Tooltip>,
+    tip: Option<crate::tip::Tip>,
     tip_shown: bool,
     mouse: (f32, f32),
     surf: Surface,
@@ -1509,11 +1510,11 @@ impl App {
             return;
         }
         if v.tip.is_none() {
-            v.tip = ui::Tooltip::new(v.hwnd);
+            v.tip = crate::tip::Tip::new(v.hwnd);
         }
         let (sx, sy) = ui::client_to_screen(v.hwnd, rx as i32, (ry + rh) as i32 + 6);
         if let Some(t) = &mut v.tip {
-            t.show(&text.replace('\n', "\r\n"), sx, sy);
+            t.show(&text, sx, sy, &v.theme, &mut self.text, &mut self.scratch);
             v.tip_shown = true;
         }
     }
