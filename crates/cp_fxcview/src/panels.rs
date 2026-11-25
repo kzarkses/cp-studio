@@ -571,7 +571,20 @@ fn env_card(b: &mut B, j: &Js, r: R) {
             true,
             "Envelope timing: seconds or tempo divisions",
         );
-        let _ = Ctl::SgHold;
+        // HOLD : une note tant qu'on appuie (Manual seulement).
+        let manual = j.r(15) < 0.5;
+        b.push(
+            R::new(x, y + bh + b.s(4.0), w, bh),
+            Ctl::SgHold,
+            Look::Button {
+                label: "HOLD".into(),
+                icon: None,
+                on: false,
+                enabled: manual,
+                tone: crate::build::Tone::Normal,
+            },
+            "Press and hold: plays the Sound Gen (Manual trigger)",
+        );
     } else {
         let list = [
             (7, "RATE", format!("{:.2} Hz", j.r(7)), j.r(6) > 0.5, false),

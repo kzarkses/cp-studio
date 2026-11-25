@@ -1799,6 +1799,12 @@ impl SelfTest {
                     ),
                     ("self_refused", "1", "une macro ne se mene pas elle-meme"),
                     (
+                        "order_links",
+                        "1",
+                        "ROLL de l'ordre : chaque lien suit son effet a sa nouvelle place",
+                    ),
+                    ("order_fx", "1", "ROLL de l'ordre : aucun effet perdu"),
+                    (
                         "dmod",
                         "1",
                         "un lien sur un lien : une voie de profondeur du Mod Mix",

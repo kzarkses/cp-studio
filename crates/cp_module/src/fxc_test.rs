@@ -104,6 +104,10 @@ impl App {
             return "run FAIL ReaEQ".into();
         }
         let eq_guid = r.xc_fx_guid(t, 0).unwrap_or_default();
+        if r.xc_fx_add(t, "ReaComp", None).is_none() {
+            return "run FAIL ReaComp".into();
+        }
+        let comp_guid = r.xc_fx_guid(t, 1).unwrap_or_default();
         self.fxc.place = Place::Float;
         self.fxc_open();
         let guid = r.xc_guid(t).unwrap_or_default();
@@ -215,15 +219,44 @@ impl App {
         self.fxc.roll.armed = [true, true, true, true, true, false, false, false];
         self.fxc_roll(None);
         self.fxc_sync_tick(false);
-        let eqg = eq_guid.clone();
+        let (eqg, cg) = (eq_guid.clone(), comp_guid.clone());
         let n = self
             .fxc
             .t
             .tracked()
-            .filter(|(k, _)| k.starts_with(&eqg))
+            .filter(|(k, _)| k.starts_with(&eqg) || k.starts_with(&cg))
             .count();
         out.push(format!("roll_tracked={n}"));
         ok &= (1..=8).contains(&n);
+        // 5b. ROLL de l'ordre (et du contournement) : la chaine change, les
+        //     liens suivent chaque effet a sa nouvelle place.
+        self.fxc.roll.armed = [false, false, false, false, false, true, true, false];
+        let mut orders = Vec::new();
+        for _ in 0..3 {
+            self.fxc_roll(None);
+            self.fxc_sync_tick(false);
+            let eq_at = r.xc_fx_index(t, &eq_guid).map_or(-1, |i| i as i64);
+            let comp_at = r.xc_fx_index(t, &comp_guid).map_or(-1, |i| i as i64);
+            orders.push(format!("{eq_at}/{comp_at}"));
+        }
+        let links_ok = self.fxc.plan.links.iter().all(|l| {
+            let want = match l.src {
+                cp_fxc::links::LSrc::Fx { fx, param } => Some((fx as i64, param as i64)),
+                cp_fxc::links::LSrc::Midi { .. } => self.fxc_test_link(t, l.fx, l.param),
+            };
+            self.fxc_test_link(t, l.fx, l.param) == want
+        });
+        let both = r.xc_fx_index(t, &eq_guid).is_some() && r.xc_fx_index(t, &comp_guid).is_some();
+        out.push(format!(
+            "order={} order_links={} order_fx={}",
+            orders.join(","),
+            links_ok as u8,
+            both as u8
+        ));
+        ok &= links_ok && both;
+        for i in 0..r.xc_fx_count(t) {
+            r.xc_fx_set_enabled(t, i, true);
+        }
         // 6. Un preset : enregistre, la piste change, rappele.
         let before: Vec<String> = self.fxc.t.tracked().map(|(k, _)| k.clone()).collect();
         self.fxc_act(Act::Click(Ctl::UntrackAll, Mods::default()));
