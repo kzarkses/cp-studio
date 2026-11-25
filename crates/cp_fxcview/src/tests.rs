@@ -284,7 +284,7 @@ fn every_control_is_where_it_is_drawn() {
                 got,
                 Ctl::MacroDot(_) | Ctl::TileDot(_) | Ctl::AxisDot(_) | Ctl::DockHandle
             )
-            && !matches!(it.ctl, Ctl::FxHead(_))
+            && !matches!(it.ctl, Ctl::FxHead(_) | Ctl::Pool(_))
         {
             panic!("{:?} at ({x}, {y}) gives {got:?}", it.ctl);
         }

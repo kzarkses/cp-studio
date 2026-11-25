@@ -301,6 +301,8 @@ pub enum Ctl {
     MacroDot(u8),
     // Le centre.
     Tab(u8),
+    /// La colonne d'un pool (vrai : DETACHED), la ou un en-tete se pose.
+    Pool(bool),
     AddFx(bool),
     CollapseAll,
     UntrackAll,
@@ -411,6 +413,8 @@ pub enum Act {
     DockGrab,
     DockSwitch(usize),
     ViewMenu(f32, f32),
+    /// Un en-tete d'effet tire dans l'autre colonne : (GUID, hors de ROLL).
+    MoveFx(String, bool),
     /// Rien a faire de plus que redessiner.
     Changed,
 }
@@ -486,6 +490,13 @@ enum Drag {
     Handle {
         x0: f32,
         y0: f32,
+    },
+    /// Un en-tete d'effet : un clic le replie, un glisser le change de pool.
+    FxHead {
+        guid: String,
+        x0: f32,
+        y0: f32,
+        moved: bool,
     },
     Key(u8),
 }
@@ -572,6 +583,16 @@ impl View {
 
     pub fn dragging(&self) -> bool {
         self.drag.is_some()
+    }
+
+    /// L'en-tete d'effet qu'on tire (son GUID), pour le dessiner.
+    pub fn moving_fx(&self) -> Option<&str> {
+        match &self.drag {
+            Some(Drag::FxHead {
+                guid, moved: true, ..
+            }) => Some(guid),
+            _ => None,
+        }
     }
 
     /// Une pastille de source est tiree (le module garde les images).
@@ -901,6 +922,15 @@ impl View {
                 });
                 Some(Act::Value(c, 1.0))
             }
+            (Ctl::FxHead(g), _) => {
+                self.drag = Some(Drag::FxHead {
+                    guid: g.clone(),
+                    x0: x,
+                    y0: y,
+                    moved: false,
+                });
+                None
+            }
             _ => {
                 self.drag = Some(Drag::Press { ctl: c, mods });
                 None
@@ -1058,6 +1088,24 @@ impl View {
                 }
                 None
             }
+            Drag::FxHead {
+                guid,
+                x0,
+                y0,
+                moved,
+            } => {
+                if !moved && (x - x0).abs() + (y - y0).abs() < 5.0 * self.scale {
+                    return None;
+                }
+                self.drag = Some(Drag::FxHead {
+                    guid,
+                    x0,
+                    y0,
+                    moved: true,
+                });
+                self.mark();
+                Some(Act::Changed)
+            }
             Drag::Press { .. } => None,
         }
     }
@@ -1108,6 +1156,21 @@ impl View {
                 (c != Ctl::None).then_some(Act::Drop(slot, c))
             }
             Some(Drag::Seam { .. }) => Some(Act::Changed),
+            Some(Drag::FxHead { guid, moved, .. }) => {
+                if !moved {
+                    return Some(Act::Click(Ctl::FxHead(guid), mods));
+                }
+                self.mark();
+                // La colonne sous la souris.
+                self.items
+                    .iter()
+                    .rev()
+                    .find_map(|i| match i.ctl {
+                        Ctl::Pool(d) if i.r.has(x, y) => Some(d),
+                        _ => None,
+                    })
+                    .map(|d| Act::MoveFx(guid, d))
+            }
             Some(Drag::Paint { ctl, .. }) => Some(Act::End(ctl)),
             Some(Drag::Key(n)) => Some(Act::Note(n, false)),
             Some(Drag::Press { ctl, mods }) => {

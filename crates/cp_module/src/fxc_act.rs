@@ -254,6 +254,7 @@ impl App {
                     self.fxc_keyboard(None);
                 }
             }
+            Act::MoveFx(g, det) => self.fxc_set_detached(&g, det),
             Act::DockGrab | Act::DockSwitch(_) | Act::ViewMenu(..) => {}
         }
         self.fxc.view.mark();
@@ -1293,31 +1294,7 @@ impl App {
             .map(|r| r.params.iter().map(|p| p.key.clone()).collect())
             .unwrap_or_default();
         match id {
-            1 => {
-                let mut d: Vec<String> = self
-                    .r
-                    .xc_track_ext(t, keys::DETACHED)
-                    .unwrap_or_default()
-                    .split_whitespace()
-                    .map(str::to_string)
-                    .collect();
-                if det {
-                    d.retain(|x| x != g);
-                } else {
-                    d.push(g.to_string());
-                    // Detacher relache ce que ROLL y avait pose.
-                    for k in &keys {
-                        if let Some(p) = self.fxc.t.params.get_mut(k) {
-                            p.sel = false;
-                            p.srcs.clear();
-                        }
-                    }
-                }
-                d.sort();
-                d.dedup();
-                self.r.xc_set_track_ext(t, keys::DETACHED, &d.join(" "));
-                self.fxc_scan_chain();
-            }
+            1 => self.fxc_set_detached(g, !det),
             2 => {
                 self.fxc.t.fx_tracked_only.insert(g.to_string(), !only);
             }
@@ -1384,6 +1361,42 @@ impl App {
             10 => self.r.xc_fx_float(t, fx, true),
             _ => return,
         }
+        self.fxc_changed();
+    }
+
+    /// Un effet sort de ROLL (DETACHED) ou y revient. Le sortir relache ce
+    /// que ROLL y avait pose ; les valeurs restent.
+    pub(crate) fn fxc_set_detached(&mut self, g: &str, det: bool) {
+        let Some(t) = self.fxc_t() else { return };
+        let mut d: Vec<String> = self
+            .r
+            .xc_track_ext(t, keys::DETACHED)
+            .unwrap_or_default()
+            .split_whitespace()
+            .map(str::to_string)
+            .collect();
+        if det {
+            d.push(g.to_string());
+            let keys: Vec<String> = self
+                .fxc
+                .rows
+                .iter()
+                .find(|r| r.guid == g)
+                .map(|r| r.params.iter().map(|p| p.key.clone()).collect())
+                .unwrap_or_default();
+            for k in &keys {
+                if let Some(p) = self.fxc.t.params.get_mut(k) {
+                    p.sel = false;
+                    p.srcs.clear();
+                }
+            }
+        } else {
+            d.retain(|x| x != g);
+        }
+        d.sort();
+        d.dedup();
+        self.r.xc_set_track_ext(t, keys::DETACHED, &d.join(" "));
+        self.fxc_scan_chain();
         self.fxc_changed();
     }
 

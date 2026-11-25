@@ -1288,6 +1288,21 @@ fn params_tab(b: &mut B, v: &View, d: &Data, r: R) -> f32 {
     ];
     let mut tallest = 0.0f32;
     for (detached, pr) in pools {
+        // La colonne entiere recoit un en-tete tire (les effets, poses
+        // ensuite, l'emportent pour la souris).
+        let moving = v
+            .moving_fx()
+            .is_some_and(|g| d.fx.iter().any(|f| f.guid == g && f.detached != detached));
+        b.push(
+            R::new(pr.x, pr.y + b.dy, pr.w, pr.h.max(b.s(40.0))),
+            Ctl::Pool(detached),
+            Look::Panel(if moving {
+                Shade::Tint(th.accent.fade(0.12))
+            } else {
+                Shade::Zone
+            }),
+            "",
+        );
         let mut y = pr.y;
         let n = d.fx.iter().filter(|f| f.detached == detached).count();
         let (label, tip) = if detached {
