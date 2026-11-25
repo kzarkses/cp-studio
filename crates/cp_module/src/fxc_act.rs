@@ -257,13 +257,7 @@ impl App {
                 self.fxc_changed();
             }
             Act::Step(c, k, v) => self.fxc_step(c, k, v),
-            Act::Note(n, on) => {
-                if on {
-                    self.fxc_keyboard(Some(n));
-                } else {
-                    self.fxc_keyboard(None);
-                }
-            }
+            Act::Note(n, on) => self.fxc_key_gesture(n, on),
             Act::MoveFx(g, det) => self.fxc_set_detached(&g, det),
             Act::DockGrab | Act::DockSwitch(_) | Act::ViewMenu(..) => {}
         }
@@ -734,6 +728,7 @@ impl App {
                 }
             }
             Ctl::AxisKnob(a) => {
+                self.fxc.pad_target = None;
                 let p = &mut self.fxc.t.pad;
                 if a == 0 {
                     p.x = v;
@@ -756,7 +751,7 @@ impl App {
                 self.fxc_slot_write(f);
             }
             Ctl::StepLen => {
-                self.fxc_slot_write(SlotW::Raw(SlotField::Len, (1.0 + v * 15.0).round()));
+                self.fxc_slot_write(SlotW::Raw(SlotField::Len, cp_fxcview::len_of(v)));
             }
             Ctl::LinkDepth(k, i) => {
                 let g = self.fxc.t.pad.gesture_range;
@@ -779,15 +774,21 @@ impl App {
             Ctl::Js(panel, p) => self.fxc_js_value(panel, p, v),
             Ctl::SeqLen(l) => {
                 if let Some((t, fx)) = self.fxc_js(SEQ) {
-                    let len = (1.0 + v * 15.0).round();
+                    let len = cp_fxcview::len_of(v);
                     self.r
                         .xc_set_raw(t, fx, panels::lane_base(l as usize) + 16, len);
-                    self.fxc_read_values(true);
+                    self.fxc_refresh_js(FxKind::Seq);
                 }
             }
             Ctl::SgHold => {
                 if let Some((t, fx)) = self.fxc_js(SG) {
-                    self.r.xc_set(t, fx, 16, v);
+                    // HOLD ne joue qu'en Triggered + Manual ; le relacher
+                    // passe toujours (rien ne reste tenu).
+                    let triggered = self.r.xc_get_raw(t, fx, 0).0 > 0.5;
+                    let midi = self.r.xc_get_raw(t, fx, 15).0 > 0.5;
+                    if v < 0.5 || (triggered && !midi) {
+                        self.r.xc_set(t, fx, 16, v);
+                    }
                 }
             }
             _ => {}
@@ -1821,8 +1822,11 @@ impl App {
                 }
             }
         }
-        self.fxc_read_values(true);
-        self.fxc.view.mark();
+        if (101..=108).contains(&slot) {
+            self.fxc_refresh_gbank();
+        } else {
+            self.fxc_refresh_js(FxKind::Bank);
+        }
     }
 
     fn fxc_slot_apply_roll(&mut self, slot: i32, rr: &roll::SlotRoll) {
@@ -1951,7 +1955,7 @@ impl App {
                 let hz2 = 440.0 * 2f64.powf((m + fine / 100.0 - 69.0) / 12.0);
                 let n = ((hz2.clamp(20.0, 20000.0) / 20.0).ln() / 1000f64.ln()).clamp(0.0, 1.0);
                 r.xc_set(t, fx, p, n);
-                self.fxc_read_values(true);
+                self.fxc_refresh_js(FxKind::SoundGen);
                 return;
             }
             // FINE d'un oscillateur libre : les cents, la frequence suit.
@@ -1964,22 +1968,25 @@ impl App {
                 r.xc_set_raw(t, fx, o.fine, fine_new);
                 let n = ((hz2.clamp(20.0, 20000.0) / 20.0).ln() / 1000f64.ln()).clamp(0.0, 1.0);
                 r.xc_set(t, fx, o.freq, n);
-                self.fxc_read_values(true);
+                self.fxc_refresh_js(FxKind::SoundGen);
                 return;
             }
         }
-        r.xc_set(t, fx, p, v);
-        let full = panel == SEQ;
-        if let Some(j) = if panel == SG {
-            self.fxc.sg.as_mut()
-        } else {
-            self.fxc.seq.as_mut()
-        } {
-            if p < j.norm.len() {
-                j.norm[p] = v;
+        if panel == SEQ {
+            let (_, lo, hi) = r.xc_get_raw(t, fx, p);
+            if hi - lo >= 2.0 {
+                r.xc_set_raw(t, fx, p, (lo + v * (hi - lo)).round().clamp(lo, hi));
+            } else {
+                r.xc_set(t, fx, p, v);
             }
+        } else {
+            r.xc_set(t, fx, p, v);
         }
-        self.fxc_read_values(full);
+        self.fxc_refresh_js(if panel == SG {
+            FxKind::SoundGen
+        } else {
+            FxKind::Seq
+        });
     }
 
     fn fxc_js_menu(&mut self, panel: u8, p: usize, x: f32, y: f32) {
@@ -2319,6 +2326,23 @@ impl App {
         let Some(fx) = self.fxc.chain.find(FxKind::Seq) else {
             return;
         };
+        // Les seize patterns vivent dans la memoire du JSFX, qu'une extension
+        // ne lit pas : seul le pattern courant reste avec la piste.
+        let mask = self.r.xc_get_raw(t, fx, 220).0.max(0.0) as u32;
+        let n = mask.count_ones();
+        if n > 1
+            && !crate::gtab::selftest()
+            && self.r.xc_message(
+                "FX Constellation",
+                &format!(
+                    "Only the current pattern stays with the track: the other {} are lost when the sequencer is removed (Undo brings them back). Remove it?",
+                    n - 1
+                ),
+                1,
+            ) != 1
+        {
+            return;
+        }
         let skip = [
             12usize, 13, 14, 15, 16, 17, 18, 19, 218, 219, 220, 221, 222, 225, 226,
         ];
@@ -2636,6 +2660,7 @@ impl App {
         self.fxc.t.params = model;
         self.fxc_internal_restore(&p.internal);
         self.fxc.t.pad = p.pad.clone();
+        self.fxc.pad_target = None;
         self.fxc.t.macro_names = p.macro_names.clone();
         self.fxc.t.preset = name.to_string();
         self.fxc.t.snapshot.clear();
@@ -2797,6 +2822,7 @@ impl App {
             }
         }
         self.fxc.t.pad = s.pad.clone();
+        self.fxc.pad_target = None;
         self.fxc.t.macro_names = s.macro_names.clone();
         self.fxc_internal_restore(&s.internal);
         if let Some(b) = self.fxc.chain.find(FxKind::Bridge) {
@@ -3080,6 +3106,7 @@ impl App {
         r.xc_undo_begin();
         self.fxc.t.params.clear();
         self.fxc.t.pad = Pad::default();
+        self.fxc.pad_target = None;
         self.fxc.t.macro_names = Default::default();
         self.fxc.t.preset.clear();
         self.fxc.t.snapshot.clear();

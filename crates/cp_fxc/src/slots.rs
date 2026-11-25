@@ -402,6 +402,8 @@ pub mod sg {
     /// Les sorties des enveloppes 1..4 (une table, pas un calcul).
     pub const ENV_OUT: [usize; 4] = [31, 63, 68, 73];
     pub const EXTRA_COUNT: usize = 74;
+    /// « Continuous Pitch » : le bourdon suit la note accrochee au clavier.
+    pub const CONT_NOTE: usize = 58;
 }
 
 /// Les cles de piste (`P_EXT`) et de projet de l'ancienne version, reprises.

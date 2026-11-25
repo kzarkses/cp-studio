@@ -411,6 +411,13 @@ impl App {
             .collect();
         let text_tick = full || self.fxc.ticks % 10 == 0;
         let all = full || self.fxc.ticks % 30 == 0;
+        let dests: std::collections::HashSet<(usize, usize)> = self
+            .fxc
+            .plan
+            .links
+            .iter()
+            .map(|l| (l.fx, l.param))
+            .collect();
         let mut rows = std::mem::take(&mut self.fxc.rows);
         for row in rows.iter_mut() {
             let Some(fx) = chain.index_of(&row.guid) else {
@@ -426,7 +433,7 @@ impl App {
                 let text_too = text_tick && (shown || full);
                 let read = r.xc_get(t, fx, p.index);
                 self.fxc.scan.entry(p.key.clone()).or_insert(read);
-                p.live = self.fxc_live(&p.key, read);
+                p.live = self.fxc_live(&p.key, read, dests.contains(&(fx, p.index)));
                 if text_too {
                     p.text = r
                         .xc_format_at(t, fx, p.index, p.live)
@@ -437,9 +444,67 @@ impl App {
         self.fxc.rows = rows;
     }
 
+    /// Relit un seul effet interne (le geste qui le regle tourne a la
+    /// cadence de la souris : pas toute la chaine a chaque mouvement).
+    pub(crate) fn fxc_refresh_js(&mut self, kind: FxKind) {
+        let Some(t) = self.fxc_tk() else { return };
+        let Some(fx) = self.fxc.chain.find(kind) else {
+            return;
+        };
+        match kind {
+            FxKind::SoundGen => {
+                let prev = self.fxc.sg.take();
+                let j = self.fxc_read_js(t, fx, true, true, prev.as_ref(), &[31, 52, 63, 68, 73]);
+                for (i, p) in sg::ENV_OUT.iter().enumerate() {
+                    self.fxc.src.insert(201 + i as i32, j.r(*p));
+                }
+                self.fxc.sg = Some(j);
+            }
+            FxKind::Seq => {
+                let prev = self.fxc.seq.take();
+                let j = self.fxc_read_js(
+                    t,
+                    fx,
+                    false,
+                    true,
+                    prev.as_ref(),
+                    &[12, 13, 14, 15, 16, 17, 18, 219, 220, 221],
+                );
+                self.fxc.src.insert(221, j.r(seq::MOD_OUT[0]));
+                self.fxc.src.insert(222, j.r(seq::MOD_OUT[1]));
+                self.fxc.seq = Some(j);
+            }
+            FxKind::Bank => {
+                let prev = self.fxc.bank.take();
+                let b = self.fxc_read_bank(t, fx, true, prev.as_ref());
+                for (i, s) in b.slots.iter().enumerate() {
+                    self.fxc.src.insert(i as i32 + 1, s.out);
+                }
+                self.fxc.bank = Some(b);
+            }
+            _ => {}
+        }
+        self.fxc.view.mark();
+    }
+
+    /// La banque globale relue seule.
+    pub(crate) fn fxc_refresh_gbank(&mut self) {
+        let gb = self.fxc_global_bank();
+        self.fxc.gbank = gb.map(|(mt, fx)| {
+            let prev = self.fxc.gbank.take();
+            self.fxc_read_bank(mt, fx, true, prev.as_ref())
+        });
+        if let Some(b) = &self.fxc.gbank {
+            for (i, s) in b.slots.iter().enumerate() {
+                self.fxc.src.insert(101 + i as i32, s.out);
+            }
+        }
+        self.fxc.view.mark();
+    }
+
     /// La valeur qu'un parametre joue : un lien rend sa base a
     /// `GetParamNormalized`, la modulation se recalcule depuis ses sources.
-    fn fxc_live(&self, key: &str, read: f64) -> f64 {
+    fn fxc_live(&self, key: &str, read: f64, has_link: bool) -> f64 {
         let Some(ps) = self.fxc.t.params.get(key) else {
             return read;
         };
@@ -448,10 +513,6 @@ impl App {
         }
         let pad = &self.fxc.t.pad;
         let g = pad.gesture_range;
-        let has_link = self.fxc.plan.links.iter().any(|l| {
-            split_pkey(key)
-                .is_some_and(|(gd, i)| self.fxc.chain.index_of(gd) == Some(l.fx) && l.param == i)
-        });
         if !has_link {
             return read;
         }
@@ -1212,6 +1273,9 @@ impl App {
     pub(crate) fn fxc_sync_tick(&mut self, down: bool) {
         let Some(t) = self.fxc_tk() else {
             if self.fxc.tk.is_some() {
+                if self.fxc.dirty_at.is_some() {
+                    self.fxc_save_now();
+                }
                 self.fxc.tk = None;
                 self.fxc.view.mark();
             }
@@ -1227,15 +1291,23 @@ impl App {
         let full = self.fxc.ticks % 15 == 0;
         // Le pad lisse rattrape la souris.
         if let Some(tg) = self.fxc.pad_target {
+            let (lx, ly) = (self.fxc.plan.pad_link_x, self.fxc.plan.pad_link_y);
             let p = &self.fxc.t.pad;
-            let (x, y) = cp_fxc::pad::smooth_step((p.x, p.y), tg, p, 1.0 / 30.0);
-            self.fxc_pad_to(x, y);
-            if (x - tg.0).abs() + (y - tg.1).abs() < 0.001 {
+            if (lx && ly) || p.granular || p.smooth <= 0.0 {
                 self.fxc.pad_target = None;
+            } else {
+                let (x, y) = cp_fxc::pad::smooth_step((p.x, p.y), tg, p, 1.0 / 30.0);
+                self.fxc_pad_to(x, y);
+                let ex = if lx { 0.0 } else { (x - tg.0).abs() };
+                let ey = if ly { 0.0 } else { (y - tg.1).abs() };
+                if ex + ey < 0.001 {
+                    self.fxc.pad_target = None;
+                }
+                self.fxc.view.mark();
             }
-            self.fxc.view.mark();
         }
         self.fxc_read_values(full);
+        self.fxc_keyboard_check_mode();
         self.fxc_push_engine();
         // Le pad suit le bridge quand il marche ou qu'un axe est mene.
         let p = &self.fxc.t.pad;
@@ -1313,6 +1385,56 @@ impl App {
         }
         self.fxc.kb_note = note;
         self.fxc.view.mark();
+    }
+
+    /// Une touche du clavier de la fenetre. En Triggered, on la tient (un
+    /// glisser change la note sous la porte) ; en Continuous, un clic
+    /// accroche la note, un clic sur la meme la decroche, relacher ne fait
+    /// rien (comme l'ancienne version).
+    pub(crate) fn fxc_key_gesture(&mut self, n: u8, on: bool) {
+        let cont = self.fxc_sg_continuous();
+        if !cont {
+            self.fxc_keyboard(on.then_some(n));
+            self.fxc.kb_cont = false;
+            return;
+        }
+        if !on {
+            return;
+        }
+        if self.fxc.kb_note == Some(n) {
+            self.fxc_keyboard(None);
+            return;
+        }
+        // Accrocher est le seul geste qui fait suivre le clavier au bourdon
+        // (« Notes »).
+        if let (Some(t), Some(fx)) = (self.fxc_tk(), self.fxc.chain.find(FxKind::SoundGen)) {
+            if self.r.xc_param_count(t, fx) > sg::CONT_NOTE
+                && self.r.xc_get_raw(t, fx, sg::CONT_NOTE).0 < 0.5
+            {
+                self.r.xc_set_raw(t, fx, sg::CONT_NOTE, 1.0);
+            }
+        }
+        self.fxc_keyboard(Some(n));
+        self.fxc.kb_cont = true;
+    }
+
+    /// Le Sound Gen est en mode Continuous (sans Sound Gen : non).
+    fn fxc_sg_continuous(&self) -> bool {
+        match (self.fxc_tk(), self.fxc.chain.find(FxKind::SoundGen)) {
+            (Some(t), Some(fx)) => self.r.xc_get_raw(t, fx, 0).0 < 0.5,
+            _ => false,
+        }
+    }
+
+    /// Un changement de mode lache la touche tenue ou accrochee.
+    pub(crate) fn fxc_keyboard_check_mode(&mut self) {
+        if self.fxc.kb_note.is_none() {
+            return;
+        }
+        let cont = self.fxc.sg.as_ref().is_some_and(|j| j.r(0) < 0.5);
+        if cont != self.fxc.kb_cont {
+            self.fxc_keyboard(None);
+        }
     }
 
     pub(crate) fn fxc_keyboard_release(&mut self) {

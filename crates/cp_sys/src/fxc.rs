@@ -817,6 +817,28 @@ impl Reaper {
         }
     }
 
+    /// La valeur de l'enveloppe a cet instant (None si elle n'est plus).
+    pub fn xc_env_eval(&self, e: Env, time: f64) -> Option<f64> {
+        type F =
+            unsafe extern "C" fn(P, f64, f64, i32, *mut f64, *mut f64, *mut f64, *mut f64) -> i32;
+        let (p, f) = (self.xe(e)?, self.xf::<F>(c"Envelope_Evaluate")?);
+        let mut v = 0.0;
+        // SAFETY: enveloppe vivante ; la sortie est a nous, les autres nulles.
+        unsafe {
+            f(
+                p,
+                time,
+                48_000.0,
+                1,
+                &mut v,
+                null_mut(),
+                null_mut(),
+                null_mut(),
+            )
+        };
+        Some(v)
+    }
+
     pub fn xc_env_sort(&self, e: Env) {
         type F = unsafe extern "C" fn(P) -> bool;
         if let (Some(p), Some(f)) = (self.xe(e), self.xf::<F>(c"Envelope_SortPoints")) {

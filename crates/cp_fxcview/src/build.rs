@@ -1508,6 +1508,17 @@ fn fx_group(b: &mut B, v: &View, d: &Data, f: &crate::FxRow, r: R, list: R) -> f
     y
 }
 
+/// La profondeur que tire Alt + glisser : la premiere source, ou en mode Map
+/// celle de la source choisie dans le rack (0 si elle n'y est pas encore).
+fn knob_depth(v: &View, d: &Data, ps: &PState) -> f64 {
+    let g = d.t.pad.gesture_range;
+    if v.map {
+        ps.index_of(v.sel_slot).map_or(0.0, |i| ps.span(i, g))
+    } else {
+        ps.span(0, g)
+    }
+}
+
 /// Les boutons des effets internes que des sources menent : leurs anneaux,
 /// leur profondeur (Alt + glisser), et ce qu'ils jouent.
 fn dress_internal(items: &mut [Item], v: &View, d: &Data, th: &Theme) {
@@ -1530,7 +1541,7 @@ fn dress_internal(items: &mut [Item], v: &View, d: &Data, th: &Theme) {
         } = &mut it.look
         {
             *rings = rings_of(d, th, ps, false);
-            *depth = ps.span(0, d.t.pad.gesture_range);
+            *depth = knob_depth(v, d, ps);
             let g = d.t.pad.gesture_range;
             let mut sum = 0.0;
             for (i, s) in ps.srcs.iter().enumerate() {
@@ -1669,7 +1680,7 @@ fn param_row(b: &mut B, v: &View, d: &Data, p: &crate::ParamRow, r: R) {
         Ctl::Knob(k.clone()),
         Look::Knob {
             v: base,
-            depth: ps.span(0, d.t.pad.gesture_range),
+            depth: knob_depth(v, d, &ps),
             bipolar: false,
             enabled: true,
             rings,

@@ -374,3 +374,84 @@ fn gestures_become_acts() {
         "{a:?}"
     );
 }
+
+#[test]
+fn painting_fills_skipped_steps_and_bool_lanes_toggle() {
+    let w = world();
+    let p = plan(&w.t, &chain(), &Ctx::default());
+    let d = data(&w, &p);
+    let th = Theme::dark(1.0);
+    let mut v = View::new();
+    v.tab = 2;
+    v.layout(&d, &th, 1500.0, 820.0);
+    // Une voie a interrupteurs : le premier pas touche pose son inverse,
+    // et toute la peinture pose cette valeur.
+    let lane = Ctl::SeqLane(0);
+    let r = rect(&v, &lane);
+    let cw = r.w / 16.0;
+    let first = match v.event(&down(r.x + cw * 0.5, r.cy(), Button::Left, none())) {
+        Some(Act::Step(c, 0, x)) if c == lane => x,
+        a => panic!("{a:?}"),
+    };
+    assert!(first == 0.0 || first == 1.0);
+    // Une souris rapide : du pas 0 au pas 5 d'un coup, les pas 1..4 aussi.
+    let a = v.event(&mv(r.x + cw * 5.5, r.y + 2.0, none()));
+    assert!(matches!(a, Some(Act::Step(_, 5, x)) if x == first), "{a:?}");
+    let filled: Vec<u8> = v
+        .take_pending()
+        .into_iter()
+        .map(|a| match a {
+            Act::Step(_, k, x) => {
+                assert_eq!(x, first);
+                k
+            }
+            a => panic!("{a:?}"),
+        })
+        .collect();
+    assert_eq!(filled, vec![1, 2, 3, 4]);
+    assert_eq!(
+        v.event(&up(r.x + cw * 5.5, r.y + 2.0, Button::Left, none())),
+        Some(Act::End(lane))
+    );
+}
+
+#[test]
+fn the_seam_follows_the_mouse_at_any_scale() {
+    let w = world();
+    let p = plan(&w.t, &chain(), &Ctx::default());
+    let d = data(&w, &p);
+    let th = Theme::dark(1.5);
+    let mut v = View::new();
+    v.layout(&d, &th, 2200.0, 1200.0);
+    let r = rect(&v, &Ctl::Seam(0));
+    let w0 = v.left_w;
+    v.event(&down(r.cx(), r.cy(), Button::Left, none()));
+    v.event(&mv(r.cx() + 30.0, r.cy(), none()));
+    // 30 pixels a l'echelle 1,5 = 20 points.
+    assert!(
+        (v.left_w - (w0 + 20.0)).abs() < 0.01,
+        "{} -> {}",
+        w0,
+        v.left_w
+    );
+    v.event(&up(r.cx() + 30.0, r.cy(), Button::Left, none()));
+}
+
+#[test]
+fn a_lost_mouse_ends_the_gesture() {
+    let w = world();
+    let p = plan(&w.t, &chain(), &Ctx::default());
+    let d = data(&w, &p);
+    let th = Theme::dark(1.0);
+    let mut v = View::new();
+    v.layout(&d, &th, 1500.0, 820.0);
+    let r = rect(&v, &Ctl::Pad);
+    v.event(&down(r.cx(), r.cy(), Button::Left, none()));
+    // Un clic droit pendant le geste ne fait rien.
+    assert_eq!(v.event(&down(r.cx(), r.cy(), Button::Right, none())), None);
+    assert!(v.dragging());
+    // La fenetre perd la souris : le pad est relache.
+    v.cancel();
+    assert!(!v.dragging());
+    assert_eq!(v.take_pending(), vec![Act::PadRelease]);
+}

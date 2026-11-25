@@ -83,6 +83,8 @@ pub(crate) struct CPart {
     /// Les noms des parametres, par effet (GUID, nombre de parametres).
     pub(crate) names: BTreeMap<(String, usize), Vec<(String, u8)>>,
     pub(crate) kb_note: Option<u8>,
+    /// La note du clavier a ete posee en mode Continuous (accrochee).
+    pub(crate) kb_cont: bool,
     pub(crate) morph: f64,
     /// Le prochain effet ajoute va hors de ROLL.
     pub(crate) next_detached: Option<usize>,
@@ -109,6 +111,11 @@ pub(crate) struct CPart {
     /// Les parametres sur lesquels REAPER refuse un lien (des reglages
     /// discrets de certains effets) : ni suivis, ni tires par ROLL.
     pub(crate) unlinkable: std::collections::BTreeSet<String>,
+    /// L'etat d'une piste qu'on n'a pas pu ecrire (son projet n'etait plus
+    /// au premier plan) : GUID -> etat, ecrit des que la piste revient.
+    pub(crate) unsaved: std::collections::BTreeMap<String, String>,
+    /// Nous rendons la souris nous-memes (pas une perte).
+    pub(crate) releasing: bool,
 }
 
 impl CPart {
@@ -154,6 +161,7 @@ impl CPart {
             scan: BTreeMap::new(),
             names: BTreeMap::new(),
             kb_note: None,
+            kb_cont: false,
             morph: 0.0,
             next_detached: None,
             refused: BTreeMap::new(),
@@ -167,6 +175,8 @@ impl CPart {
             last_saved: String::new(),
             capture: Default::default(),
             unlinkable: Default::default(),
+            unsaved: Default::default(),
+            releasing: false,
         }
     }
 }
@@ -205,9 +215,6 @@ impl App {
     /// (48 Ko) va dans le projet, sans annulation.
     pub(crate) fn fxc_save_now(&mut self) {
         self.fxc.dirty_at = None;
-        let Some(t) = self.fxc.tk.filter(|&t| self.r.xc_guid(t).is_some()) else {
-            return;
-        };
         if self.fxc.guid.is_empty() {
             return;
         }
@@ -215,16 +222,52 @@ impl App {
         if s == self.fxc.last_saved {
             return;
         }
+        // La piste doit etre du projet au premier plan : un autre onglet de
+        // projet vient d'etre choisi, elle n'y est plus ; l'etat attend
+        // qu'elle revienne (jamais ecrit dans le mauvais projet). La maitre
+        // n'attend pas : chaque projet a la sienne, son GUID ne la designe
+        // pas.
+        let guid = self.fxc.guid.clone();
+        let here = self.fxc.tk.filter(|&t| self.r.xc_guid(t).is_some());
+        if let Some(t) = here {
+            self.fxc_write_state(t, &guid, &s);
+            self.fxc.unsaved.remove(&guid);
+        } else if guid != "MASTER" {
+            if self.fxc.unsaved.len() >= 32 {
+                if let Some(k) = self.fxc.unsaved.keys().next().cloned() {
+                    self.fxc.unsaved.remove(&k);
+                }
+            }
+            self.fxc.unsaved.insert(guid, s.clone());
+        }
+        self.fxc.last_saved = s;
+    }
+
+    /// Ecrit l'etat d'une piste du projet au premier plan.
+    fn fxc_write_state(&self, t: Tk, guid: &str, s: &str) {
         if s.len() < 48_000 {
-            self.r.xc_set_track_ext(t, PROJ, &s);
-            if self.r.xc_proj_ext(PROJ, &self.fxc.guid).is_some() {
-                self.r.xc_set_proj_ext(PROJ, &self.fxc.guid, "");
+            self.r.xc_set_track_ext(t, PROJ, s);
+            if self.r.xc_proj_ext(PROJ, guid).is_some() {
+                self.r.xc_set_proj_ext(PROJ, guid, "");
             }
         } else {
             self.r.xc_set_track_ext(t, PROJ, "");
-            self.r.xc_set_proj_ext(PROJ, &self.fxc.guid, &s);
+            self.r.xc_set_proj_ext(PROJ, guid, s);
         }
-        self.fxc.last_saved = s;
+    }
+
+    /// Les etats en attente dont la piste est revenue s'ecrivent.
+    pub(crate) fn fxc_flush_unsaved(&mut self) {
+        if self.fxc.unsaved.is_empty() {
+            return;
+        }
+        let keys: Vec<String> = self.fxc.unsaved.keys().cloned().collect();
+        for g in keys {
+            if let Some(t) = self.r.xc_track(&g) {
+                let s = self.fxc.unsaved.remove(&g).unwrap_or_default();
+                self.fxc_write_state(t, &g, &s);
+            }
+        }
     }
 
     /// L'etat garde de la piste : la piste d'abord, puis le projet.
@@ -251,6 +294,7 @@ impl App {
         }
         if let Some(st) = cp_fxc::store::decode(&s) {
             self.fxc.t = st;
+            self.fxc.pad_target = None;
             self.fxc.last_saved = s;
             self.fxc.eng_cache.clear();
             self.fxc_read_preset();
@@ -299,13 +343,17 @@ impl App {
         self.fxc.linked.clear();
         self.fxc.seen_base.clear();
         self.fxc.last_saved.clear();
+        // Un passage en cours se ferme sur l'ancienne piste.
+        self.fxc_capture_end();
         self.fxc.capture = Default::default();
         self.fxc.preset = None;
         self.fxc.preset_modified = false;
         self.fxc.view.carry = None;
         self.fxc.view.scroll[0] = 0.0;
+        self.fxc.pad_target = None;
         self.fxc.rows.clear();
         self.fxc.plan = Plan::default();
+        self.fxc_flush_unsaved();
         let Some(t) = tk else {
             self.fxc.t = Track::default();
             self.fxc.view.mark();
@@ -445,6 +493,7 @@ impl App {
     pub(crate) fn fxc_close(&mut self, user: bool) {
         let in_band = self.fxc_in_band();
         self.fxc_keyboard_release();
+        self.fxc_capture_end();
         if let Some(w) = &mut self.fxc.win {
             w.closing = true;
             let h = w.hwnd;
@@ -632,6 +681,9 @@ impl App {
         if let Some(a) = a {
             self.fxc_act(a);
         }
+        for a in self.fxc.view.take_pending() {
+            self.fxc_act(a);
+        }
         self.fxc_kick();
     }
 
@@ -678,10 +730,13 @@ impl App {
         if self
             .fxc
             .dirty_at
-            .is_some_and(|t| t.elapsed().as_secs_f64() > 0.8)
+            .is_some_and(|t| t.elapsed().as_secs_f64() > 0.1)
             && !self.fxc.view.dragging()
         {
             self.fxc_save_now();
+        }
+        if self.fxc.ticks % 15 == 0 {
+            self.fxc_flush_unsaved();
         }
         if self.fxc.prefs_dirty && self.fxc.ticks % 30 == 0 {
             self.fxc_save_prefs();
@@ -849,15 +904,29 @@ impl App {
                 Some(0)
             }
             msg::LBUTTONUP | msg::RBUTTONUP => {
-                if ui::has_capture(hwnd) {
-                    ui::release_capture();
-                }
                 let b = if m.msg == msg::LBUTTONUP {
                     Button::Left
                 } else {
                     Button::Right
                 };
                 self.fxc_feed(Ev::Up { x, y, b, mods: md });
+                if !self.fxc.view.dragging() && ui::has_capture(hwnd) {
+                    self.fxc.releasing = true;
+                    ui::release_capture();
+                    self.fxc.releasing = false;
+                }
+                Some(0)
+            }
+            // La souris part ailleurs pendant un geste (un menu, une autre
+            // fenetre, Alt+Tab) : le geste finit, rien ne reste tenu.
+            0x0215 if !self.fxc.releasing && m.lp != hwnd.0 => {
+                if self.fxc.view.dragging() {
+                    self.fxc.view.cancel();
+                    for a in self.fxc.view.take_pending() {
+                        self.fxc_act(a);
+                    }
+                    self.fxc_kick();
+                }
                 Some(0)
             }
             msg::MOUSEWHEEL | msg::MOUSEHWHEEL => {

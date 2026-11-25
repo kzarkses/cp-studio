@@ -484,7 +484,9 @@ enum Drag {
         ctl: Ctl,
         r: R,
         n: u8,
-        last: Option<u8>,
+        last: Option<(u8, f64)>,
+        /// Une voie a interrupteurs pose l'inverse du premier pas touche.
+        fill: Option<f64>,
     },
     /// Un clic qui attend son relachement (boutons).
     Press {
@@ -541,6 +543,9 @@ pub struct View {
     pub zone_preview: Option<R>,
     /// La hauteur de contenu de chaque zone qui defile (pour borner).
     content_h: [f32; 5],
+    /// Les actions en plus de celle que rend un evenement (les pas sautes
+    /// d'une peinture, la fin d'un geste interrompu) : le module les vide.
+    pending: Vec<Act>,
 }
 
 impl Default for View {
@@ -574,7 +579,40 @@ impl View {
             carry: None,
             zone_preview: None,
             content_h: [0.0; 5],
+            pending: Vec::new(),
         }
+    }
+
+    /// Les actions en attente (a jouer apres celle de l'evenement).
+    pub fn take_pending(&mut self) -> Vec<Act> {
+        std::mem::take(&mut self.pending)
+    }
+
+    /// Le geste en cours s'arrete sans relachement (la fenetre a perdu la
+    /// souris) : il se termine comme un relachement, rien ne reste coince
+    /// (une note tenue, HOLD, le pad).
+    pub fn cancel(&mut self) {
+        let Some(d) = self.drag.take() else {
+            return;
+        };
+        self.zone_preview = None;
+        self.carry = None;
+        let a = match d {
+            Drag::Knob {
+                ctl, moved: true, ..
+            } => Some(Act::End(ctl)),
+            Drag::Fader { ctl, .. } | Drag::Paint { ctl, .. } => Some(Act::End(ctl)),
+            Drag::Range { .. } => Some(Act::End(Ctl::GRange)),
+            Drag::Pad { .. } => Some(Act::PadRelease),
+            Drag::Key(n) => Some(Act::Note(n, false)),
+            Drag::Press {
+                ctl: Ctl::SgHold, ..
+            } => Some(Act::Value(Ctl::SgHold, 0.0)),
+            Drag::Seam { .. } => Some(Act::Changed),
+            _ => None,
+        };
+        self.pending.extend(a);
+        self.mark();
     }
 
     pub fn mark(&mut self) {
@@ -764,6 +802,12 @@ impl View {
 
     fn down(&mut self, x: f32, y: f32, b: Button, dbl: bool, mods: Mods) -> Option<Act> {
         let (w, h) = self.size;
+        if self.drag.is_some() && self.carry.is_none() {
+            if b != Button::Left {
+                return None;
+            }
+            self.cancel();
+        }
         let c = self.hit(x, y);
         if c == Ctl::DockHandle {
             if b == Button::Right {
@@ -905,13 +949,22 @@ impl View {
                 });
                 None
             }
-            (Ctl::Steps | Ctl::SeqLane(_), Some(Look::Steps { n, .. })) => {
+            (Ctl::Steps | Ctl::SeqLane(_), Some(Look::Steps { n, vals, bools, .. })) => {
                 let r = self.rect_of(&c)?;
+                let fill = bools.then(|| {
+                    let k = step_at(r, n, x) as usize;
+                    if vals.get(k).copied().unwrap_or(0.0) > 0.5 {
+                        0.0
+                    } else {
+                        1.0
+                    }
+                });
                 self.drag = Some(Drag::Paint {
                     ctl: c.clone(),
                     r,
                     n,
                     last: None,
+                    fill,
                 });
                 self.paint(x, y)
             }
@@ -947,19 +1000,38 @@ impl View {
     }
 
     fn paint(&mut self, x: f32, y: f32) -> Option<Act> {
-        let Some(Drag::Paint { ctl, r, n, last }) = self.drag.clone() else {
+        let Some(Drag::Paint {
+            ctl,
+            r,
+            n,
+            last,
+            fill,
+        }) = self.drag.clone()
+        else {
             return None;
         };
-        let cw = r.w / n.max(1) as f32;
-        let k = (((x - r.x) / cw).floor() as i32).clamp(0, n as i32 - 1) as u8;
-        let v = (1.0 - ((y - r.y) / r.h).clamp(0.0, 1.0)) as f64;
+        let k = step_at(r, n, x);
+        let v = fill.unwrap_or((1.0 - ((y - r.y) / r.h.max(1.0)).clamp(0.0, 1.0)) as f64);
+        if last == Some((k, v)) {
+            return None;
+        }
+        // Une souris rapide saute des pas : ceux d'entre deux prennent la
+        // valeur de la droite qui relie les deux points.
+        if let Some((k0, v0)) = last {
+            let (a, b) = (k0.min(k), k0.max(k));
+            for j in a + 1..b {
+                let t = (j as f64 - k0 as f64) / (k as f64 - k0 as f64);
+                self.pending
+                    .push(Act::Step(ctl.clone(), j, v0 + (v - v0) * t));
+            }
+        }
         self.drag = Some(Drag::Paint {
             ctl: ctl.clone(),
             r,
             n,
-            last: Some(k),
+            last: Some((k, v)),
+            fill,
         });
-        let _ = last;
         Some(Act::Step(ctl, k, v))
     }
 
@@ -1065,12 +1137,11 @@ impl View {
                 let dx = x - x0;
                 let min = 160.0 * self.scale;
                 let max = (self.size.0 * 0.45).max(min);
+                let s = self.scale.max(0.1);
                 if which == 0 {
-                    self.left_w =
-                        ((w0 + dx) / self.scale).clamp(min / self.scale, max / self.scale);
+                    self.left_w = (w0 + dx / s).clamp(min / s, max / s);
                 } else {
-                    self.right_w =
-                        ((w0 - dx) / self.scale).clamp(min / self.scale, max / self.scale);
+                    self.right_w = (w0 - dx / s).clamp(min / s, max / s);
                 }
                 self.mark();
                 Some(Act::Changed)
@@ -1208,6 +1279,18 @@ impl View {
         self.mark();
         Some(Act::Changed)
     }
+}
+
+/// Le pas sous l'abscisse.
+fn step_at(r: R, n: u8, x: f32) -> u8 {
+    let cw = r.w / n.max(1) as f32;
+    (((x - r.x) / cw.max(0.1)).floor() as i32).clamp(0, n.max(1) as i32 - 1) as u8
+}
+
+/// Une longueur de 1 a 16 pas sur un curseur : chaque longueur a la meme
+/// largeur.
+pub fn len_of(v: f64) -> f64 {
+    ((v * 16.0).floor() + 1.0).clamp(1.0, 16.0)
 }
 
 /// Le point du pad (y vers le haut).

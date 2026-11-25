@@ -1293,7 +1293,7 @@ pub(crate) fn sequencer(b: &mut B, v: &View, d: &Data, r: R) -> f32 {
                 },
                 bools: lane.bools,
             },
-            "Paint the steps · Alt+click: reset a step",
+            "Paint the steps",
         );
         let kx = sx + sw + b.s(4.0);
         let kk = b.s(44.0);

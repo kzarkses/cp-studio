@@ -31,16 +31,39 @@ impl Cap {
     }
 }
 
+/// Un saut en avant plus long (un clic sur la regle, une image figee) ne
+/// s'efface pas : c'est un nouveau passage.
+const GAP: f64 = 0.35;
+/// Le temps d'une marche aux bords d'un passage.
+const EDGE: f64 = 0.001;
+
 /// L'etat de la capture (pour la session : rien n'est garde).
 #[derive(Default)]
 pub(crate) struct Capture {
     pub armed: Vec<Cap>,
-    /// Le passage en cours : le dernier instant ecrit, et les dernieres
-    /// valeurs.
-    pass: Option<f64>,
-    last: Vec<f64>,
-    envs: Vec<Env>,
+    pass: Option<Pass>,
     pub points: u32,
+}
+
+/// Un passage : de son debut au dernier instant ecrit.
+struct Pass {
+    armed: Vec<Cap>,
+    at: f64,
+    lanes: Vec<Lane>,
+}
+
+/// Une source armee dans le passage.
+struct Lane {
+    /// Son enveloppe (une source sans enveloppe garde sa place : les
+    /// rangs restent ceux des sources armees).
+    env: Option<Env>,
+    /// La derniere valeur ecrite et son instant.
+    last: f64,
+    last_t: f64,
+    /// L'enveloppe avait des points avant le passage, et sa valeur
+    /// d'origine au dernier instant (pour s'y raccorder a la fin).
+    had: bool,
+    orig: f64,
 }
 
 impl App {
@@ -122,19 +145,19 @@ impl App {
     }
 
     /// Le battement : pendant que REAPER joue, un point par source armee
-    /// quand elle bouge (au plus 30 par seconde), le passage efface devant
-    /// lui.
+    /// quand elle bouge (au plus un par battement) ; le passage efface
+    /// devant lui ce qu'il y avait, et se raccorde a l'enveloppe d'origine
+    /// a ses deux bords.
     pub(crate) fn fxc_capture_tick(&mut self) {
-        if self.fxc.capture.armed.is_empty() {
-            self.fxc_capture_end();
-            return;
-        }
         let playing = self.r.xc_play_state() & 1 != 0;
-        if !playing {
+        let bridge = self.fxc.chain.find(FxKind::Bridge);
+        let (Some(t), Some(b), true, false) = (
+            self.fxc.tk,
+            bridge,
+            playing,
+            self.fxc.capture.armed.is_empty(),
+        ) else {
             self.fxc_capture_end();
-            return;
-        }
-        let (Some(t), Some(b)) = (self.fxc.tk, self.fxc.chain.find(FxKind::Bridge)) else {
             return;
         };
         let now = self.r.xc_play_position();
@@ -147,43 +170,110 @@ impl App {
                 Cap::Macro(n) => self.fxc.macros[*n as usize - 1],
             })
             .collect();
-        let cap = &mut self.fxc.capture;
-        let fresh = cap.pass.is_none() || cap.envs.len() != armed.len();
-        if fresh {
-            cap.envs = armed
-                .iter()
-                .filter_map(|c| self.r.xc_fx_envelope(t, b, c.param(), true))
-                .collect();
-            cap.last = vec![f64::NAN; armed.len()];
+        // Un autre jeu de sources, un saut en arriere (une boucle) ou trop
+        // loin en avant : le passage se ferme, un autre commence.
+        let broken = self
+            .fxc
+            .capture
+            .pass
+            .as_ref()
+            .is_some_and(|p| p.armed != armed || now < p.at - 1e-4 || now - p.at > GAP);
+        if broken {
+            self.fxc_capture_end();
         }
-        let from = cap.pass.unwrap_or(now);
-        if now < from {
-            // Un saut en arriere (une boucle) : un nouveau passage.
-            cap.pass = Some(now);
+        if self.fxc.capture.pass.is_none() {
+            let r = self.r;
+            let mut lanes = Vec::with_capacity(armed.len());
+            for (i, c) in armed.iter().enumerate() {
+                let env = r.xc_fx_envelope(t, b, c.param(), true);
+                let v = vals[i];
+                let mut lane = Lane {
+                    env,
+                    last: v,
+                    last_t: now,
+                    had: false,
+                    orig: v,
+                };
+                if let Some(e) = env {
+                    lane.had = r.xc_env_count(e) > 0;
+                    if lane.had {
+                        // Ce qu'il y avait juste avant reste : une marche.
+                        lane.orig = r.xc_env_eval(e, now).unwrap_or(v);
+                        r.xc_env_delete_range(e, now - EDGE - 1e-6, now + 1e-6);
+                        r.xc_env_insert(e, now - EDGE, lane.orig);
+                        self.fxc.capture.points += 1;
+                    }
+                    r.xc_env_insert(e, now, v);
+                    r.xc_env_sort(e);
+                    self.fxc.capture.points += 1;
+                }
+                lanes.push(lane);
+            }
+            self.fxc.capture.pass = Some(Pass {
+                armed,
+                at: now,
+                lanes,
+            });
             return;
         }
-        for (i, e) in cap.envs.clone().iter().enumerate() {
-            let v = vals.get(i).copied().unwrap_or(0.0);
-            self.r.xc_env_delete_range(*e, from + 1e-6, now + 1e-6);
-            let last = cap.last.get(i).copied().unwrap_or(f64::NAN);
-            if fresh || last.is_nan() || (v - last).abs() > 0.0005 {
-                self.r.xc_env_insert(*e, now, v);
-                cap.points += 1;
-                if let Some(l) = cap.last.get_mut(i) {
-                    *l = v;
+        let r = self.r;
+        let cap = &mut self.fxc.capture;
+        let Some(pass) = cap.pass.as_mut() else {
+            return;
+        };
+        let from = pass.at;
+        if now <= from + 1e-6 {
+            return;
+        }
+        for (i, lane) in pass.lanes.iter_mut().enumerate() {
+            let Some(e) = lane.env else {
+                continue;
+            };
+            if lane.had {
+                if let Some(o) = r.xc_env_eval(e, now) {
+                    lane.orig = o;
                 }
             }
+            r.xc_env_delete_range(e, from + 1e-6, now + 1e-6);
+            let v = vals.get(i).copied().unwrap_or(lane.last);
+            if (v - lane.last).abs() > 0.0005 {
+                // Une valeur tenue reste plate jusqu'au battement d'avant
+                // (sinon la droite vers le point suivant en ferait une rampe).
+                if lane.last_t < from - 1e-6 {
+                    r.xc_env_insert(e, from, lane.last);
+                    cap.points += 1;
+                }
+                r.xc_env_insert(e, now, v);
+                cap.points += 1;
+                lane.last = v;
+                lane.last_t = now;
+            }
+            r.xc_env_sort(e);
         }
-        cap.pass = Some(now);
+        pass.at = now;
     }
 
-    /// La fin d'un passage : les points tries.
-    fn fxc_capture_end(&mut self) {
-        let cap = &mut self.fxc.capture;
-        if cap.pass.take().is_some() {
-            for e in std::mem::take(&mut cap.envs) {
-                self.r.xc_env_sort(e);
+    /// La fin d'un passage : la derniere valeur tenue jusqu'au bout, puis
+    /// l'enveloppe d'origine reprend.
+    pub(crate) fn fxc_capture_end(&mut self) {
+        let Some(pass) = self.fxc.capture.pass.take() else {
+            return;
+        };
+        let r = self.r;
+        for lane in &pass.lanes {
+            let Some(e) = lane.env else {
+                continue;
+            };
+            if lane.last_t < pass.at - 1e-6 {
+                r.xc_env_insert(e, pass.at, lane.last);
+                self.fxc.capture.points += 1;
             }
+            if lane.had {
+                r.xc_env_delete_range(e, pass.at + 1e-6, pass.at + EDGE + 1e-6);
+                r.xc_env_insert(e, pass.at + EDGE, lane.orig);
+                self.fxc.capture.points += 1;
+            }
+            r.xc_env_sort(e);
         }
     }
 }
