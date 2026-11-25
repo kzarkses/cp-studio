@@ -1883,7 +1883,16 @@ impl SelfTest {
                     return false;
                 }
                 act("snap");
-                let h = field(&out(), "hwnd");
+                let st = out();
+                let pad_ms = field(&st, "pad_ms").parse::<f64>().unwrap_or(99.0);
+                self.say(
+                    pad_ms < 4.0,
+                    format!(
+                        "FX Constellation : une image ou seul le pad bouge {pad_ms:.2} ms (une image entiere {} ms)",
+                        field(&st, "full_ms")
+                    ),
+                );
+                let h = field(&st, "hwnd");
                 let _ = fs::write(dir().join("snap5.txt"), format!("{h}\n"));
                 self.keys_step = 5;
                 self.ui_at = Some(Instant::now());

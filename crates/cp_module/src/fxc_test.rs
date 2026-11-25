@@ -56,10 +56,22 @@ impl App {
                     self.fxc_open();
                 }
                 self.fxc.view.tab = 0;
+                // Le temps d'une image entiere, puis d'une image ou seul le
+                // pad a bouge (la plus chere de 5).
+                let t0 = std::time::Instant::now();
                 self.fxc.view.mark_full();
                 self.fxc_render(true);
+                let full = t0.elapsed().as_secs_f64() * 1000.0;
+                let mut part = 0.0f64;
+                for i in 0..5 {
+                    self.fxc_pad_to(0.3 + 0.1 * i as f64, 0.6);
+                    self.fxc.view.mark();
+                    let t0 = std::time::Instant::now();
+                    self.fxc_render(false);
+                    part = part.max(t0.elapsed().as_secs_f64() * 1000.0);
+                }
                 let h = self.fxc.win.as_ref().map_or(0, |w| w.hwnd.0);
-                format!("snap hwnd={h}")
+                format!("snap hwnd={h} full_ms={full:.2} pad_ms={part:.2}")
             }
             s => format!("unknown step {s}"),
         };
