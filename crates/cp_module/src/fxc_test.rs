@@ -71,11 +71,66 @@ impl App {
                     part = part.max(t0.elapsed().as_secs_f64() * 1000.0);
                 }
                 let h = self.fxc.win.as_ref().map_or(0, |w| w.hwnd.0);
-                format!("snap hwnd={h} full_ms={full:.2} pad_ms={part:.2}")
+                let carry = self.fxc_selftest_carry();
+                format!("snap hwnd={h} full_ms={full:.2} pad_ms={part:.2} carry={carry}")
             }
             s => format!("unknown step {s}"),
         };
         r.ext_set(SECTION, "selftest_fxc", &out, false);
+    }
+
+    /// Le glisser commun : ReaEQ lache dans la colonne DETACHED de la vraie
+    /// fenetre arrive sur la piste, detache, sans parametre suivi. Rend
+    /// « 1 » si tout y est, sinon ce qui manque.
+    fn fxc_selftest_carry(&mut self) -> String {
+        let r = self.r;
+        let Some(t) = self.fxc.tk else {
+            return "no_track".into();
+        };
+        self.fxb_load();
+        let Some(eq) = self
+            .fxb
+            .cat
+            .plugins
+            .iter()
+            .position(|p| p.label == "ReaEQ" && p.dev == "Cockos")
+        else {
+            return "no_reaeq".into();
+        };
+        self.fxc.view.mark_full();
+        self.fxc_render(true);
+        let Some(pool) = self
+            .fxc
+            .view
+            .items()
+            .iter()
+            .find(|i| i.ctl == Ctl::Pool(true))
+            .map(|i| i.r)
+        else {
+            return "no_pool".into();
+        };
+        let before = r.xc_fx_count(t);
+        let p = crate::carry::Payload::Plugins(vec![eq]);
+        let took = self.fxc_takes(&p) && self.fxc_carry_drop(p, pool.cx(), pool.bottom() - 2.0);
+        let after = r.xc_fx_count(t);
+        let g = after
+            .checked_sub(1)
+            .and_then(|i| r.xc_fx_guid(t, i))
+            .unwrap_or_default();
+        let guid = self.fxc.guid.clone();
+        let det = self.fxc_detached_of(&guid).contains(&g);
+        let free = !self.fxc.t.tracked().any(|(k, _)| k.starts_with(&g));
+        if took && after == before + 1 && det && free {
+            "1".into()
+        } else {
+            format!(
+                "took{}_added{}_det{}_free{}",
+                took as u8,
+                after - before,
+                det as u8,
+                free as u8
+            )
+        }
     }
 
     fn fxc_selftest_clean(&mut self) -> String {

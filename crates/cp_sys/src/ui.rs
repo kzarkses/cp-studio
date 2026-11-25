@@ -51,6 +51,7 @@ unsafe extern "system" {
     fn ScreenToClient(h: Raw, p: *mut Point) -> i32;
     fn ClientToScreen(h: Raw, p: *mut Point) -> i32;
     fn GetCursorPos(p: *mut Point) -> i32;
+    fn WindowFromPoint(p: Point) -> Raw;
     fn SetCapture(h: Raw) -> Raw;
     fn ReleaseCapture() -> i32;
     fn GetCapture() -> Raw;
@@ -282,6 +283,17 @@ pub fn client_to_screen(h: Hwnd, x: i32, y: i32) -> (i32, i32) {
     // SAFETY: ecrit un POINT.
     unsafe { ClientToScreen(h.raw(), &mut p) };
     (p.x, p.y)
+}
+
+/// La fenetre (la plus profonde) sous ce point de l'ecran.
+pub fn window_at(x: i32, y: i32) -> Hwnd {
+    // SAFETY: un POINT par valeur ; aucune autre precondition.
+    Hwnd(unsafe { WindowFromPoint(Point { x, y }) } as isize)
+}
+
+/// `h` est `win` ou l'une de ses filles.
+pub fn is_within(win: Hwnd, h: Hwnd) -> bool {
+    h.0 != 0 && (h == win || is_child(win, h))
 }
 
 pub fn cursor_pos() -> (i32, i32) {

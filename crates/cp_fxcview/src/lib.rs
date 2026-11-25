@@ -21,6 +21,32 @@ mod build;
 mod damage;
 mod draw;
 pub mod panels;
+
+/// La colonne et l'effet sous un point (voir [`View::drop_place`]) : la
+/// colonne sous le point, puis le premier en-tete d'effet de cette colonne
+/// plus bas que le point.
+pub(crate) fn drop_place(items: &[Item], x: f32, y: f32) -> (bool, Option<String>) {
+    let Some(pool) = items
+        .iter()
+        .rev()
+        .find(|i| matches!(i.ctl, Ctl::Pool(_)) && i.r.has(x, y))
+    else {
+        return (false, None);
+    };
+    let detached = matches!(pool.ctl, Ctl::Pool(true));
+    let before = items
+        .iter()
+        .filter_map(|i| match &i.ctl {
+            Ctl::FxHead(g) if i.r.x >= pool.r.x && i.r.x < pool.r.right() && i.r.cy() > y => {
+                Some((i.r.y, g.clone()))
+            }
+            _ => None,
+        })
+        .min_by(|a, b| a.0.total_cmp(&b.0))
+        .map(|(_, g)| g);
+    (detached, before)
+}
+
 #[cfg(test)]
 mod tests;
 
@@ -571,6 +597,10 @@ pub struct View {
     /// La source qu'on tire (dessinee par-dessus tout) et son point.
     pub carry: Option<(i32, f32, f32)>,
     pub zone_preview: Option<R>,
+    /// Ce qu'une autre vue tire au-dessus de celle-ci (le glisser commun :
+    /// des effets du navigateur) : son point dans la fenetre. La colonne et
+    /// la place du lacher s'allument.
+    pub ext_drop: Option<(f32, f32)>,
     /// La hauteur de contenu de chaque zone qui defile (pour borner).
     content_h: [f32; 5],
     /// Les actions en plus de celle que rend un evenement (les pas sautes
@@ -624,6 +654,7 @@ impl View {
             size: (0.0, 0.0),
             carry: None,
             zone_preview: None,
+            ext_drop: None,
             content_h: [0.0; 5],
             pending: Vec::new(),
             prev: Vec::new(),
@@ -702,6 +733,14 @@ impl View {
             self.scroll[0] = 0.0;
         }
         self.mark();
+    }
+
+    /// La place d'un depot venu d'une autre vue, au point (x, y) : la
+    /// colonne (DETACHED ou ROLL) et l'effet avant lequel il va (aucun : a la
+    /// fin de la colonne). Hors des colonnes (un autre onglet, le pad) :
+    /// ROLL, a la fin.
+    pub fn drop_place(&self, x: f32, y: f32) -> (bool, Option<String>) {
+        drop_place(&self.items, x, y)
     }
 
     /// L'en-tete d'effet qu'on tire (son GUID), pour le dessiner.

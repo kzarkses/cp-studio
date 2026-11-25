@@ -1892,6 +1892,13 @@ impl SelfTest {
                         field(&st, "full_ms")
                     ),
                 );
+                self.say(
+                    field(&st, "carry") == "1",
+                    format!(
+                        "FX Constellation : ReaEQ lache dans DETACHED (glisser commun) arrive detache, sans parametre suivi ({})",
+                        field(&st, "carry")
+                    ),
+                );
                 let h = field(&st, "hwnd");
                 let _ = fs::write(dir().join("snap5.txt"), format!("{h}\n"));
                 self.keys_step = 5;

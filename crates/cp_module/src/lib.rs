@@ -35,6 +35,7 @@ use cp_sys::ui::{self, Cursor, MenuItem};
 use cp_sys::win::{self, Hwnd, WinMsg};
 use cp_ui::{Button, Ev, IconCache, Mods, Theme};
 
+mod carry;
 mod clocksync;
 mod docking;
 mod editor;
@@ -466,6 +467,8 @@ pub(crate) struct App {
     main_keys: Option<cp_editview::keys::KeyMap>,
     /// Les touches de modification au battement d'avant (le curseur suit).
     last_mods: Mods,
+    /// Le glisser commun : ce qu'une vue tire vers une autre.
+    carry: Option<carry::Carry>,
 }
 
 fn read_shortcuts(r: &Reaper) -> (Vec<Shortcut>, PathBuf) {
@@ -1679,6 +1682,7 @@ impl Module for App {
             show_perf: false,
             main_keys: None,
             last_mods: Mods::default(),
+            carry: None,
         };
         // Les curseurs personnalises de REAPER (Cursors\<nom>.cur).
         if let Some(res) = app.r.resource_path() {

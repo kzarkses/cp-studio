@@ -209,6 +209,18 @@ le son que je suis en train d'entendre » ; « tout a été mis sur le master »
   l'effet peut arriver contourné. Menu « After insert » du navigateur et du
   dé. Le dé ne tire jamais le cœur, et « remplacer la chaîne » le garde.
 
+- ✅ **Le glisser commun** (`cp_module/src/carry.rs`, demande de Cedric : « un
+  dnd fluide entre chaque module ») : une vue source pose ce qu'elle porte et
+  le tient à jour à chaque mouvement ; la vue CP sous la souris (la fenêtre
+  la plus profonde sous le point, où qu'elle soit dockée) allume la place du
+  lâcher ; au lâcher, c'est elle qui reçoit. Premier cas : des effets du
+  navigateur vers FX Constellation — l'onglet des paramètres se montre, la
+  colonne ROLL ou DETACHED s'allume, un trait marque « avant cet effet » ;
+  dans ROLL la post-insertion s'applique, dans DETACHED ils arrivent
+  détachés. Ailleurs, le navigateur garde son geste d'avant. À ajouter : un
+  effet d'une chaîne, les sources de modulation, les clips, d'autres vues
+  d'arrivée.
+
 **Vérifié dans le vrai REAPER** (`cargo xtask reaper-test`, phase Fxc,
 2026-11-25) :
 - suivre un paramètre pose le bridge et le lien du pad ; le pad écrit sa
@@ -246,11 +258,12 @@ clavier, le son.
 - ☐ La capture du clavier en item MIDI ; les vues des effets maison.
 - ☐ La recherche garde le clavier après un Alt+Tab sans clic (le module ne
   voit pas encore la revendication du clavier du chargeur).
-- ☐ Le preset exact, « Move everything to a new track » et la
-  post-insertion n'ont pas encore tourné dans `reaper-test` (REAPER était
-  ouvert chez Cedric) : l'auto-test du preset vérifie la même chaîne dans le
-  même ordre, des identifiants neufs et l'état qui les suit ; celui du
-  navigateur, le cœur gardé et deux paramètres suivis.
+- ✅ Passés dans `reaper-test` le 25 au soir : le preset exact (même chaîne,
+  même ordre, identifiants neufs, état qui suit), le cœur gardé par le dé,
+  la post-insertion, le système caché dans la chaîne du navigateur, un effet
+  détaché marqué et gardé, ReaEQ lâché dans DETACHED par le glisser commun.
+  Pas couverts : « Move everything to a new track », le survol à la vraie
+  souris.
 
 ## Les faits
 

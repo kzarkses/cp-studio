@@ -1485,10 +1485,14 @@ fn params_tab(b: &mut B, v: &View, d: &Data, r: R) -> f32 {
         let moving = v
             .moving_fx()
             .is_some_and(|g| d.fx.iter().any(|f| f.guid == g && f.detached != detached));
+        // Des effets tires d'une autre vue (le navigateur) au-dessus de la
+        // colonne : elle s'allume.
+        let col = R::new(pr.x, pr.y, pr.w, pr.h.max(b.s(40.0)));
+        let ext_here = v.ext_drop.is_some_and(|(x, y)| col.has(x, y));
         b.push(
             R::new(pr.x, pr.y + b.dy, pr.w, pr.h.max(b.s(40.0))),
             Ctl::Pool(detached),
-            Look::Panel(if moving {
+            Look::Panel(if moving || ext_here {
                 Shade::Tint(th.accent.fade(0.12))
             } else {
                 Shade::Zone
@@ -1556,6 +1560,28 @@ fn params_tab(b: &mut B, v: &View, d: &Data, r: R) -> f32 {
             y += gap;
         }
         tallest = tallest.max(y - pr.y);
+    }
+    // La place du lacher d'un depot venu d'ailleurs : un trait avant l'effet
+    // vise (a la fin de la colonne, la colonne allumee suffit).
+    if let Some((x, y)) = v.ext_drop {
+        if let (_, Some(g)) = crate::drop_place(&b.items, x, y) {
+            let head = b
+                .items
+                .iter()
+                .filter(|i| i.ctl == Ctl::FxHead(g.clone()))
+                .map(|i| i.r)
+                .min_by(|a, c| a.y.total_cmp(&c.y));
+            if let Some(hr) = head {
+                let lh = b.s(3.0).max(2.0);
+                let ly = hr.y - gap * 0.5 - lh * 0.5;
+                b.push(
+                    R::new(hr.x, ly + b.dy, hr.w, lh),
+                    Ctl::None,
+                    Look::Panel(Shade::Tint(th.accent)),
+                    "",
+                );
+            }
+        }
     }
     b.clip = None;
     b.dy = 0.0;

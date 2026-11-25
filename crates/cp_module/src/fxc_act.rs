@@ -1477,6 +1477,90 @@ impl App {
         self.fxc_changed();
     }
 
+    // -----------------------------------------------------------------------
+    // Le glisser commun : des effets tires d'une autre vue
+    // -----------------------------------------------------------------------
+
+    /// FX Constellation prend cette charge (il montre une piste).
+    pub(crate) fn fxc_takes(&self, p: &crate::carry::Payload) -> bool {
+        match p {
+            crate::carry::Payload::Plugins(v) => !v.is_empty() && self.fxc_t().is_some(),
+        }
+    }
+
+    /// Des effets au-dessus de la fenetre : l'onglet des parametres se
+    /// montre, la colonne et la place du lacher s'allument.
+    pub(crate) fn fxc_carry_over(&mut self, x: f32, y: f32) {
+        if self.fxc.view.ext_drop == Some((x, y)) {
+            return;
+        }
+        if self.fxc.view.tab != 0 {
+            self.fxc.view.tab = 0;
+            self.fxc.prefs_dirty = true;
+        }
+        self.fxc.view.ext_drop = Some((x, y));
+        self.fxc.view.mark();
+        self.fxc_kick();
+    }
+
+    pub(crate) fn fxc_carry_leave(&mut self) {
+        if self.fxc.view.ext_drop.take().is_some() {
+            self.fxc.view.mark();
+            self.fxc_kick();
+        }
+    }
+
+    /// Les effets laches : a la place montree (avant l'effet vise ; a la fin
+    /// de ROLL, apres son dernier effet ; dans DETACHED, a la fin de la
+    /// chaine). Dans ROLL, la post-insertion du navigateur s'applique ;
+    /// dans DETACHED, ils arrivent detaches.
+    pub(crate) fn fxc_carry_drop(&mut self, p: crate::carry::Payload, x: f32, y: f32) -> bool {
+        let crate::carry::Payload::Plugins(plugins) = p;
+        let Some(t) = self.fxc_t() else {
+            return false;
+        };
+        let r = self.r;
+        let (detached, before) = self.fxc.view.drop_place(x, y);
+        let guid = self.fxc.guid.clone();
+        let det_list = self.fxc_detached_of(&guid);
+        let n = r.xc_fx_count(t);
+        let place_of = |g: &str| (0..n).find(|&i| r.xc_fx_guid(t, i).as_deref() == Some(g));
+        let at = match before.as_deref().and_then(place_of) {
+            Some(i) => i,
+            None if detached => n,
+            None => {
+                // (place, detache) des effets de l'utilisateur.
+                let user: Vec<(usize, bool)> = (0..n)
+                    .filter(|&i| fx_kind_at(&r, t, i) == FxKind::User)
+                    .map(|i| {
+                        let d = r.xc_fx_guid(t, i).is_some_and(|g| det_list.contains(&g));
+                        (i, d)
+                    })
+                    .collect();
+                user.iter()
+                    .rev()
+                    .find(|u| !u.1)
+                    .map(|u| u.0 + 1)
+                    .or_else(|| user.iter().find(|u| u.1).map(|u| u.0))
+                    .unwrap_or(n)
+            }
+        };
+        let added = self.fxb_add_to(&plugins, Some(at), Some(guid), false, !detached);
+        if detached {
+            self.fxc_scan_chain();
+            for g in &added {
+                self.fxc_set_detached(g, true);
+            }
+        }
+        self.fxc_scan_chain();
+        self.fxc_count("carry_drop");
+        self.fxc_changed();
+        // Recu, meme si un effet n'a pas pu se charger (le navigateur l'a
+        // dit) : il ne va jamais ailleurs.
+        let _ = added;
+        true
+    }
+
     /// Les effets hors de ROLL d'une piste quelconque (GUID d'effets).
     pub(crate) fn fxc_detached_of(&self, track: &str) -> Vec<String> {
         self.r

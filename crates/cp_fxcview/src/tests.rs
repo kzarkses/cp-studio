@@ -637,3 +637,40 @@ fn typing_in_the_search_repaints_it() {
     };
     assert_eq!(v.key_use(0x32, altgr), KeyUse::Text);
 }
+
+#[test]
+fn a_drop_from_another_view_finds_its_place() {
+    let w = world();
+    let p = plan(&w.t, &chain(), &Ctx::default());
+    let d = data(&w, &p);
+    let th = Theme::dark(1.0);
+    let mut v = View::new();
+    v.layout(&d, &th, 1500.0, 820.0);
+    // Juste au-dessus de l'en-tete de « Valhalla Delay » (ROLL) : avant lui.
+    let hb = v
+        .items()
+        .iter()
+        .filter(|i| i.ctl == Ctl::FxHead("{B}".into()))
+        .map(|i| i.r)
+        .min_by(|a, b| a.y.total_cmp(&b.y))
+        .unwrap();
+    let (det, before) = v.drop_place(hb.cx(), hb.y - 2.0);
+    assert!(!det);
+    assert_eq!(before.as_deref(), Some("{B}"));
+    // Sous le dernier effet de DETACHED : a la fin, detache.
+    let pool = rect(&v, &Ctl::Pool(true));
+    assert_eq!(v.drop_place(pool.cx(), pool.bottom() - 2.0), (true, None));
+    // Hors des colonnes (le pad) : ROLL, a la fin.
+    let pad = rect(&v, &Ctl::Pad);
+    assert_eq!(v.drop_place(pad.cx(), pad.cy()), (false, None));
+    // Survolee : un trait marque la place.
+    let n = v.items().len();
+    v.ext_drop = Some((hb.cx(), hb.y - 2.0));
+    v.layout(&d, &th, 1500.0, 820.0);
+    assert_eq!(v.items().len(), n + 1, "le trait de la place du lacher");
+    // `None` : toute l'image (un element de plus) ; sinon des rectangles.
+    assert!(
+        v.damage().is_none_or(|d| !d.is_empty()),
+        "la place se repeint"
+    );
+}

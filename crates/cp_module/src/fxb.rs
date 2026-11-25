@@ -249,7 +249,7 @@ impl App {
     // -----------------------------------------------------------------------
 
     /// Construit le catalogue (une fois ; « Reload » le refait).
-    fn fxb_load(&mut self) {
+    pub(crate) fn fxb_load(&mut self) {
         if self.fxb.loaded {
             return;
         }
@@ -424,8 +424,22 @@ impl App {
         to: Option<String>,
         force_new: bool,
     ) {
+        self.fxb_add_to(plugins, at, to, force_new, true);
+    }
+
+    /// [`App::fxb_add`] : `post` = la post-insertion de FX Constellation
+    /// s'applique. Rend les GUID des effets poses (le glisser commun les
+    /// detache s'ils tombent dans DETACHED).
+    pub(crate) fn fxb_add_to(
+        &mut self,
+        plugins: &[usize],
+        at: Option<usize>,
+        to: Option<String>,
+        force_new: bool,
+        post: bool,
+    ) -> Vec<String> {
         let Some(&first) = plugins.first() else {
-            return;
+            return Vec::new();
         };
         self.fxb_load();
         let r = self.r;
@@ -437,7 +451,7 @@ impl App {
         let Some(g) = target else {
             r.undo_end("CP FX Browser: add FX", -1);
             self.fxb_say("Select a track first");
-            return;
+            return Vec::new();
         };
         let mut last = None;
         let mut failed = Vec::new();
@@ -468,9 +482,9 @@ impl App {
                 Err(_) => failed.push(p.label.clone()),
             }
         }
-        let post = self.fxb.st.set.post;
-        if !added.is_empty() && (post.params != PostParams::None || post.bypass) {
-            self.fxc_post_insert(&g, &added, &post);
+        let pi = self.fxb.st.set.post;
+        if post && !added.is_empty() && (pi.params != PostParams::None || pi.bypass) {
+            self.fxc_post_insert(&g, &added, &pi);
         }
         r.undo_end("CP FX Browser: add FX", -1);
         if let (Some(idx), true) = (last, self.fxb.st.set.auto_open) {
@@ -484,13 +498,18 @@ impl App {
         if matches!(self.fxb.view.src, Src::Recent | Src::Most) {
             self.fxb.view.refresh(&self.fxb.cat, &self.fxb.st);
         }
+        added
     }
 
-    /// Des effets laches hors de la fenetre : sur une colonne de la Session,
-    /// une piste de l'arrangement ou de la console, ou sous les pistes (une
-    /// piste neuve).
+    /// Des effets laches hors de la fenetre : sur une vue de CP Studio qui
+    /// les prend (le glisser commun : FX Constellation), une colonne de la
+    /// Session, une piste de l'arrangement ou de la console, ou sous les
+    /// pistes (une piste neuve).
     fn fxb_drop_out(&mut self, plugins: Vec<usize>) {
         let (sx, sy) = ui::cursor_pos();
+        if self.carry_drop(sx, sy) {
+            return;
+        }
         if let Some(g) = self.ses_track_at_screen(sx, sy) {
             self.fxb_add(&plugins, None, Some(g), false);
             return;
@@ -1624,6 +1643,15 @@ impl App {
                     }
                 }
                 self.fxb_feed(Ev::Move { x, y, mods: md });
+                // Le glisser commun : des effets tires hors de la fenetre
+                // allument la vue qui les prendrait.
+                if self.fxb.view.dragging_rows() {
+                    let (sx, sy) = ui::client_to_screen(hwnd, x as i32, y as i32);
+                    let plugins = self.fxb.view.selection();
+                    self.carry_move(crate::carry::Payload::Plugins(plugins), sx, sy);
+                } else {
+                    self.carry_cancel();
+                }
                 Some(0)
             }
             msg::MOUSELEAVE => {
@@ -1667,6 +1695,9 @@ impl App {
                     Button::Right
                 };
                 self.fxb_feed(Ev::Up { x, y, b, mods: md });
+                // Lache ailleurs que sur une vue qui le prend : rien ne reste
+                // allume.
+                self.carry_cancel();
                 Some(0)
             }
             msg::MOUSEWHEEL | msg::MOUSEHWHEEL => {
