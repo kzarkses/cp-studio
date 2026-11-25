@@ -10,7 +10,7 @@ slider7:seq_root=0<0,11,1{C,C#,D,D#,E,F,F#,G,G#,A,A#,B}>Root
 slider8:seq_scale=2<0,15,1{Chromatic,Major,Minor,Dorian,Phrygian,Lydian,Mixolydian,Locrian,Harmonic Minor,Melodic Minor,Major Pentatonic,Minor Pentatonic,Blues,Whole Tone,Fifths,Octaves}>Scale
 slider9:seq_oct=4<0,8,1>Octave
 slider10:seq_transp=0<-24,24,1>Transpose (st)
-slider11:seq_notein=0<0,2,1{Thru,Transpose,Arp}>Incoming Notes
+slider11:seq_notein=0<0,3,1{Thru,Transpose,Arp,Override}>Incoming Notes
 slider12:seq_chan=1<1,16,1>MIDI Channel
 slider13:seq_rev=0<0,1000000,1>-Revision
 slider14:seq_pha=0<0,1048575,1>-Playheads A
@@ -266,6 +266,8 @@ ARH   = 8704;  // 32 : les notes tenues, dans l'ordre ou elles ont ete jouees
 ARS   = 8736;  // 32 : les memes, triees
 ARK   = 8768;  // 128 : les touches baissees (le loquet compte les doigts)
 ARQ   = 8896;  // 256 x 4 : les notes recues du bloc, pour l'arpege
+OVK   = 9920;  // 128 : les touches tenues qui passent devant (Override)
+OVC   = 10048; // 256 x 3 : leurs changements du bloc (date, tenues apres, depart)
 LMIN[0] = 0; LMAX[0] = 1; LINT[0] = 1; LBOOL[0] = 1;
 LMIN[1] = -7; LMAX[1] = 14; LINT[1] = 1; LBOOL[1] = 0;
 LMIN[2] = -2; LMAX[2] = 2; LINT[2] = 1; LBOOL[2] = 0;
@@ -958,9 +960,33 @@ function ar_note(off) local(m oc nn per i t c k) (
 // LE GLISSE : la note tient jusqu'au pas suivant (`off_at` = -1) et la
 // suivante part AVANT sa note-off, le legato des monosynthes. Meme hauteur :
 // rien n'est relance, la note continue.
+// ---- OVERRIDE : la note jouee passe devant -----------------------------------
+// Les notes recues passent (comme Thru). Des que l'une est tenue, la note du
+// sequenceur s'arrete a cette date, et ses pas suivants se taisent tant qu'une
+// note recue est tenue ; il avance quand meme (lignes, sorties MOD) et reprend
+// a son pas suivant quand la derniere est relachee. Une voix seule (le Sound
+// Gen en mono) n'est plus reprise par la sequence sous les doigts.
+// `ov_upto(o)` applique les changements du bloc jusqu'a la date `o`, dans
+// l'ordre : ceux de `fire` (a la date du pas), puis le reste en fin de bloc.
+function ov_upto(o) local(e t) (
+  while (ov_ci < ov_cn && OVC[ov_ci * 3] <= o) (
+    e = OVC + ov_ci * 3;
+    t = e[0];
+    ov_cur = e[1];
+    // Un depart : la note du sequenceur s'arrete la (ou a sa propre fin si
+    // elle tombait avant).
+    (e[2] > 0.5 && snd >= 0) ? (
+      (off_at >= 0 && off_at - abs_s < t) ? ( t = max(0, off_at - abs_s); );
+      note_kill(t);
+    );
+    ov_ci += 1;
+  );
+);
+
 function fire(k, o) local(tT on pr nt vl sl gt dist L) (
   tT = k * stepT;
   L = 0; loop(NL, lane_tick(L, tT); L += 1;);
+  ov_on ? ov_upto(o);
   (snd >= 0 && off_at >= 0 && off_at <= abs_s + o) ? note_kill(max(0, off_at - abs_s));
   // L'accord tenu A LA DATE du pas : les notes recues jusque-la, pas au-dela.
   ar_on ? ar_upto(o);
@@ -968,6 +994,8 @@ function fire(k, o) local(tT on pr nt vl sl gt dist L) (
   on ? ( pr = sp(5, POS[5]); on = rand(100) < pr; );
   // Rien de tenu : un silence, comme un pas eteint.
   (on && ar_on && ar_n < 1) ? ( on = 0; );
+  // Une note jouee tenue passe devant : le pas se tait (il compte quand meme).
+  (on && ov_on && ov_cur > 0) ? ( on = 0; );
   on ? (
     ar_on ? (
       // ARP : la hauteur vient de l'accord ; PITCH y decale, OCT et TRANSP
@@ -1033,6 +1061,14 @@ nm != ar_lnm ? (
 seq_arpl > 0.5 ? ( ar_lat = 1; ) : ( ar_lat ? ar_unlatch(); ar_lat = 0; );
 pbase = (seq_pnote >= 0.5) ? (floor(seq_pnote + 0.5) - 1) * 12 : -1;
 inn = 0; ar_qn = 0; ar_qi = 0;
+// Override : un autre sens oublie les touches tenues.
+ov_on = nm == 3;
+(!ov_on && ov_n > 0) ? (
+  i = 0;
+  loop(128, OVK[i] = 0; i += 1;);
+  ov_n = 0;
+);
+ov_cur = ov_n; ov_cn = 0; ov_ci = 0;
 while (midirecv(mo, m1, m2, m3)) (
   st = m1 & 0xF0;
   isn = (st == 0x90 || st == 0x80);
@@ -1055,6 +1091,25 @@ while (midirecv(mo, m1, m2, m3)) (
       ar_qn += 1;
     );
   ) : (
+    // Override : les touches tenues, compte par touche (une note doublee ne
+    // compte qu'une fois), et chaque changement date pour `ov_upto`.
+    ov_on ? (
+      ov_was = ov_n;
+      (st == 0x90 && m3 > 0) ? (
+        OVK[m2] < 0.5 ? ( OVK[m2] = 1; ov_n += 1; );
+      ) : isn ? (
+        OVK[m2] > 0.5 ? ( OVK[m2] = 0; ov_n -= 1; );
+      ) : (st == 0xB0 && (m2 == 120 || m2 == 123)) ? (
+        i = 0;
+        loop(128, OVK[i] = 0; i += 1;);
+        ov_n = 0;
+      );
+      (ov_n != ov_was && ov_cn < 256) ? (
+        e = OVC + ov_cn * 3;
+        e[0] = mo; e[1] = ov_n; e[2] = (ov_was == 0 && ov_n > 0);
+        ov_cn += 1;
+      );
+    );
     inn < 256 ? (
       e = INQ + inn * 4;
       e[0] = mo; e[1] = m1; e[2] = m2; e[3] = m3;
@@ -1187,6 +1242,7 @@ src != 0 ? (
     k_last = k;
     guard += 1;
   );
+  ov_on ? ov_upto(samplesblock);
   (snd >= 0 && off_at >= 0 && off_at < abs_s + samplesblock) ? note_kill(max(0, off_at - abs_s));
   L = 0; loop(NL, lane_tick(L, b1); L += 1;);
   src == 2 ? ( fb = b1; );
@@ -1248,6 +1304,23 @@ fon ? (
 );
 
 // ---- l'envoi : nos notes et le MIDI recu, FUSIONNES dans l'ordre des dates ----
+// Nos evenements d'abord ranges par date (tri stable : a la meme date, une fin
+// de note reste avant le debut qui la suit).
+q1 = 1;
+while (q1 < evn) (
+  q2 = q1;
+  while (q2 > 0 && EVQ[(q2 - 1) * 4] > EVQ[q2 * 4]) (
+    q3 = 0;
+    loop(4,
+      qt = EVQ[(q2 - 1) * 4 + q3];
+      EVQ[(q2 - 1) * 4 + q3] = EVQ[q2 * 4 + q3];
+      EVQ[q2 * 4 + q3] = qt;
+      q3 += 1;
+    );
+    q2 -= 1;
+  );
+  q1 += 1;
+);
 i = 0; j = 0;
 while (i < evn || j < inn) (
   (j >= inn || (i < evn && EVQ[i * 4] <= INQ[j * 4])) ? (

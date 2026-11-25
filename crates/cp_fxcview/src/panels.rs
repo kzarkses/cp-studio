@@ -827,7 +827,7 @@ pub const RATES: [&str; 9] = [
     "1/32", "1/16T", "1/16", "1/8T", "1/8", "1/4T", "1/4", "1/2", "1 bar",
 ];
 pub const DIRS: [&str; 4] = ["Forward", "Backward", "Ping-Pong", "Random"];
-pub const KEYS: [&str; 3] = ["Thru", "Transpose", "Arp"];
+pub const KEYS: [&str; 4] = ["Thru", "Transpose", "Arp", "Override"];
 pub const SPEEDS: [&str; 9] = [
     "1/4x", "1/3x", "1/2x", "2/3x", "1x", "3/2x", "2x", "3x", "4x",
 ];
@@ -1086,10 +1086,10 @@ pub(crate) fn sequencer(b: &mut B, v: &View, d: &Data, r: R) -> f32 {
             Ctl::JsMenu(SEQ, 10),
             format!(
                 "Keys {}",
-                KEYS[(j.r(10).round() as usize).min(2)].to_lowercase()
+                KEYS[(j.r(10).round() as usize).min(3)].to_lowercase()
             ),
             j.r(10) > 0.5,
-            "Incoming notes: thru, transpose, or arpeggiate",
+            "Incoming notes: thru, transpose, arpeggiate, or override (a played note silences the sequence while held)",
         ),
     ];
     for (i, (c, l, lit, tip)) in chips.into_iter().enumerate() {

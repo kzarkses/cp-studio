@@ -846,6 +846,11 @@ impl App {
 
     pub(crate) fn fxc_tick(&mut self) {
         self.fxc.ticks = self.fxc.ticks.wrapping_add(1);
+        // Un module recharge pose ses JSFX tout de suite (pas a la prochaine
+        // ouverture) : un effet remis sur une piste prend le code neuf.
+        if self.fxc.ticks == 1 {
+            crate::fxc_sync::install_jsfx(&self.r, &self.host);
+        }
         if self
             .fxc
             .dirty_at
