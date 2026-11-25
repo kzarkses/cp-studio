@@ -1877,8 +1877,20 @@ impl SelfTest {
                 self.ui_at = Some(Instant::now());
                 false
             }
-            _ => {
+            // La photo de la vraie fenetre (snap5.txt : xtask la prend).
+            4 => {
                 if t < 0.3 {
+                    return false;
+                }
+                act("snap");
+                let h = field(&out(), "hwnd");
+                let _ = fs::write(dir().join("snap5.txt"), format!("{h}\n"));
+                self.keys_step = 5;
+                self.ui_at = Some(Instant::now());
+                false
+            }
+            _ => {
+                if t < 3.0 {
                     return false;
                 }
                 act("clean");

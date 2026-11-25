@@ -49,6 +49,18 @@ impl App {
                 self.fxc.capture.armed.clear();
                 format!("cap points={n} written={}", self.fxc.capture.points)
             }
+            "snap" => {
+                // La vraie fenetre, pour la photo de l'auto-test : ouverte,
+                // l'onglet des parametres, repeinte en entier.
+                if self.fxc.win.is_none() {
+                    self.fxc_open();
+                }
+                self.fxc.view.tab = 0;
+                self.fxc.view.mark_full();
+                self.fxc_render(true);
+                let h = self.fxc.win.as_ref().map_or(0, |w| w.hwnd.0);
+                format!("snap hwnd={h}")
+            }
             s => format!("unknown step {s}"),
         };
         r.ext_set(SECTION, "selftest_fxc", &out, false);
