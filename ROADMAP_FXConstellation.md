@@ -221,6 +221,13 @@ le son que je suis en train d'entendre » ; « tout a été mis sur le master »
   effet d'une chaîne, les sources de modulation, les clips, d'autres vues
   d'arrivée.
 
+- ✅ **Les réglages en popover** (`fxc_settings.rs`, maquette validée) :
+  Pad, ROLL, Parameters (les mots cachés en liste à cocher, avec ce que
+  chacun cache sur la piste ; un mot décoché reste dans la liste,
+  « !mix » dans `fxc_hide`), After insert, Window (« Follow the master »,
+  éteint par défaut). Les 32 menus et boîtes de Windows passent en popover ;
+  l'aide devient la liste des gestes.
+
 **Vérifié dans le vrai REAPER** (`cargo xtask reaper-test`, phase Fxc,
 2026-11-25) :
 - suivre un paramètre pose le bridge et le lien du pad ; le pad écrit sa

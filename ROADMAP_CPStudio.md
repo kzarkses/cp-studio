@@ -850,6 +850,32 @@ celui de REAPER.
 Pour chaque application, une ROADMAP à elle (`ROADMAP_<Nom>.md`) sera écrite au
 moment de la commencer.
 
+### Plus rien de Windows dans nos vues (règle de Cedric, 2026-11-25)
+
+« Retirer tous les dropdown windows style… On doit tout avoir en custom, dans
+notre style… une liste de hidden parameters avec des coches, pas un champ de
+texte avec des virgules. Et cela, pour toutes les apps. » Maquette validée :
+artifact « CP Studio popovers ».
+
+- ✅ `cp_ui::pop` : le popover maison (menus et sous-menus, saisie d'un nom,
+  confirmation, panneau de réglages à sections : interrupteurs, choix
+  segmentés, curseurs, étendues, compteurs, puces, listes à cocher), dessiné
+  dans la vue ; la même règle de clavier pour toutes (`key_route`).
+- ✅ Les questions rejouées (`cp_module/src/ask.rs`) : un popover rend la
+  main tout de suite ; le geste qui a posé la question se rejoue quand la
+  réponse arrive (le code d'avant reste tel quel). Un choix se rejoue par
+  son texte : une liste qui a changé ne fait rien d'autre.
+- ✅ Converties : FX Constellation (32 menus et boîtes, et ses réglages en
+  popover), FX Browser, Session (« Region and gain » en trois curseurs),
+  l'éditeur, Guitar Tab, le navigateur de fichiers (`ask::PopHost` pour les
+  vues qui n'en savent rien).
+- ☐ Le transport et l'accordeur : leur barre est trop basse pour qu'un
+  menu s'y ouvre. Il leur faut un popover dans sa propre fenêtre (sans
+  cadre, au-dessus de tout, fermée quand elle perd la main) : une sorte de
+  fenêtre de plus au chargeur. D'ici là, leurs menus (et les menus de place
+  des vues ouverts depuis le transport) restent ceux du système ; le tempo
+  et la référence de l'accordeur, la boîte de REAPER.
+
 ---
 
 ## Phase F — La livraison
