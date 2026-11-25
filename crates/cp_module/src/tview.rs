@@ -323,6 +323,10 @@ impl App {
 
     /// `user` : Cedric l'a ferme (il ne reviendra pas au demarrage).
     pub(crate) fn transport_stop(&mut self, user: bool) {
+        // Le popover et la bulle sont des images sur l'ecran, possedees par
+        // REAPER : elles survivraient a la fenetre.
+        self.tp.sp.close();
+        self.tp.tip = None;
         if let Some(v) = self.tp.view.take() {
             self.host.place_take(PLACE_TRANSPORT, None, false);
             self.host.destroy_window(v.hwnd);
@@ -608,6 +612,8 @@ impl App {
         if st == PLACE_YIELDED || !win::is_window(hwnd) {
             self.host
                 .info("CP Transport : le transport de REAPER est revenu, on lui laisse la place");
+            self.tp.sp.close();
+            self.tp.tip = None;
             if let Some(v) = self.tp.view.take() {
                 self.host.destroy_window(v.hwnd);
             }
@@ -676,6 +682,13 @@ impl App {
         let h = self.tp.t.hovered();
         if h != self.tp.hover.0 {
             self.tp.hover = (h, std::time::Instant::now());
+            if let Some(t) = &mut self.tp.tip {
+                t.hide();
+            }
+            return;
+        }
+        // Un popover ouvert : pas de bulle par-dessus.
+        if self.tp.sp.is_open() {
             if let Some(t) = &mut self.tp.tip {
                 t.hide();
             }
@@ -771,9 +784,18 @@ impl App {
 
     fn transport_act(&mut self, a: Act) {
         // Le geste que rejouera une question (menu, saisie).
+        let was_open = self.tp.sp.is_open();
         let top = self.tp.sp.ph.ask.begin(&a);
         self.transport_act_one(a);
         self.tp.sp.ph.ask.end(top);
+        // Un popover vient de s'ouvrir : il prend la souris, le geste de la
+        // barre s'arrete (ni glisser du tempo, ni cible enfoncee, ni bulle).
+        if self.tp.sp.is_open() && !was_open {
+            self.tp.t.cancel_gesture();
+            if let Some(t) = &mut self.tp.tip {
+                t.hide();
+            }
+        }
         self.transport_pop_render();
     }
 
@@ -1374,6 +1396,9 @@ impl App {
                 self.tp.mouse = (120.0, 18.0);
                 self.transport_act(Act::EditBpm);
                 let ask = self.tp.sp.is_open() as u8;
+                // La saisie prend le clavier (sinon une autre vue a nous qui
+                // l'avait recevait les chiffres).
+                let focus = (ui::focus() == h) as u8;
                 for c in "133".chars() {
                     self.transport_pop_feed(Ev::Char(c));
                 }
@@ -1381,7 +1406,9 @@ impl App {
                 let bpm = self.read_status().bpm;
                 let done = !self.tp.sp.is_open() as u8;
                 self.r.set_bpm(bpm0, true);
-                format!("tpop still={still} esc_closed={closed} ask={ask} bpm={bpm:.1} done={done}")
+                format!(
+                    "tpop still={still} esc_closed={closed} ask={ask} focus={focus} bpm={bpm:.1} done={done}"
+                )
             }
         }
     }

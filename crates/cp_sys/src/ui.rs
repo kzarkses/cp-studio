@@ -88,6 +88,8 @@ unsafe extern "system" {
     fn GetMonitorInfoW(m: Raw, info: *mut MonitorInfo) -> i32;
     fn GetForegroundWindow() -> Raw;
     fn GetWindowThreadProcessId(h: Raw, pid: *mut u32) -> u32;
+    #[link_name = "SetForegroundWindow"]
+    fn SetForegroundWindow2(h: Raw) -> i32;
 }
 
 #[repr(C)]
@@ -478,6 +480,19 @@ pub fn foreground_is_ours() -> bool {
     unsafe {
         let f = GetForegroundWindow();
         !f.is_null() && GetWindowThreadProcessId(f, null_mut()) == GetCurrentThreadId()
+    }
+}
+
+/// Met au premier plan la fenetre de haut niveau de `h` (un clic vient d'y
+/// arriver : Windows le permet).
+pub fn set_foreground(h: Hwnd) {
+    const GA_ROOT: u32 = 2;
+    // SAFETY: sans effet sur un handle mort.
+    unsafe {
+        let root = GetAncestor(h.raw(), GA_ROOT);
+        if !root.is_null() {
+            SetForegroundWindow2(root);
+        }
     }
 }
 

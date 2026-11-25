@@ -1151,7 +1151,9 @@ impl App {
                 Some(true)
             }
             ACTION_FX_BUTTON => {
-                if !self.fxb.st.set.steal {
+                // Un popover pose sur l'ecran (le transport) est par-dessus :
+                // le clic est a lui, pas au bouton FX de la piste dessous.
+                if !self.fxb.st.set.steal || self.tp.sp.is_open() {
                     return Some(false);
                 }
                 let (sx, sy) = ui::cursor_pos();

@@ -35,6 +35,12 @@ pub(crate) struct ScreenPop<A> {
     /// Ce qui est a l'ecran : (marque du popover, rectangle) ; rien ne se
     /// repeint tant que ca ne change pas.
     shown: Option<(u32, (i32, i32, i32, i32))>,
+    /// Le clavier avant l'ouverture (rendu a la fermeture) : la vue qui
+    /// l'ouvre le prend, sinon une autre vue a nous qui l'avait (le dernier
+    /// clic dans Constellation) recevait la saisie du tempo.
+    prev_focus: Option<Hwnd>,
+    /// REAPER a ete au premier plan depuis l'ouverture : le perdre ferme.
+    fg_seen: bool,
 }
 
 impl<A> Default for ScreenPop<A> {
@@ -46,6 +52,8 @@ impl<A> Default for ScreenPop<A> {
             ov: None,
             surf: Surface::new(0, 0),
             shown: None,
+            prev_focus: None,
+            fg_seen: false,
         }
     }
 }
@@ -70,11 +78,24 @@ impl<A: Clone> ScreenPop<A> {
     }
 
     fn opened(&mut self) {
-        if self.ph.pop.is_some() {
-            ui::capture(self.owner);
-            ui::set_pointer(cp_ui::Pointer::Arrow);
-            self.shown = None;
+        if self.ph.pop.is_none() {
+            return;
         }
+        // Un clic sur le transport n'active pas REAPER (il ne prend pas la
+        // main) : derriere une autre application, le menu se fermait au
+        // battement suivant.
+        if !ui::foreground_is_ours() {
+            ui::set_foreground(self.owner);
+        }
+        self.fg_seen = ui::foreground_is_ours();
+        let f = ui::focus();
+        if f != self.owner {
+            self.prev_focus = Some(f);
+            ui::set_focus(self.owner);
+        }
+        ui::capture(self.owner);
+        ui::set_pointer(cp_ui::Pointer::Arrow);
+        self.shown = None;
     }
 
     /// Un menu sous le point (`x`, `y`) de la vue : le choix du rejeu, ou
@@ -153,6 +174,12 @@ impl<A: Clone> ScreenPop<A> {
         if self.owner.0 != 0 && ui::has_capture(self.owner) {
             ui::release_capture();
         }
+        // Le clavier revient ou il etait (si personne ne l'a pris depuis).
+        if let Some(f) = self.prev_focus.take() {
+            if ui::focus() == self.owner && f.0 != 0 && cp_sys::win::is_window(f) {
+                ui::set_focus(f);
+            }
+        }
         self.ov = None;
         self.shown = None;
     }
@@ -160,7 +187,12 @@ impl<A: Clone> ScreenPop<A> {
     /// Le garde du battement : la souris partie ailleurs (une autre
     /// application au premier plan, une autre fenetre qui la prend) ferme.
     pub fn guard(&mut self) {
-        if self.is_open() && (!ui::has_capture(self.owner) || !ui::foreground_is_ours()) {
+        if !self.is_open() {
+            return;
+        }
+        let fg = ui::foreground_is_ours();
+        self.fg_seen |= fg;
+        if !ui::has_capture(self.owner) || (self.fg_seen && !fg) {
             self.close();
         }
     }

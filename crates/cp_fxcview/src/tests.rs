@@ -785,3 +785,64 @@ fn a_popover_draws_over_the_view() {
     assert!(matches!(a, Some(Act::Pop(1, cp_ui::pop::Out::Closed))));
     assert!(v.pop.is_none());
 }
+
+/// Une image ou seules les sources bougent (un LFO qui tourne) : ce que
+/// coutent la reconstruction, la comparaison et le dessin des zones abimees,
+/// comme le module les peint (une passe de dessin par rectangle). Mesure ;
+/// `--ignored --nocapture`.
+#[test]
+#[ignore]
+fn le_cout_d_une_image_de_sources() {
+    let mut w = world();
+    let p = plan(&w.t, &chain(), &Ctx::default());
+    for (sw, sh) in [(1500, 820), (2560, 1300)] {
+        let mut b = Bench::new(sw, sh);
+        let mut v = View::new();
+        for tab in [0u8, 1, 2] {
+            v.tab = tab;
+            let mut worst = 0.0f64;
+            let mut sum = 0.0f64;
+            let mut nrects = 0usize;
+            let mut fulls = 0;
+            for k in 0..12 {
+                let ph = (k as f64 * 0.083) % 1.0;
+                w.src.insert(1, ph);
+                w.src.insert(2, 1.0 - ph);
+                w.src.insert(211, 0.5 + 0.4 * (ph - 0.5));
+                for (i, s) in w.bank.slots.iter_mut().enumerate() {
+                    s.out = (ph + i as f64 * 0.1) % 1.0;
+                    s.pho = (ph + i as f64 * 0.1) % 1.0;
+                }
+                let d = data(&w, &p);
+                let t0 = std::time::Instant::now();
+                v.layout(&d, &b.th, sw as f32, sh as f32);
+                v.layout_pop(&b.th, &mut b.t);
+                let dmg = v.damage();
+                let rects: Vec<R> = match &dmg {
+                    None => vec![R::new(0.0, 0.0, sw as f32, sh as f32)],
+                    Some(r) => r.clone(),
+                };
+                if dmg.is_none() {
+                    fulls += 1;
+                }
+                for r in &rects {
+                    let mut cv = Canvas::new(&mut b.s, &mut b.k);
+                    if cv.push_clip(r.x, r.y, r.w, r.h) {
+                        v.draw(&mut cv, &mut b.t, &mut b.icons, &b.th);
+                    }
+                }
+                let ms = t0.elapsed().as_secs_f64() * 1000.0;
+                if k >= 2 {
+                    worst = worst.max(ms);
+                    sum += ms;
+                    nrects += rects.len();
+                }
+            }
+            println!(
+                "{sw}x{sh} onglet {tab} : {:.2} ms en moyenne, {worst:.2} au pire, {:.1} rectangles, {fulls} images entieres",
+                sum / 10.0,
+                nrects as f64 / 10.0
+            );
+        }
+    }
+}

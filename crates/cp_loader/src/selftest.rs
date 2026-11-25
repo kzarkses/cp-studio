@@ -66,6 +66,9 @@ pub struct SelfTest {
     docked0: bool,
     /// CP Transport etait-il pose avant le test (on le rend tel quel).
     transport0: bool,
+    /// L'auto-test a pose CP Transport pour essayer ses popovers (il le
+    /// retire ensuite : la config reste comme elle etait).
+    tp_posed: bool,
     /// La place du navigateur avant le test.
     place0: String,
     frames0: cp_abi::FrameInfo,
@@ -234,6 +237,7 @@ pub fn requested() -> Option<SelfTest> {
         throttled0: 0,
         docked0: false,
         transport0: false,
+        tp_posed: false,
         place0: String::new(),
         frames0: cp_abi::FrameInfo::default(),
         snapped: false,
@@ -1922,6 +1926,23 @@ impl SelfTest {
                 if t < 2.5 {
                     return false;
                 }
+                // CP Transport pose (il ne l'est pas toujours a ce moment) : on
+                // le pose, et on attend qu'il prenne sa place.
+                use cp_abi::{PLACE_HELD, PLACE_TRANSPORT};
+                if crate::places::state(PLACE_TRANSPORT).0 != PLACE_HELD {
+                    if !self.tp_posed {
+                        let c = r.named_command("_CPSTUDIO_TRANSPORT");
+                        if c != 0 {
+                            r.main_on_command(c);
+                        }
+                        self.tp_posed = true;
+                        self.ui_at = Some(Instant::now());
+                        return false;
+                    }
+                    if t < 6.0 {
+                        return false;
+                    }
+                }
                 act("tpop_open");
                 let st = out();
                 self.say(
@@ -1948,12 +1969,19 @@ impl SelfTest {
                 self.say(
                     field(&st, "esc_closed") == "1"
                         && field(&st, "ask") == "1"
+                        && field(&st, "focus") == "1"
                         && field(&st, "done") == "1"
                         && (bpm - 133.0).abs() < 0.05,
                     format!(
                         "CP Transport : Echap ferme le menu, le tempo se saisit au clavier ({st})"
                     ),
                 );
+                if std::mem::take(&mut self.tp_posed) {
+                    let c = r.named_command("_CPSTUDIO_TRANSPORT");
+                    if c != 0 {
+                        r.main_on_command(c);
+                    }
+                }
                 self.keys_step = 7;
                 self.ui_at = Some(Instant::now());
                 false

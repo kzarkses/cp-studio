@@ -92,6 +92,15 @@ impl App {
     /// l'horloge de l'ecran tourne, le pire cout de 5 images ou seules les
     /// sources sont relues).
     fn fxc_selftest_live(&mut self) -> (u8, u8, f64) {
+        // Init a retire les effets de la piste : un ReaEQ pour y lacher la
+        // source.
+        if self.fxc.rows.is_empty() {
+            if let Some(t) = self.fxc.tk {
+                if self.r.xc_fx_add(t, "ReaEQ", None).is_some() {
+                    self.fxc_scan_chain();
+                }
+            }
+        }
         let Some(k) = self
             .fxc
             .rows
@@ -107,6 +116,10 @@ impl App {
         let moving = self.fxc_moving() as u8;
         self.fxc_tick();
         let clock = self.fxc.win.as_ref().is_some_and(|w| w.frame.frames_on) as u8;
+        // La banque et le lien viennent d'arriver (la structure a change) :
+        // une image entiere d'abord, hors de la mesure.
+        self.fxc.view.mark_full();
+        self.fxc_render(true);
         let mut worst = 0.0f64;
         for k in 0..5 {
             let t0 = std::time::Instant::now();

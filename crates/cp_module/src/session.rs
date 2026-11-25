@@ -2383,8 +2383,8 @@ impl App {
                 Some(0)
             }
             WM_CP_FRAME => {
-                let meters = self.ses_meters_live();
-                if meters && ui::is_shown(hwnd) {
+                let meters = self.ses_meters_live() && ui::is_shown(hwnd);
+                if meters {
                     self.ses_frame_meters();
                 }
                 if self.ses_animating() {

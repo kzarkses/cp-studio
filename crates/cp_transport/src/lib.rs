@@ -401,6 +401,16 @@ impl Transport {
         std::mem::take(&mut self.dirty)
     }
 
+    /// Le geste en cours s'arrete la (un popover vient de s'ouvrir et prend
+    /// la souris : son relachement n'arrivera pas ici). Sans cela le tempo
+    /// suivait la souris bouton leve, et la cible restait enfoncee.
+    pub fn cancel_gesture(&mut self) {
+        self.drag = None;
+        self.pressed = Hit::None;
+        self.hover = Hit::None;
+        self.dirty = true;
+    }
+
     /// Un geste en cours (glisser le tempo) : la cadence de l'ecran.
     pub fn dragging(&self) -> bool {
         self.drag.is_some()
