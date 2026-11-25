@@ -744,3 +744,55 @@ fn a_preset_reads_back() {
     assert_eq!(next_snapshot_name(&p), "Snapshot5");
     assert_eq!(preset::file_name("a/b: c"), "a_b_ c.fxc");
 }
+
+#[test]
+fn an_exact_preset_reads_back_with_its_chain_and_state() {
+    let mut p = Preset::default();
+    p.snapshots.insert("Snapshot1".into(), Snapshot::default());
+    p.state = Some("cps_fxc 1\npad nav=0\np {A}#0 sel=1\n\ngrain 0.5 0.5 {A}#1=0.2".into());
+    p.chain = Some(vec![
+        "BYPASS 0 0 0".into(),
+        "<JS \"FX Constellation - Sequencer.jsfx\" \"\"".into(),
+        "1 1 0\t2".into(),
+        ">".into(),
+        "<JS_SER".into(),
+        "state 3".into(),
+        "ext X".into(),
+        ">".into(),
+        "FXID {A}".into(),
+    ]);
+    p.exts.insert("FXC_ROUTES".into(), "v1;m:2=1@0.5".into());
+    p.exts.insert("CP_FXC_SG_PARK".into(), "a\tb\nc\\d".into());
+    let text = preset::encode(&p);
+    assert!(text.starts_with("cps_fxc_preset 2\n"));
+    let back = preset::decode(&text).unwrap();
+    assert_eq!(back, p);
+    // Une version 1 se lit encore.
+    let v1 = text.replacen("cps_fxc_preset 2", "cps_fxc_preset 1", 1);
+    assert!(preset::decode(&v1).is_some());
+}
+
+/// Un preset sur disque se relit, et son etat ne nomme que des effets de sa
+/// chaine : `CP_FXC_PRESET=<fichier> cargo test -p cp_fxc preset_file -- --ignored`.
+#[test]
+#[ignore]
+fn a_preset_file_on_disk_reads() {
+    let Ok(path) = std::env::var("CP_FXC_PRESET") else {
+        return;
+    };
+    let text = std::fs::read_to_string(&path).unwrap();
+    let p = preset::decode(&text).expect("un preset");
+    let chain = p.chain.expect("une chaine (version 2)");
+    let ids = crate::chain::fx_ids(&chain);
+    let st = store::decode(p.state.as_deref().expect("un etat")).expect("un etat lisible");
+    for k in st.params.keys() {
+        let (g, _) = crate::model::split_pkey(k).expect("une cle");
+        assert!(ids.iter().any(|i| i == g), "{k} hors de la chaine");
+    }
+    eprintln!(
+        "{} effets, {} parametres suivis, {} cles",
+        ids.len(),
+        st.tracked_count(),
+        p.exts.len()
+    );
+}

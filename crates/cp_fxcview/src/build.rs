@@ -622,7 +622,9 @@ fn command_bar(b: &mut B, v: &View, d: &Data, w: f32, bh: f32, two: bool) {
         Ctl::None,
         Look::Field {
             text: name.clone(),
-            modified: false,
+            // La maitre se suit des qu'on clique sa tranche seule : un point
+            // ambre le dit (tout s'y posait sans qu'on le voie).
+            modified: d.track == Some("MASTER"),
             muted: d.track.is_none(),
         },
         "",

@@ -10,9 +10,11 @@
 //! - [`roll`] : ROLL, le randomiseur ;
 //! - [`pad`] : le mode granulaire, la marche et les figures (pour
 //!   l'affichage) ;
-//! - [`preset`] : les presets et snapshots.
+//! - [`preset`] : les presets et snapshots ;
+//! - [`chain`] : la chaine d'une piste en texte (le rappel exact).
 
 pub mod adopt;
+pub mod chain;
 pub mod links;
 pub mod model;
 pub mod pad;

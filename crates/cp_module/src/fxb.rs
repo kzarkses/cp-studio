@@ -20,12 +20,12 @@ use cp_abi::{
     ACTION_ADD_FX_TO, ACTION_FX_BUTTON, ADD_FX_MAX_TRACK, PLACE_ARRANGE, PLACE_HELD, VIEW_DOCK,
     VIEW_FLOAT, VIEW_PLACED, WM_CP_ACCEL, WM_CP_FRAME,
 };
-use cp_fxlist::{Catalog, IniTexts, Kind, Rule, Src, Store, Tab, dice};
+use cp_fxlist::{Catalog, IniTexts, Kind, PostInsert, PostParams, Rule, Src, Store, Tab, dice};
 use cp_fxview::{Act, Chain, ChainFx, Hit, KeyUse, View};
 use cp_gfx::{IRect, rgb};
 use cp_sys::module::key_event;
 use cp_sys::reaper::Reaper;
-use cp_sys::ui::{self, MenuItem};
+use cp_sys::ui::{self, MenuEntry, MenuItem};
 use cp_sys::win::{self, Hwnd, WinMsg};
 use cp_ui::{Button, Ev, Theme};
 
@@ -150,6 +150,63 @@ fn item(id: u32, text: &str, checked: bool, enabled: bool) -> MenuItem<'_> {
         text,
         checked,
         enabled,
+    }
+}
+
+/// Un effet du coeur de CP Studio (FX Constellation, ses sources, le kit,
+/// le synthe de Guitar Tab) : le de ne le tire pas et ne le retire pas.
+pub(crate) fn is_core(name: &str) -> bool {
+    use cp_fxc::slots::{FxKind, fx_kind};
+    cp_fxlist::is_internal(name) || fx_kind(name) != FxKind::User
+}
+
+/// Le sous-menu de la post-insertion : ce que FX Constellation fait d'un
+/// effet ajoute.
+fn post_menu(p: &PostInsert) -> MenuEntry {
+    let random = match p.params {
+        PostParams::Random(n) => format!("At random ({n})"),
+        _ => "At random".to_string(),
+    };
+    let picks: Vec<MenuEntry> = (1..=16u8)
+        .map(|n| {
+            MenuEntry::check(
+                710 + n as u32,
+                n.to_string(),
+                p.params == PostParams::Random(n),
+            )
+        })
+        .collect();
+    MenuEntry::Sub(
+        "After insert (FX Constellation)".into(),
+        vec![
+            MenuEntry::off("Track parameters"),
+            MenuEntry::check(700, "None", p.params == PostParams::None),
+            MenuEntry::check(701, "All", p.params == PostParams::All),
+            MenuEntry::check(702, "All continuous", p.params == PostParams::Continuous),
+            MenuEntry::Sub(random, picks),
+            MenuEntry::Sep,
+            MenuEntry::check(730, "Random X/Y axis", p.xy),
+            MenuEntry::check(731, "Random range", p.range),
+            MenuEntry::check(732, "Random base", p.base),
+            MenuEntry::check(733, "Random invert", p.invert),
+            MenuEntry::Sep,
+            MenuEntry::check(734, "Insert bypassed", p.bypass),
+        ],
+    )
+}
+
+fn post_pick(p: &mut PostInsert, id: u32) {
+    match id {
+        700 => p.params = PostParams::None,
+        701 => p.params = PostParams::All,
+        702 => p.params = PostParams::Continuous,
+        711..=726 => p.params = PostParams::Random((id - 710) as u8),
+        730 => p.xy = !p.xy,
+        731 => p.range = !p.range,
+        732 => p.base = !p.base,
+        733 => p.invert = !p.invert,
+        734 => p.bypass = !p.bypass,
+        _ => {}
     }
 }
 
@@ -328,6 +385,9 @@ impl App {
         };
         let mut last = None;
         let mut failed = Vec::new();
+        // Les effets poses (pour la post-insertion de FX Constellation).
+        let tk = r.xc_track(&g);
+        let mut added: Vec<String> = Vec::new();
         for (k, &i) in plugins.iter().enumerate() {
             let Some(p) = self.fxb.cat.plugins.get(i) else {
                 continue;
@@ -338,13 +398,23 @@ impl App {
                 None => None,
             };
             let name = p.name.clone();
+            let chain = p.kind == Kind::Chain;
             match r.fx_add(&g, &name, pos) {
                 Ok(idx) => {
                     last = Some(idx);
                     self.fxb.st.used(&name);
+                    if let (false, Some(t)) = (chain, tk) {
+                        if let Some(fg) = r.xc_fx_guid(t, idx.max(0) as usize) {
+                            added.push(fg);
+                        }
+                    }
                 }
                 Err(_) => failed.push(p.label.clone()),
             }
+        }
+        let post = self.fxb.st.set.post;
+        if !added.is_empty() && (post.params != PostParams::None || post.bypass) {
+            self.fxc_post_insert(&g, &added, &post);
         }
         r.undo_end("CP FX Browser: add FX", -1);
         if let (Some(idx), true) = (last, self.fxb.st.set.auto_open) {
@@ -401,7 +471,8 @@ impl App {
             if let Some(g) = self.fxb.track.clone() {
                 let r = self.r;
                 r.undo_begin();
-                // Les instruments restent : le de ne tire que des effets.
+                // Les instruments restent : le de ne tire que des effets. Le
+                // coeur aussi (FX Constellation, ses sources, le kit).
                 let fx = self.fxb.chain.fx.clone();
                 for (i, f) in fx.iter().enumerate().rev() {
                     let inst = self
@@ -409,7 +480,7 @@ impl App {
                         .cat
                         .find(&f.name)
                         .is_some_and(|k| self.fxb.cat.plugins[k].instrument);
-                    if !inst {
+                    if !inst && !is_core(&f.name) {
                         r.fx_remove(&g, i);
                     }
                 }
@@ -783,59 +854,53 @@ impl App {
     }
 
     fn fxb_dice_menu(&mut self, x: f32, y: f32) {
-        let labels: Vec<String> = (1..=12)
+        let mut e: Vec<MenuEntry> = (1..=12u32)
             .map(|n| {
-                if n == 1 {
+                let l = if n == 1 {
                     "1 effect".to_string()
                 } else {
                     format!("{n} effects")
-                }
+                };
+                MenuEntry::check(n, l, self.fxb.st.set.dice_count == n)
             })
             .collect();
-        let mut items: Vec<Option<MenuItem<'_>>> = labels
-            .iter()
-            .enumerate()
-            .map(|(k, l)| {
-                Some(item(
-                    k as u32 + 1,
-                    l,
-                    self.fxb.st.set.dice_count == k as u32 + 1,
-                    true,
-                ))
-            })
-            .collect();
-        items.push(None);
-        items.push(Some(item(
+        e.push(MenuEntry::Sep);
+        e.push(MenuEntry::check(
             50,
-            "Replace the chain (instruments stay)",
+            "Replace the chain (instruments and FX Constellation stay)",
             self.fxb.st.set.dice_replace,
-            true,
-        )));
-        match self.fxb_popup(x, y, &items) {
+        ));
+        e.push(post_menu(&self.fxb.st.set.post));
+        match self.fxb_tree(x, y, &e) {
             k @ 1..=12 => self.fxb.st.set.dice_count = k,
             50 => self.fxb.st.set.dice_replace = !self.fxb.st.set.dice_replace,
+            id @ 700..=799 => post_pick(&mut self.fxb.st.set.post, id),
             _ => return,
         }
         self.fxb_save_soon();
+    }
+
+    fn fxb_tree(&self, x: f32, y: f32, entries: &[MenuEntry]) -> u32 {
+        let Some(h) = self.fxb.win.as_ref().map(|w| w.hwnd) else {
+            return 0;
+        };
+        let (sx, sy) = ui::client_to_screen(h, x as i32, y as i32);
+        ui::popup_tree(h, sx, sy, entries)
     }
 
     fn fxb_menu(&mut self, x: f32, y: f32) {
         let s = self.fxb.st.set.clone();
         let p = self.fxb.place;
         let has_ext = self.host.ext().is_some_and(|e| e.version >= 2);
-        let items = [
-            Some(item(1, "Open the FX window on add", s.auto_open, true)),
-            Some(item(2, "Sort Z to A", s.sort_za, true)),
-            None,
-            Some(item(
-                3,
-                "Show sources (folders, categories...)",
-                s.show_side,
-                true,
-            )),
-            Some(item(4, "Show the track's FX chain", s.show_chain, true)),
-            None,
-            Some(item(
+        let e = vec![
+            MenuEntry::check(1, "Open the FX window on add", s.auto_open),
+            MenuEntry::check(2, "Sort Z to A", s.sort_za),
+            post_menu(&s.post),
+            MenuEntry::Sep,
+            MenuEntry::check(3, "Show sources (folders, categories...)", s.show_side),
+            MenuEntry::check(4, "Show the track's FX chain", s.show_chain),
+            MenuEntry::Sep,
+            MenuEntry::check(
                 5,
                 if has_ext {
                     "Replace REAPER's FX browser"
@@ -843,16 +908,16 @@ impl App {
                     "Replace REAPER's FX browser (restart REAPER)"
                 },
                 s.steal,
-                true,
-            )),
-            Some(item(6, "Reload the plugin list", false, true)),
-            None,
-            Some(item(10, "Show in arrange view", p == Place::Arrange, true)),
-            Some(item(11, "Dock in docker", p == Place::Dock, true)),
-            Some(item(12, "Floating window", p == Place::Float, true)),
-            Some(item(13, "Close the FX Browser", false, true)),
+            ),
+            MenuEntry::item(6, "Reload the plugin list"),
+            MenuEntry::Sep,
+            MenuEntry::check(10, "Show in arrange view", p == Place::Arrange),
+            MenuEntry::check(11, "Dock in docker", p == Place::Dock),
+            MenuEntry::check(12, "Floating window", p == Place::Float),
+            MenuEntry::item(13, "Close the FX Browser"),
         ];
-        match self.fxb_popup(x, y, &items) {
+        match self.fxb_tree(x, y, &e) {
+            id @ 700..=799 => post_pick(&mut self.fxb.st.set.post, id),
             1 => self.fxb.st.set.auto_open = !s.auto_open,
             2 => {
                 self.fxb.st.set.sort_za = !s.sort_za;
@@ -1640,10 +1705,43 @@ impl App {
         let before = self.fxb.chain.fx.len();
         self.fxb_dice();
         let dice = self.fxb.chain.fx.len() as i64 - before as i64;
+        // Le coeur (ici le bridge de FX Constellation) reste quand le de
+        // remplace la chaine ; « replaced » compte les autres effets.
+        let r = self.r;
+        let g = self.fxb.track.clone().unwrap_or_default();
+        let _ = r.fx_add(&g, cp_fxc::slots::bridge::ADD, None);
+        self.fxb_sync_chain();
         self.fxb.st.set.dice_count = 1;
         self.fxb.st.set.dice_replace = true;
         self.fxb_dice();
-        let replaced = self.fxb.chain.fx.len();
+        let core_kept = self
+            .fxb
+            .chain
+            .fx
+            .iter()
+            .filter(|f| is_core(&f.name))
+            .count();
+        let replaced = self.fxb.chain.fx.len() - core_kept;
+        // La post-insertion : deux parametres de ReaEQ suivis par FX
+        // Constellation.
+        self.fxb.st.set.post = PostInsert {
+            params: PostParams::Random(2),
+            ..PostInsert::default()
+        };
+        self.fxb_add(&[eq], None, None, false);
+        self.fxb.st.set.post = PostInsert::default();
+        let post = r
+            .xc_track(&g)
+            .and_then(|t| {
+                let fg = r.xc_fx_guid(t, r.xc_fx_count(t).checked_sub(1)?)?;
+                let model = if self.fxc.tk == Some(t) && self.fxc.guid == g {
+                    self.fxc.t.clone()
+                } else {
+                    cp_fxc::store::decode(&self.fxc_stored_at(t, &g)?)?
+                };
+                Some(model.tracked().filter(|(k, _)| k.starts_with(&fg)).count())
+            })
+            .unwrap_or(0);
         // La recherche.
         let (cat, st) = (&self.fxb.cat, &mut self.fxb.st);
         self.fxb.view.set_source(cat, st, Src::All);
@@ -1654,7 +1752,7 @@ impl App {
         self.fxb.view.search.clear();
         self.fxb.view.refresh(&self.fxb.cat, &self.fxb.st);
         format!(
-            "report plugins={} folders={} favs={} tabs={} order1={order1} order2={order2} bypass={} copy={copied} dice={dice} replaced={replaced} search={} stolen={}",
+            "report plugins={} folders={} favs={} tabs={} order1={order1} order2={order2} bypass={} copy={copied} dice={dice} replaced={replaced} core_kept={core_kept} post={post} search={} stolen={}",
             self.fxb.cat.plugins.len(),
             self.fxb.cat.folders.len(),
             self.fxb.cat.reaper_favs.len(),
@@ -1663,5 +1761,38 @@ impl App {
             found as u8,
             (self.fxb.stolen == Some(true)) as u8,
         )
+    }
+}
+
+#[cfg(test)]
+mod core_tests {
+    fn desc(src: &str) -> String {
+        src.lines()
+            .find_map(|l| l.strip_prefix("desc:"))
+            .unwrap_or("")
+            .trim()
+            .to_string()
+    }
+
+    /// Chaque JSFX que CP Studio pose est du coeur, sous tous ses noms : le de
+    /// ne le tire pas, remplacer la chaine ne le retire pas.
+    #[test]
+    fn every_internal_jsfx_is_core() {
+        let mut all: Vec<(&str, &str)> = crate::fxc_sync::FILES.to_vec();
+        all.push(("", crate::gtab::SYNTH_SRC));
+        for (file, src) in all {
+            let d = desc(src);
+            assert!(!d.is_empty(), "{file} sans desc");
+            let mut names = vec![d.clone(), format!("JS: {d}")];
+            if !file.is_empty() {
+                names.push(file.to_string());
+            }
+            for n in names {
+                assert!(super::is_core(&n), "{n}");
+                assert!(cp_fxlist::is_internal(&n), "{n}");
+            }
+        }
+        assert!(!super::is_core("VST3: kHs Delay (Kilohearts)"));
+        assert!(!super::is_core("JS: CP_FC_Phaser"));
     }
 }

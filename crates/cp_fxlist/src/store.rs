@@ -22,6 +22,71 @@ pub struct Tab {
     pub rule: Option<Rule>,
 }
 
+/// Quels parametres d'un effet ajoute FX Constellation suit.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum PostParams {
+    /// Rien : l'effet arrive sans parametre suivi.
+    #[default]
+    None,
+    All,
+    /// Ceux qui ont plus de dix pas (ni interrupteur ni choix court).
+    Continuous,
+    /// N au hasard (1 a 16).
+    Random(u8),
+}
+
+/// La post-insertion : ce que FX Constellation fait d'un effet que le
+/// navigateur vient d'ajouter (parametres suivis, puis tires au hasard).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PostInsert {
+    pub params: PostParams,
+    /// Un axe du pad au hasard (X ou Y).
+    pub xy: bool,
+    /// Une portee au hasard.
+    pub range: bool,
+    /// Une base au hasard (la valeur change).
+    pub base: bool,
+    /// L'inversion a pile ou face.
+    pub invert: bool,
+    /// L'effet arrive contourne.
+    pub bypass: bool,
+}
+
+impl Default for PostInsert {
+    fn default() -> PostInsert {
+        PostInsert {
+            params: PostParams::None,
+            xy: true,
+            range: true,
+            base: false,
+            invert: true,
+            bypass: false,
+        }
+    }
+}
+
+impl PostParams {
+    fn code(self) -> String {
+        match self {
+            PostParams::None => "none".into(),
+            PostParams::All => "all".into(),
+            PostParams::Continuous => "cont".into(),
+            PostParams::Random(n) => format!("r{n}"),
+        }
+    }
+
+    fn parse(s: &str) -> PostParams {
+        match s {
+            "all" => PostParams::All,
+            "cont" => PostParams::Continuous,
+            r if r.starts_with('r') => r[1..]
+                .parse::<u8>()
+                .map_or(PostParams::None, |n| PostParams::Random(n.clamp(1, 16))),
+            _ => PostParams::None,
+        }
+    }
+}
+
 /// Les reglages du navigateur.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Settings {
@@ -44,6 +109,8 @@ pub struct Settings {
     /// Les groupes ouverts de la barre de cote (dossiers, categories,
     /// developpeurs, formats).
     pub open_groups: [bool; 4],
+    /// Apres un ajout : ce que FX Constellation en fait.
+    pub post: PostInsert,
 }
 
 impl Default for Settings {
@@ -60,6 +127,7 @@ impl Default for Settings {
             steal: true,
             src: "all".into(),
             open_groups: [true, false, false, false],
+            post: PostInsert::default(),
         }
     }
 }
@@ -183,6 +251,13 @@ impl Store {
             "open_groups",
             s.open_groups.iter().map(|&g| b(g)).collect::<String>(),
         );
+        let p = &s.post;
+        set("post_params", p.params.code());
+        set("post_xy", b(p.xy).into());
+        set("post_range", b(p.range).into());
+        set("post_base", b(p.base).into());
+        set("post_invert", b(p.invert).into());
+        set("post_bypass", b(p.bypass).into());
         for n in &self.fav_add {
             o.push_str(&format!("fav+ {n}\n"));
         }
@@ -240,6 +315,12 @@ impl Store {
                                 *g = c == '1';
                             }
                         }
+                        "post_params" => s.post.params = PostParams::parse(val),
+                        "post_xy" => s.post.xy = on,
+                        "post_range" => s.post.range = on,
+                        "post_base" => s.post.base = on,
+                        "post_invert" => s.post.invert = on,
+                        "post_bypass" => s.post.bypass = on,
                         _ => {}
                     }
                 }

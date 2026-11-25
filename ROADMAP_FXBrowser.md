@@ -73,7 +73,10 @@ Constellation. Sa dernière copie est le miroir GitHub du 22 août
   - chaque geste est un pas d'annulation.
 - ✅ Le dé : N effets différents de la liste visible. Jamais un instrument,
   sauf dans une liste d'instruments (un seul). « Replace the chain » garde
-  les instruments.
+  les instruments. Jamais un effet du cœur (FX Constellation, ses sources,
+  le synthé de Guitar Tab : `cp_fxlist::is_internal`, un test le compare
+  aux JSFX que le module pose), et « Replace the chain » les garde
+  (2026-11-25, demande de Cedric).
 - ✅ Étroite, la chaîne passe sous la liste. Plus étroite, la barre de côté
   se cache.
 
@@ -116,9 +119,12 @@ FxBrowser) :
 **Reste**
 - ☐ Les effets d'une prise, d'entrée, de monitoring (leur boîte « Add FX »
   reste celle de REAPER).
-- ☐ Ce que FX Constellation recevait après une insertion (paramètres,
-  portées, pools ROLL / détaché). Il attend que FX Constellation soit refait
-  en Rust.
+- ✅ La post-insertion (2026-11-25) : menu « After insert (FX
+  Constellation) » du navigateur et du dé. Après un ajout, FX Constellation
+  suit des paramètres de l'effet (aucun, tous, les continus, N au hasard ;
+  jamais un mot caché ni Bypass/Wet/Delta), puis tire axe X/Y, portée,
+  base, inversion comme ROLL ; « Insert bypassed ». Sur la piste qu'il
+  montre, en place ; sur une autre, dans l'état de la piste.
 - ☐ Les presets, l'aperçu d'un instrument.
 
 ## Les faits mesurés (2026-11-24)

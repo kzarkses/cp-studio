@@ -4,7 +4,7 @@
 use std::collections::BTreeMap;
 
 use cp_fxc::model::{MAX_SOURCES, Nav, PState, Pad, Track, pkey, split_pkey};
-use cp_fxc::preset::{Preset, PresetFx, Snapshot, file_name, next_snapshot_name};
+use cp_fxc::preset::{Preset, Snapshot, file_name, next_snapshot_name};
 use cp_fxc::roll::{self, AXES, Axis, Settings};
 use cp_fxc::slots::{Band, FxKind, band_of, bank, bridge, keys, long_label, sg};
 use cp_fxcview::panels::{
@@ -119,6 +119,15 @@ const SPANS: [(f64, f64); 6] = [
     (0.5, 1.0),
     (0.1, 0.4),
     (0.4, 0.9),
+];
+
+/// Les cles de piste qu'un preset emporte (l'etat `CPS_FXC` a part).
+const PRESET_KEYS: [&str; 5] = [
+    keys::ROUTES,
+    keys::DETACHED,
+    "CP_FXC_SG_PARK",
+    cp_fxc::slots::seq::PARK,
+    cp_fxc::slots::notes::PARK,
 ];
 
 /// Un choix de menu : les identifiants de chaque famille.
@@ -2533,72 +2542,260 @@ impl App {
         };
     }
 
-    /// Ce que la piste fait entendre, en preset.
-    fn fxc_capture(&self) -> Option<Preset> {
+    /// Ce que la piste fait entendre, en preset : sa chaine telle que REAPER
+    /// la range (chaque effet, son etat entier, les donnees des JSFX -- les
+    /// patterns du sequenceur --, l'ordre, les liens), l'etat de FX
+    /// Constellation et les cles de la piste. Le rappel rend le meme son.
+    pub(crate) fn fxc_capture(&self) -> Option<Preset> {
         let t = self.fxc_t()?;
         let r = self.r;
-        let mut p = Preset {
+        let chunk = r.xc_chunk(t)?;
+        let exts = PRESET_KEYS
+            .iter()
+            .filter_map(|k| {
+                r.xc_track_ext(t, k)
+                    .filter(|v| !v.is_empty())
+                    .map(|v| (k.to_string(), v))
+            })
+            .collect();
+        Some(Preset {
             pad: self.fxc.t.pad.clone(),
             macros: self.fxc.macros,
             macro_names: self.fxc.t.macro_names.clone(),
+            chain: Some(cp_fxc::chain::chain_lines(&chunk)),
+            state: Some(cp_fxc::store::encode(&self.fxc.t)),
+            exts,
             ..Preset::default()
+        })
+    }
+
+    /// Pose un preset exact sur une piste : sa chaine a la place de la
+    /// sienne (les effets prennent des identifiants neufs, recales dans
+    /// l'etat et les cles), ses cles, son etat. La piste n'est pas relue ici
+    /// (`fxc_arrive` le fait, comme a l'ouverture d'un projet).
+    fn fxc_put_preset(&mut self, t: Tk, p: &Preset, name: &str) -> bool {
+        let r = self.r;
+        let Some(chunk) = r.xc_chunk(t) else {
+            return false;
         };
-        for (i, f) in self.fxc.chain.fx.iter().enumerate() {
-            if f.kind != Some(FxKind::User) {
-                continue;
+        let mut inner = p.chain.clone().unwrap_or_default();
+        let n = cp_fxc::chain::fx_ids(&inner).len();
+        let fresh: Option<Vec<String>> = (0..n).map(|_| r.xc_new_guid()).collect();
+        let map = match fresh {
+            Some(v) => {
+                let mut it = v.into_iter();
+                cp_fxc::chain::renew_ids(&mut inner, || it.next().unwrap_or_default())
             }
-            let chunk = ["vst_chunk", "clap_chunk"].iter().find_map(|k| {
-                r.xc_cfg(t, i, k)
-                    .filter(|s| !s.is_empty())
-                    .map(|d| (k.to_string(), d))
-            });
-            let names = self.fxc.names.get(&(f.guid.clone(), f.nparams));
-            let params = (0..f.nparams)
-                .filter_map(|k| {
-                    let ps = self.fxc.t.params.get(&pkey(&f.guid, k))?;
-                    let nm = names
-                        .and_then(|n| n.get(k))
-                        .map_or(String::new(), |n| n.0.clone());
-                    Some((k, (nm, ps.clone())))
-                })
-                .collect();
-            p.fx.push(PresetFx {
-                name: f.name.clone(),
-                ident: r.xc_cfg(t, i, "fx_name").unwrap_or_else(|| f.name.clone()),
-                renamed: r.xc_cfg(t, i, "renamed_name").unwrap_or_default(),
-                enabled: r.xc_fx_enabled(t, i),
-                detached: self.fxc.rows.iter().any(|x| x.guid == f.guid && x.detached),
-                preset: r.xc_preset_name(t, i),
-                chunk,
-                raw: (0..f.nparams).map(|k| r.xc_get(t, i, k)).collect(),
-                params,
-            });
+            None => Vec::new(),
+        };
+        let t0 = std::time::Instant::now();
+        if !r.xc_set_chunk(t, &cp_fxc::chain::with_chain(&chunk, &inner)) {
+            return false;
         }
-        if let Some(fx) = self.fxc.chain.find(FxKind::SoundGen) {
-            p.sg = Some((
-                r.xc_fx_enabled(t, fx),
-                (0..r.xc_param_count(t, fx))
-                    .map(|k| r.xc_get(t, fx, k))
-                    .collect(),
+        for k in PRESET_KEYS {
+            let v = p
+                .exts
+                .get(k)
+                .map(|v| cp_fxc::chain::remap(v, &map))
+                .unwrap_or_default();
+            r.xc_set_track_ext(t, k, &v);
+        }
+        let guid = r.xc_guid(t).unwrap_or_default();
+        let mut st = p
+            .state
+            .as_deref()
+            .map(|s| cp_fxc::chain::remap(s, &map))
+            .and_then(|s| cp_fxc::store::decode(&s))
+            .unwrap_or_default();
+        st.preset = name.to_string();
+        self.fxc_write_state(t, &guid, &cp_fxc::store::encode(&st));
+        self.fxc.unsaved.remove(&guid);
+        self.host.info(&format!(
+            "FX Constellation : preset « {name} » pose ({} effets, {} lignes) en {} ms",
+            n,
+            inner.len(),
+            t0.elapsed().as_millis()
+        ));
+        true
+    }
+
+    /// La post-insertion : des effets que le navigateur vient de poser sur
+    /// la piste `track` recoivent des parametres suivis (tous, les continus,
+    /// ou N au hasard -- jamais un parametre cache ni ceux que REAPER ajoute),
+    /// puis, selon les reglages, un axe, une portee, une base, une inversion
+    /// tires comme ROLL les tire. La piste montree change en place ; une
+    /// autre garde le resultat dans son etat (ses liens se posent quand FX
+    /// Constellation y vient).
+    pub(crate) fn fxc_post_insert(
+        &mut self,
+        track: &str,
+        fx_guids: &[String],
+        post: &cp_fxlist::PostInsert,
+    ) {
+        use cp_fxlist::PostParams;
+        let r = self.r;
+        let Some(t) = r.xc_track(track) else { return };
+        let here = self.fxc_t() == Some(t) && self.fxc.guid == track;
+        if here {
+            self.fxc_scan_chain();
+        }
+        // Les effets poses, par place (jamais un effet du coeur).
+        let places: Vec<(usize, String)> = (0..r.xc_fx_count(t))
+            .filter_map(|i| {
+                let g = r.xc_fx_guid(t, i)?;
+                (fx_guids.contains(&g) && fx_kind_at(&r, t, i) == FxKind::User).then_some((i, g))
+            })
+            .collect();
+        if places.is_empty() {
+            return;
+        }
+        if post.bypass {
+            for (i, _) in &places {
+                r.xc_fx_set_enabled(t, *i, false);
+            }
+        }
+        if post.params == PostParams::None {
+            return;
+        }
+        // Les candidats : (cle, continu).
+        let words = self.fxc.hide_words.clone();
+        let mut cands: Vec<(String, bool)> = Vec::new();
+        for (i, g) in &places {
+            let n = r.xc_param_count(t, *i);
+            let tail = n.saturating_sub(3);
+            for k in 0..n {
+                let nm = r.xc_param_name(t, *i, k);
+                if k >= tail && matches!(nm.as_str(), "Bypass" | "Wet" | "Delta") {
+                    continue;
+                }
+                if nm.to_lowercase().contains("(meter)")
+                    || words.iter().any(|w| nm.contains(w.as_str()))
+                {
+                    continue;
+                }
+                let steps = r.xc_step_count(t, *i, k);
+                cands.push((pkey(g, k), steps == 0 || steps > 10));
+            }
+        }
+        let seed = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(7, |d| d.as_nanos() as u64);
+        let mut rng = roll::Rng::new(seed);
+        let mut pool: Vec<String> = match post.params {
+            PostParams::None => Vec::new(),
+            PostParams::All => cands.iter().map(|c| c.0.clone()).collect(),
+            PostParams::Continuous => cands.iter().filter(|c| c.1).map(|c| c.0.clone()).collect(),
+            PostParams::Random(n) => {
+                let mut v: Vec<String> = cands.iter().map(|c| c.0.clone()).collect();
+                rng.shuffle(&mut v);
+                v.truncate(n as usize);
+                v
+            }
+        };
+        pool.sort();
+        let settings = self.fxc.roll.clone();
+        let index_of = |g: &str| places.iter().find(|p| p.1 == g).map(|p| p.0);
+        let mut model = if here {
+            std::mem::take(&mut self.fxc.t)
+        } else {
+            self.fxc_stored_at(t, track)
+                .and_then(|s| cp_fxc::store::decode(&s))
+                .unwrap_or_default()
+        };
+        for k in &pool {
+            let Some((g, pi)) = split_pkey(k) else {
+                continue;
+            };
+            let Some(i) = index_of(g) else { continue };
+            let p = model.param_mut(k);
+            p.sel = true;
+            // L'ancre : la valeur ou l'effet arrive (le son ne saute pas).
+            p.base = r.xc_get(t, i, pi);
+        }
+        if post.xy {
+            roll::xy(&mut model, &pool, settings.exclusive_xy, &mut rng);
+        }
+        if post.range {
+            roll::ranges(&mut model, &pool, &settings, &mut rng);
+        }
+        if post.invert {
+            roll::invert(&mut model, &pool, &mut rng);
+        }
+        if post.base {
+            for (k, v) in roll::bases(&mut model, &pool, &settings, &mut rng) {
+                if let Some((g, pi)) = split_pkey(&k) {
+                    if let Some(i) = index_of(g) {
+                        r.xc_set(t, i, pi, v);
+                    }
+                }
+            }
+        }
+        let n = pool.len();
+        if here {
+            self.fxc.t = model;
+            self.fxc_count("post_insert");
+            self.fxc_changed();
+            self.fxc_say(format!("{n} parameter(s) tracked on the new FX"));
+        } else {
+            self.fxc_write_state(t, track, &cp_fxc::store::encode(&model));
+            self.host.info(&format!(
+                "FX Constellation : post-insertion, {n} parametre(s) suivi(s) sur une autre piste"
             ));
         }
-        if let Some(fx) = self.fxc.chain.find(FxKind::Seq) {
-            p.seq = Some(
-                (0..r.xc_param_count(t, fx))
-                    .map(|k| r.xc_get_raw(t, fx, k).0)
-                    .collect(),
-            );
+    }
+
+    /// Toute la constellation (chaine, etat) sur une piste neuve, choisie ;
+    /// la piste d'origine est videe. Pour la maitre surtout : elle est suivie
+    /// des qu'on clique sa tranche seule.
+    fn fxc_move_to_new_track(&mut self) {
+        let Some(src) = self.fxc_t() else { return };
+        let Some(p) = self.fxc_capture() else {
+            self.fxc_say("The track could not be read");
+            return;
+        };
+        let r = self.r;
+        let src_guid = self.fxc.guid.clone();
+        let has_sg = self.fxc.chain.find(FxKind::SoundGen).is_some();
+        let name = if self.fxc.t.preset.is_empty() {
+            "FX Constellation".to_string()
+        } else {
+            self.fxc.t.preset.clone()
+        };
+        r.xc_undo_begin();
+        self.fxc.dirty_at = None;
+        let after = (src_guid != "MASTER").then_some(src_guid.as_str());
+        let Some(dst_guid) = r.fx_new_track(&name, after, has_sg) else {
+            r.xc_undo_end("Move FX Constellation to a new track");
+            self.fxc_say("No new track");
+            return;
+        };
+        let Some(dst) = r.xc_track(&dst_guid) else {
+            r.xc_undo_end("Move FX Constellation to a new track");
+            return;
+        };
+        let preset = self.fxc.t.preset.clone();
+        if !self.fxc_put_preset(dst, &p, &preset) {
+            r.xc_undo_end("Move FX Constellation to a new track");
+            self.fxc_say("REAPER refused the chain");
+            return;
         }
-        if let Some(fx) = self.fxc.chain.find(FxKind::Bank) {
-            p.bank = Some(
-                (0..r.xc_param_count(t, fx))
-                    .map(|k| r.xc_get(t, fx, k))
-                    .collect(),
-            );
+        // La piste d'origine se vide : ses effets, son etat, ses cles.
+        for i in (0..r.xc_fx_count(src)).rev() {
+            r.xc_fx_delete(src, i);
         }
-        p.routes = r.xc_track_ext(t, keys::ROUTES).unwrap_or_default();
-        p.internal = self.fxc_internal_capture();
-        Some(p)
+        for k in PRESET_KEYS.iter().chain([&crate::fxc::PROJ]) {
+            r.xc_set_track_ext(src, k, "");
+        }
+        if r.xc_proj_ext(crate::fxc::PROJ, &src_guid).is_some() {
+            r.xc_set_proj_ext(crate::fxc::PROJ, &src_guid, "");
+        }
+        self.fxc.unsaved.remove(&src_guid);
+        self.fxc.last_saved.clear();
+        self.fxc.locked = false;
+        self.fxc_arrive(Some(dst), dst_guid);
+        r.xc_undo_end("Move FX Constellation to a new track");
+        self.fxc_count("move_track");
+        self.fxc_say(format!("Moved to the new track '{name}'"));
     }
 
     pub(crate) fn fxc_save_preset(&mut self, name: &str) {
@@ -2632,8 +2829,8 @@ impl App {
         }
     }
 
-    /// Rappelle un preset : la chaine de ROLL refaite, chaque effet par son
-    /// nom d'origine et son etat entier, le pad, les macros, le mapping.
+    /// Rappelle un preset : la chaine telle qu'elle etait (version 2), puis
+    /// la piste relue comme a l'ouverture d'un projet.
     pub(crate) fn fxc_load_preset(&mut self, name: &str) {
         let Some(p) = self
             .fxc_preset_path(name)
@@ -2643,6 +2840,31 @@ impl App {
             self.fxc_say(format!("Preset '{name}' not found"));
             return;
         };
+        if p.chain.is_none() {
+            self.fxc_load_preset_v1(name, p);
+            return;
+        }
+        let Some(t) = self.fxc_t() else { return };
+        let r = self.r;
+        r.xc_undo_begin();
+        // L'ancien modele ne s'ecrit plus par-dessus le preset.
+        self.fxc.dirty_at = None;
+        let ok = self.fxc_put_preset(t, &p, name);
+        let guid = self.fxc.guid.clone();
+        self.fxc.last_saved.clear();
+        self.fxc_arrive(Some(t), guid);
+        r.xc_undo_end(&format!("Load FX Constellation preset: {name}"));
+        self.fxc_count("preset_load");
+        if ok {
+            self.fxc_say(format!("Preset '{name}'"));
+        } else {
+            self.fxc_say(format!("Preset '{name}': REAPER refused the chain"));
+        }
+    }
+
+    /// Un preset de version 1 : la chaine de ROLL refaite, chaque effet par
+    /// son nom d'origine et son etat entier, le pad, les macros, le mapping.
+    fn fxc_load_preset_v1(&mut self, name: &str, p: Preset) {
         let Some(t) = self.fxc_t() else { return };
         let r = self.r;
         r.xc_undo_begin();
@@ -2944,6 +3166,7 @@ impl App {
                 cur.clone()
             }),
             MenuEntry::item(1, "Init — start from an empty constellation…"),
+            MenuEntry::item(6, "Move everything to a new track"),
             MenuEntry::Sep,
             MenuEntry::item(
                 2,
@@ -2981,6 +3204,7 @@ impl App {
         });
         match self.fxc_popup(x, y, &e) {
             1 => self.fxc_init(),
+            6 => self.fxc_move_to_new_track(),
             2 => {
                 let n = if cur.is_empty() {
                     self.fxc_ask("Save the FX Constellation preset", "Name", "")

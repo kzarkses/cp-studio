@@ -346,6 +346,35 @@ impl Reaper {
         ok && tg
     }
 
+    /// Le nombre de pas d'un parametre : 0 continu, 2 un interrupteur, N un
+    /// choix (d'apres le pas que REAPER donne et les bornes).
+    pub fn xc_step_count(&self, t: Tk, fx: usize, k: usize) -> u32 {
+        type F = unsafe extern "C" fn(P, i32, i32, *mut f64, *mut f64, *mut f64, *mut bool) -> bool;
+        let (Some(p), Some(f)) = (self.xp(t), self.xf::<F>(c"TrackFX_GetParameterStepSizes"))
+        else {
+            return 0;
+        };
+        let (mut step, mut b, mut c, mut tg) = (0.0, 0.0, 0.0, false);
+        // SAFETY: piste vivante ; sorties a nous.
+        let ok = unsafe { f(p, fx as i32, k as i32, &mut step, &mut b, &mut c, &mut tg) };
+        if !ok {
+            return 0;
+        }
+        if tg {
+            return 2;
+        }
+        if step <= 0.0 {
+            return 0;
+        }
+        let (_, lo, hi) = self.xc_get_raw(t, fx, k);
+        let n = ((hi - lo).abs() / step).round() + 1.0;
+        if n.is_finite() && n >= 2.0 {
+            n.min(1e6) as u32
+        } else {
+            0
+        }
+    }
+
     /// La fin d'un geste sur un parametre (l'automation en mode Touch).
     pub fn xc_end_edit(&self, t: Tk, fx: usize, k: usize) {
         type F = unsafe extern "C" fn(P, i32, i32) -> bool;
@@ -453,6 +482,62 @@ impl Reaper {
     // -------------------------------------------------------------------
     // Les donnees d'une piste et du projet
     // -------------------------------------------------------------------
+
+    /// L'etat entier de la piste (`GetTrackStateChunk`), quelle que soit sa
+    /// taille : le tampon grandit tant que REAPER le remplit.
+    pub fn xc_chunk(&self, t: Tk) -> Option<String> {
+        type F = unsafe extern "C" fn(P, *mut c_char, i32, bool) -> bool;
+        let p = self.xp(t)?;
+        let f: F = self.xf(c"GetTrackStateChunk")?;
+        let mut cap: usize = 1 << 20;
+        loop {
+            let mut buf = vec![0u8; cap];
+            // SAFETY: piste vivante ; tampon de `cap` octets ; false = l'etat
+            // complet (pas celui, allege, de l'annulation).
+            let ok = unsafe { f(p, buf.as_mut_ptr() as *mut c_char, cap as i32, false) };
+            let n = buf.iter().position(|&b| b == 0).unwrap_or(cap);
+            if ok && n + 1 < cap {
+                return Some(String::from_utf8_lossy(&buf[..n]).into_owned());
+            }
+            if cap >= 1 << 28 {
+                return None;
+            }
+            cap *= 4;
+        }
+    }
+
+    /// Remplace l'etat entier de la piste (`SetTrackStateChunk`).
+    pub fn xc_set_chunk(&self, t: Tk, chunk: &str) -> bool {
+        type F = unsafe extern "C" fn(P, *const c_char, bool) -> bool;
+        let (Some(p), Some(f), Ok(c)) = (
+            self.xp(t),
+            self.xf::<F>(c"SetTrackStateChunk"),
+            CString::new(chunk.replace('\0', " ")),
+        ) else {
+            return false;
+        };
+        // SAFETY: piste vivante ; chaine terminee par zero ; false = pas un
+        // etat d'annulation.
+        unsafe { f(p, c.as_ptr(), false) }
+    }
+
+    /// Un GUID neuf, en texte (`{XXXXXXXX-...}`).
+    pub fn xc_new_guid(&self) -> Option<String> {
+        type Gen = unsafe extern "C" fn(*mut [u8; 16]);
+        type ToStr = unsafe extern "C" fn(*const [u8; 16], *mut c_char);
+        let g: Gen = self.xf(c"genGuid")?;
+        let s: ToStr = self.xf(c"guidToString")?;
+        let mut id = [0u8; 16];
+        let mut buf = [0u8; 64];
+        // SAFETY: un GUID de 16 octets a nous ; guidToString ecrit au plus
+        // 39 octets dans un tampon de 64.
+        unsafe {
+            g(&mut id);
+            s(&id, buf.as_mut_ptr() as *mut c_char);
+        }
+        let out = cstr(&buf);
+        (out.len() == 38).then_some(out)
+    }
 
     /// `P_EXT:<key>` de la piste. `GetSetMediaTrackInfo_String` ne recoit
     /// pas la taille du tampon : il en a 64 Ko (nos valeurs de piste restent

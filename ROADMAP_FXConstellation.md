@@ -181,6 +181,34 @@ validée (artifact « FX Constellation v2 »), puis :
   un axe mené contre la souris, une cible du pad lissé hors de la zone, la
   recherche sans champ qui gardait le clavier.
 
+### Le 2026-11-25 au soir : le plantage, le preset exact, le master
+
+Cedric a fait une séquence qu'il aimait ; en cherchant l'action du
+transport, « les modules ont planté ». Puis : « Je recall, j'ai exactement
+le son que je suis en train d'entendre » ; « tout a été mis sur le master ».
+
+- ✅ **Le plantage** n'était pas une panique : la liste d'actions de REAPER
+  demande la coche de chaque action, le module répondait -1 pour une action
+  sans coche, et le chargeur lit -1 comme une panique (FAULT). Rien au
+  journal. Corrigé des deux côtés (`NO_TOGGLE`, 3d4ad98) ; un test le garde.
+- ✅ **Le preset exact** (version 2) : la chaîne de la piste telle que REAPER
+  la range (`GetTrackStateChunk`, le bloc `<FXCHAIN`) : chaque effet, son
+  état entier, les données des JSFX (les 16 patterns du séquenceur sont dans
+  son `@serialize`), l'ordre, les liens ; plus l'état `CPS_FXC` et les clés
+  de la piste. Le rappel remet ce bloc (les effets prennent des identifiants
+  neufs, recalés dans l'état), puis relit la piste comme à l'ouverture d'un
+  projet. La version 1 (chaque effet refait par son nom, l'ordre perdu, les
+  patterns perdus) se lit encore.
+- ✅ **Le master** : FX Constellation suit la piste choisie, et la maître
+  quand elle seule l'est (un clic sur sa tranche). Un point ambre le dit
+  dans le champ de la piste ; « Move everything to a new track » (menu du
+  preset) met chaîne et état sur une piste neuve et vide l'autre.
+- ✅ **La post-insertion** (le navigateur) : après un ajout, FX Constellation
+  suit des paramètres de l'effet (aucun, tous, les continus, N au hasard ;
+  jamais un mot caché), puis tire axe, portée, base, inversion comme ROLL ;
+  l'effet peut arriver contourné. Menu « After insert » du navigateur et du
+  dé. Le dé ne tire jamais le cœur, et « remplacer la chaîne » le garde.
+
 **Vérifié dans le vrai REAPER** (`cargo xtask reaper-test`, phase Fxc,
 2026-11-25) :
 - suivre un paramètre pose le bridge et le lien du pad ; le pad écrit sa
@@ -211,13 +239,18 @@ clavier, le son.
 **Reste**
 - ☐ Les réglages de la banque globale (sur CP MOD) menés par une source.
 - ☐ Les routes rapides (banque → Sound Gen tous les 32 échantillons), charger
-  un sample dans le Sound Gen, lire les 16 patterns pour un preset : ils
-  passent par la mémoire partagée des JSFX (`gmem`), qu'une extension n'a
-  pas. Sans route rapide, une source atteint le Sound Gen par un lien natif
+  un sample dans le Sound Gen : ils passent par la mémoire partagée des JSFX
+  (`gmem`), qu'une extension n'a pas (les 16 patterns, eux, voyagent dans le
+  preset exact). Sans route rapide, une source atteint le Sound Gen par un lien natif
   (une valeur par bloc).
 - ☐ La capture du clavier en item MIDI ; les vues des effets maison.
 - ☐ La recherche garde le clavier après un Alt+Tab sans clic (le module ne
   voit pas encore la revendication du clavier du chargeur).
+- ☐ Le preset exact, « Move everything to a new track » et la
+  post-insertion n'ont pas encore tourné dans `reaper-test` (REAPER était
+  ouvert chez Cedric) : l'auto-test du preset vérifie la même chaîne dans le
+  même ordre, des identifiants neufs et l'état qui les suit ; celui du
+  navigateur, le cœur gardé et deux paramètres suivis.
 
 ## Les faits
 

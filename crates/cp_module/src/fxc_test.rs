@@ -400,11 +400,30 @@ impl App {
             .iter()
             .filter_map(|k| cp_fxc::model::split_pkey(k).map(|(_, i)| i.to_string()))
             .collect();
+        let chain_of = |r: &cp_sys::reaper::Reaper| -> (Vec<String>, Vec<String>) {
+            (0..r.xc_fx_count(t))
+                .map(|i| (r.xc_fx_name(t, i), r.xc_fx_guid(t, i).unwrap_or_default()))
+                .unzip()
+        };
+        let (fx_before, ids_before) = chain_of(&r);
         self.fxc_save_preset(PRESET);
         self.fxc_act(Act::Click(Ctl::UntrackAll, Mods::default()));
         self.fxc_sync_tick(false);
         self.fxc_load_preset(PRESET);
         self.fxc_sync_tick(false);
+        // Le rappel exact : la meme chaine dans le meme ordre, des effets aux
+        // identifiants neufs, et l'etat qui les suit.
+        let (fx_after, ids_after) = chain_of(&r);
+        let same_chain = fx_before == fx_after && !fx_after.is_empty();
+        let fresh = ids_before.iter().all(|g| !ids_after.contains(g));
+        let follows = self.fxc.t.tracked().all(|(k, _)| {
+            cp_fxc::model::split_pkey(k).is_some_and(|(g, _)| ids_after.iter().any(|a| a == g))
+        });
+        out.push(format!(
+            "preset_chain={} fresh_ids={} state_follows={}",
+            same_chain as u8, fresh as u8, follows as u8
+        ));
+        ok &= same_chain && fresh && follows;
         let mut names_after: Vec<String> = self
             .fxc
             .t

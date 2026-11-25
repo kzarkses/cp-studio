@@ -1980,6 +1980,20 @@ impl SelfTest {
                         .into(),
                 );
                 self.say(
+                    field(&st, "core_kept") == "1",
+                    format!(
+                        "FX Browser : le de garde le coeur (bridge) en remplacant la chaine ({})",
+                        field(&st, "core_kept")
+                    ),
+                );
+                self.say(
+                    field(&st, "post") == "2",
+                    format!(
+                        "FX Browser : la post-insertion suit 2 parametres de ReaEQ ({})",
+                        field(&st, "post")
+                    ),
+                );
+                self.say(
                     field(&st, "search") == "1",
                     "FX Browser : la recherche a plusieurs mots".into(),
                 );

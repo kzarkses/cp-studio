@@ -19,7 +19,7 @@ mod tests;
 
 use std::collections::HashMap;
 
-pub use store::{Rule, Settings, Store, Tab};
+pub use store::{PostInsert, PostParams, Rule, Settings, Store, Tab};
 
 use ini::{Folder, Tags, js_base, norm_file, norm_js};
 
@@ -742,20 +742,40 @@ pub fn list(cat: &Catalog, st: &Store, src: &Src, query: &str) -> Vec<usize> {
     v
 }
 
+/// Les effets du coeur de CP Studio (FX Constellation, ses sources, le synthe
+/// de Guitar Tab) : le de ne les tire jamais, et remplacer la chaine les
+/// garde. Par nom, sans casse (« JS: FX Constellation Bridge », son fichier,
+/// ou le nom montre).
+pub fn is_internal(name: &str) -> bool {
+    const CORE: [&str; 5] = [
+        "fx constellation bridge",
+        "fx constellation - ",
+        "cp_mod lfo",
+        "cp_mod midi",
+        "cp guitar tab synth",
+    ];
+    let l = name.to_lowercase();
+    CORE.iter().any(|c| l.contains(c))
+}
+
 /// Le de : `n` effets differents, tires dans `visible`. Jamais un instrument
 /// ni une chaine dans une chaine d'effets ; si la liste ne montre que des
 /// instruments, un seul instrument.
 pub fn dice(cat: &Catalog, visible: &[usize], n: usize, seed: u64) -> Vec<usize> {
+    let free = |i: usize| {
+        let p = &cat.plugins[i];
+        !is_internal(&p.name) && !is_internal(&p.label)
+    };
     let fx: Vec<usize> = visible
         .iter()
         .copied()
-        .filter(|&i| !cat.plugins[i].instrument && cat.plugins[i].kind != Kind::Chain)
+        .filter(|&i| free(i) && !cat.plugins[i].instrument && cat.plugins[i].kind != Kind::Chain)
         .collect();
     let (mut pool, n) = if fx.is_empty() {
         let inst: Vec<usize> = visible
             .iter()
             .copied()
-            .filter(|&i| cat.plugins[i].instrument)
+            .filter(|&i| free(i) && cat.plugins[i].instrument)
             .collect();
         (inst, 1)
     } else {

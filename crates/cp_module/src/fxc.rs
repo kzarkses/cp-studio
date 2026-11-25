@@ -273,7 +273,7 @@ impl App {
     }
 
     /// Ecrit l'etat d'une piste du projet au premier plan.
-    fn fxc_write_state(&self, t: Tk, guid: &str, s: &str) {
+    pub(crate) fn fxc_write_state(&self, t: Tk, guid: &str, s: &str) {
         if s.len() < 48_000 {
             self.r.xc_set_track_ext(t, PROJ, s);
             if self.r.xc_proj_ext(PROJ, guid).is_some() {
@@ -301,14 +301,15 @@ impl App {
 
     /// L'etat garde de la piste : la piste d'abord, puis le projet.
     pub(crate) fn fxc_stored(&self, t: Tk) -> Option<String> {
+        self.fxc_stored_at(t, &self.fxc.guid)
+    }
+
+    /// L'etat garde d'une piste quelconque (`guid` : le sien).
+    pub(crate) fn fxc_stored_at(&self, t: Tk, guid: &str) -> Option<String> {
         self.r
             .xc_track_ext(t, PROJ)
             .filter(|s| !s.is_empty())
-            .or_else(|| {
-                self.r
-                    .xc_proj_ext(PROJ, &self.fxc.guid)
-                    .filter(|s| !s.is_empty())
-            })
+            .or_else(|| self.r.xc_proj_ext(PROJ, guid).filter(|s| !s.is_empty()))
     }
 
     /// L'etat de la piste a change sans nous (une annulation, un autre

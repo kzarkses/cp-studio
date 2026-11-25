@@ -1,10 +1,12 @@
 //! Les presets et les snapshots de FX Constellation.
 //!
-//! - Un **preset** dit tout ce qu'on entend sur la piste : la chaine (chaque
-//!   effet par son nom d'origine, son nom donne, son etat entier, ses
-//!   valeurs), le Sound Gen, le sequenceur, la banque de sources, le pad, les
-//!   macros, ce que chaque parametre porte, les liens internes. Il vit dans
-//!   un fichier a lui (`<ressources>/CP_Studio/FX Constellation/<nom>.fxc`).
+//! - Un **preset** dit tout ce qu'on entend sur la piste. Depuis la version 2
+//!   (2026-11-25), c'est la chaine telle que REAPER la range ([`crate::chain`]
+//!   : chaque effet, son etat entier, les donnees des JSFX, l'ordre, les
+//!   liens), l'etat de la piste (`CPS_FXC`) et ses cles (`FXC_ROUTES`, les
+//!   reglages ranges du Sound Gen...). La version 1 refaisait chaque effet
+//!   par son nom ; elle se lit encore. Il vit dans un fichier a lui
+//!   (`<ressources>/CP_Studio/FX Constellation/<nom>.fxc`).
 //! - Un **snapshot** est le mapping et le pad, rangé DANS un preset : il ne
 //!   touche que les effets qu'il connait (par leur nom).
 //!
@@ -17,7 +19,8 @@ use std::collections::BTreeMap;
 use crate::model::{PState, Pad};
 use crate::store::{decode_pad, decode_param, encode_pad, encode_param};
 
-const HEADER: &str = "cps_fxc_preset 1";
+const HEADER: &str = "cps_fxc_preset 2";
+const HEADER_V1: &str = "cps_fxc_preset 1";
 
 /// Un effet de la chaine d'un preset.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -73,6 +76,48 @@ pub struct Preset {
     /// « seq », « bank », « bridge », indice) → ce qu'ils portent.
     pub internal: BTreeMap<(String, usize), PState>,
     pub snapshots: BTreeMap<String, Snapshot>,
+    /// La chaine de la piste, ligne par ligne ([`crate::chain::chain_lines`]).
+    /// Presente : le rappel est exact ; absente : un preset de version 1.
+    pub chain: Option<Vec<String>>,
+    /// L'etat de la piste (`store::encode`), tel quel.
+    pub state: Option<String>,
+    /// Les cles de piste qui vont avec (`FXC_ROUTES`, `CP_FXC_detached`,
+    /// les reglages ranges).
+    pub exts: BTreeMap<String, String>,
+}
+
+/// Une valeur sur une ligne.
+fn esc(s: &str) -> String {
+    let mut o = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '\\' => o.push_str("\\\\"),
+            '\n' => o.push_str("\\n"),
+            '\r' => o.push_str("\\r"),
+            '\t' => o.push_str("\\t"),
+            c => o.push(c),
+        }
+    }
+    o
+}
+
+fn unesc(s: &str) -> String {
+    let mut o = String::with_capacity(s.len());
+    let mut it = s.chars();
+    while let Some(c) = it.next() {
+        if c != '\\' {
+            o.push(c);
+            continue;
+        }
+        match it.next() {
+            Some('n') => o.push('\n'),
+            Some('r') => o.push('\r'),
+            Some('t') => o.push('\t'),
+            Some(x) => o.push(x),
+            None => o.push('\\'),
+        }
+    }
+    o
 }
 
 fn list(v: &[f64]) -> String {
@@ -189,12 +234,26 @@ pub fn encode(p: &Preset) -> String {
             out.push(format!("snap.int {k} {i}\t{rest}"));
         }
     }
+    for (k, v) in &p.exts {
+        out.push(format!("ext {}\t{}", clean(k).replace(' ', "_"), esc(v)));
+    }
+    // Les blocs en dernier : « state N » puis N lignes telles quelles.
+    if let Some(s) = &p.state {
+        let lines: Vec<&str> = s.lines().collect();
+        out.push(format!("state {}", lines.len()));
+        out.extend(lines.iter().map(|l| l.to_string()));
+    }
+    if let Some(c) = &p.chain {
+        out.push(format!("chain {}", c.len()));
+        out.extend(c.iter().map(|l| l.replace(['\r', '\n'], "")));
+    }
     out.join("\n")
 }
 
 pub fn decode(s: &str) -> Option<Preset> {
     let mut lines = s.lines();
-    if lines.next()?.trim() != HEADER {
+    let head = lines.next()?.trim();
+    if head != HEADER && head != HEADER_V1 {
         return None;
     }
     let mut p = Preset::default();
@@ -208,7 +267,7 @@ pub fn decode(s: &str) -> Option<Preset> {
         }
         Some(i)
     };
-    for l in lines {
+    while let Some(l) = lines.next() {
         let l = l.trim_end_matches('\r');
         let (head, tail) = l.split_once('\t').unwrap_or((l, ""));
         let mut w = head.split_whitespace();
@@ -269,6 +328,25 @@ pub fn decode(s: &str) -> Option<Preset> {
             "seq" => p.seq = Some(unlist(tail)),
             "bank" => p.bank = Some(unlist(tail)),
             "routes" => p.routes = tail.to_string(),
+            "ext" => {
+                if let Some(k) = w.next() {
+                    p.exts.insert(k.to_string(), unesc(tail));
+                }
+            }
+            "state" | "chain" => {
+                // Un bloc : les N lignes suivantes, telles quelles.
+                let n = idx(&mut w).unwrap_or(0);
+                let block: Vec<String> = lines
+                    .by_ref()
+                    .take(n)
+                    .map(|x| x.trim_end_matches('\r').to_string())
+                    .collect();
+                if what == "state" {
+                    p.state = Some(block.join("\n"));
+                } else {
+                    p.chain = Some(block);
+                }
+            }
             "int" | "snap.int" => {
                 let (Some(k), Some(i)) = (w.next(), idx(&mut w)) else {
                     continue;

@@ -81,6 +81,15 @@ fn installed() -> Vec<(String, String)> {
         ("CLAPi: Surge XT (Surge Synth Team)", ""),
         ("JS: MIDI Arpeggiator", "midi/midi_arp"),
         ("JS: Amaranth", ""),
+        (
+            "JS: FX Constellation Bridge",
+            "FX Constellation Bridge.jsfx",
+        ),
+        (
+            "JS: FX Constellation - Sound Generator",
+            "FX Constellation - Sound Generator.jsfx",
+        ),
+        ("JS: CP_Mod LFO", "CP_Mod LFO.jsfx"),
     ]
     .iter()
     .map(|(a, b)| (a.to_string(), b.to_string()))
@@ -159,8 +168,8 @@ fn les_fichiers_se_comparent() {
 #[test]
 fn le_catalogue_reunit_liste_dossiers_et_etiquettes() {
     let c = catalog();
-    // 12 effets + 2 chaines.
-    assert_eq!(c.plugins.len(), 14);
+    // 12 effets + 3 du coeur de CP Studio + 2 chaines.
+    assert_eq!(c.plugins.len(), 17);
     let haas = &c.plugins[idx(&c, "VST3: kHs Haas")];
     assert_eq!(haas.file, "khs_haas.vst3");
     assert_eq!(haas.dev, "Kilohearts");
@@ -313,7 +322,19 @@ fn le_de_tire_sans_remise_et_sans_instrument() {
         u.dedup();
         assert_eq!(u.len(), 4, "sans remise");
         assert!(d.iter().all(|&i| !c.plugins[i].instrument));
+        assert!(
+            d.iter().all(|&i| !is_internal(&c.plugins[i].name)),
+            "jamais un effet du coeur : {:?}",
+            d.iter().map(|&i| &c.plugins[i].name).collect::<Vec<_>>()
+        );
     }
+    // Une liste qui ne montre que le coeur : rien a tirer.
+    let core = list(&c, &st, &Src::All, "constellation");
+    assert!(!core.is_empty());
+    assert!(dice(&c, &core, 3, 5).is_empty());
+    assert!(is_internal("CP_Mod MIDI.jsfx"));
+    assert!(is_internal("JS: CP Guitar Tab Synth"));
+    assert!(!is_internal("VST3: kHs Delay (Kilohearts)"));
     // Une liste d'instruments : un seul.
     let inst = list(&c, &st, &Src::Instr, "");
     assert_eq!(dice(&c, &inst, 5, 7).len(), 1);
@@ -343,8 +364,25 @@ fn le_fichier_se_relit() {
     st.set.steal = false;
     st.set.open_groups = [false, true, false, true];
     st.set.src = "folder:Melda".into();
+    st.set.post = PostInsert {
+        params: PostParams::Random(6),
+        xy: false,
+        range: true,
+        base: true,
+        invert: false,
+        bypass: true,
+    };
     let back = Store::decode(&st.encode()).unwrap();
     assert_eq!(back, st);
+    for p in [
+        PostParams::None,
+        PostParams::All,
+        PostParams::Continuous,
+        PostParams::Random(16),
+    ] {
+        st.set.post.params = p;
+        assert_eq!(Store::decode(&st.encode()).unwrap().set.post.params, p);
+    }
     assert!(Store::decode("autre chose").is_none());
 }
 

@@ -96,7 +96,7 @@ const I_AOFFS: usize = 3;
 const I_TB: usize = 4;
 
 /// Le synthe : le fichier installe, son nom dans la chaine.
-const SYNTH_SRC: &str = include_str!("cp_guitar_tab_synth.jsfx");
+pub(crate) const SYNTH_SRC: &str = include_str!("cp_guitar_tab_synth.jsfx");
 const SYNTH_FILE: &str = "cp_guitar_tab_synth.jsfx";
 const SYNTH_ADD: &str = "JS:CP_Studio/cp_guitar_tab_synth.jsfx";
 const SYNTH_NAME: &str = "CP Guitar Tab Synth";

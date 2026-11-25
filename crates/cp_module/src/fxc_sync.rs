@@ -17,7 +17,7 @@ use crate::App;
 use cp_sys::module::HostRef;
 
 /// Les JSFX de FX Constellation, tels que CP Studio les garde.
-const FILES: [(&str, &str); 7] = [
+pub(crate) const FILES: [(&str, &str); 7] = [
     (
         "FX Constellation Bridge.jsfx",
         include_str!("fxc_jsfx/FX Constellation Bridge.jsfx"),
