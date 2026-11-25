@@ -635,7 +635,7 @@ impl App {
         let playing = st.play & (play::PLAYING | play::RECORDING) != 0;
         self.tp.t.set_status(st);
         self.tuner_tick();
-        if playing || self.tp.t.dragging() {
+        if playing || self.tp.t.dragging() || self.tuner_ease() {
             self.transport_want_frames();
         } else if self.tp.t.take_dirty() {
             self.tp.t.mark();
@@ -685,8 +685,9 @@ impl App {
         let st = self.read_status();
         let playing = st.play & (play::PLAYING | play::RECORDING) != 0;
         self.tp.t.set_status(st);
+        let easing = self.tuner_ease();
         self.transport_render(false);
-        if !playing && !self.tp.t.dragging() {
+        if !playing && !self.tp.t.dragging() && !easing {
             if let Some(v) = &mut self.tp.view {
                 if v.frames_on {
                     v.frames_on = false;

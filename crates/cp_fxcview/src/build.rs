@@ -1983,6 +1983,7 @@ fn dress_internal(items: &mut [Item], v: &View, d: &Data, th: &Theme) {
             continue;
         }
         if let Look::Knob {
+            v: kv,
             depth,
             rings,
             live,
@@ -1990,6 +1991,10 @@ fn dress_internal(items: &mut [Item], v: &View, d: &Data, th: &Theme) {
             ..
         } = &mut it.look
         {
+            // Le bouton montre sa base, le point la valeur jouee (comme un
+            // parametre d'effet) : la valeur lue sur le JSFX est deja modulee,
+            // le bouton suivait le point a chaque relecture.
+            *kv = ps.base;
             *rings = rings_of(d, th, ps, false);
             *depth = knob_depth(v, d, ps);
             let g = d.t.pad.gesture_range;

@@ -1894,6 +1894,15 @@ impl SelfTest {
                         field(&st, "pop")
                     ),
                 );
+                let src_ms = field(&st, "src_ms").parse::<f64>().unwrap_or(99.0);
+                self.say(
+                    field(&st, "moving") == "1" && field(&st, "clock") == "1" && src_ms < 4.0,
+                    format!(
+                        "FX Constellation : un LFO pose fait tourner les images sans la souris (mobile {}, horloge {}, une image de sources {src_ms:.2} ms)",
+                        field(&st, "moving"),
+                        field(&st, "clock")
+                    ),
+                );
                 self.say(
                     field(&st, "carry") == "1",
                     format!(

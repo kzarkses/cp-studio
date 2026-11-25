@@ -243,6 +243,27 @@ impl App {
             } else {
                 self.r.xc_set(t, fx, p, v);
             }
+            // La rangee suit la souris tout de suite (sa valeur et son texte),
+            // sans attendre la relecture du battement.
+            let live = if linked {
+                self.fxc_live(key, v, true)
+            } else {
+                v
+            };
+            let text = self
+                .r
+                .xc_format_at(t, fx, p, live)
+                .unwrap_or_else(|| self.r.xc_format(t, fx, p));
+            if let Some(row) = self
+                .fxc
+                .rows
+                .iter_mut()
+                .find_map(|r| r.params.iter_mut().find(|q| q.key == key))
+            {
+                row.live = live;
+                row.text = text;
+            }
+            self.fxc.view.mark();
         }
         self.fxc_changed();
     }

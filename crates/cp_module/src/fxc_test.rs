@@ -74,14 +74,46 @@ impl App {
                 let h = self.fxc.win.as_ref().map_or(0, |w| w.hwnd.0);
                 let fulls = self.fxc.stats.get("frame_full").copied().unwrap_or(0) - full0;
                 let pop = self.fxc.view.pop.is_some() as u8;
+                let (moving, clock, src_ms) = self.fxc_selftest_live();
                 let carry = self.fxc_selftest_carry();
                 format!(
-                    "snap hwnd={h} full_ms={full:.2} pad_ms={part:.2} pad_fulls={fulls} pop={pop} carry={carry}"
+                    "snap hwnd={h} full_ms={full:.2} pad_ms={part:.2} pad_fulls={fulls} pop={pop} carry={carry} moving={moving} clock={clock} src_ms={src_ms:.2}"
                 )
             }
             s => format!("unknown step {s}"),
         };
         r.ext_set(SECTION, "selftest_fxc", &out, false);
+    }
+
+    /// Une source posee fait tourner les images sans la souris : un LFO lache
+    /// sur un parametre, puis un battement. Rend (la fenetre se sait mobile,
+    /// l'horloge de l'ecran tourne, le pire cout de 5 images ou seules les
+    /// sources sont relues).
+    fn fxc_selftest_live(&mut self) -> (u8, u8, f64) {
+        let Some(k) = self
+            .fxc
+            .rows
+            .first()
+            .and_then(|r| r.params.first())
+            .map(|p| p.key.clone())
+        else {
+            return (0, 0, 99.0);
+        };
+        self.fxc_act(Act::Drop(1, Ctl::Knob(k)));
+        self.fxc_sync_tick(false);
+        self.fxc_sync_tick(false);
+        let moving = self.fxc_moving() as u8;
+        self.fxc_tick();
+        let clock = self.fxc.win.as_ref().is_some_and(|w| w.frame.frames_on) as u8;
+        let mut worst = 0.0f64;
+        for _ in 0..5 {
+            let t0 = std::time::Instant::now();
+            self.fxc_frame_sources();
+            self.fxc.view.mark();
+            self.fxc_render(false);
+            worst = worst.max(t0.elapsed().as_secs_f64() * 1000.0);
+        }
+        (moving, clock, worst)
     }
 
     /// Le glisser commun : ReaEQ lache dans la colonne DETACHED de la vraie

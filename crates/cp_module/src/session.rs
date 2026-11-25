@@ -796,11 +796,43 @@ impl App {
         if !shown {
             return;
         }
-        if self.ses_animating() {
+        // Ce qui joue, et des vumetres qui bougent : les images tournent a la
+        // cadence de l'ecran (le battement de REAPER n'en donne que 30).
+        if self.ses_animating() || self.ses_meters_live() {
             self.ses_want_frames(true);
         } else {
             self.ses.view.mark();
             self.ses_render(false);
+        }
+    }
+
+    /// Des vumetres bougent : le transport joue, ou une crete retombe.
+    fn ses_meters_live(&self) -> bool {
+        self.r.play_state() & (play::PLAYING | play::RECORDING) != 0
+            || self
+                .ses
+                .strips
+                .iter()
+                .any(|s| s.meter[0] > 1e-4 || s.meter[1] > 1e-4)
+    }
+
+    /// Une image : les cretes seules, relues (le reste des tranches au
+    /// battement).
+    fn ses_frame_meters(&mut self) {
+        let peaks: HashMap<String, [f32; 2]> = self.r.session_peaks().into_iter().collect();
+        let mut changed = false;
+        for (i, c) in self.ses.ses.cols.iter().enumerate() {
+            let Some(st) = self.ses.strips.get_mut(i) else {
+                break;
+            };
+            let m = peaks.get(&c.track.guid).copied().unwrap_or([0.0; 2]);
+            if m != st.meter {
+                st.meter = m;
+                changed = true;
+            }
+        }
+        if changed {
+            self.ses.view.mark();
         }
     }
 
@@ -2352,12 +2384,16 @@ impl App {
                 Some(0)
             }
             WM_CP_FRAME => {
+                let meters = self.ses_meters_live();
+                if meters && ui::is_shown(hwnd) {
+                    self.ses_frame_meters();
+                }
                 if self.ses_animating() {
                     self.ses.view.mark();
                 }
                 self.ses_render(false);
                 let idle = self.ses.win.as_ref().is_none_or(|w| w.frame.idle());
-                if !self.ses_animating() && idle {
+                if !self.ses_animating() && !meters && idle {
                     self.ses_want_frames(false);
                 }
                 Some(0)

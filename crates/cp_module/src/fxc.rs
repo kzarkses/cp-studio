@@ -137,6 +137,9 @@ pub(crate) struct CPart {
     pub(crate) last_frame: Option<std::time::Instant>,
     /// Le pad a bouge seul recemment : les images tournent jusque-la.
     pub(crate) anim_until: Option<std::time::Instant>,
+    /// La banque globale (piste CP MOD, effet), retrouvee a chaque lecture
+    /// entiere : les images lisent ses sorties sans la rechercher.
+    pub(crate) gbank_at: Option<(cp_sys::fxc::Tk, usize)>,
 }
 
 /// Les mots caches par defaut : ceux de l'ancienne version.
@@ -244,6 +247,7 @@ impl CPart {
             show_hidden: r.ext_get(SECTION, "fxc_show_hidden").as_deref() == Some("1"),
             last_frame: None,
             anim_until: None,
+            gbank_at: None,
         }
     }
 }
@@ -881,10 +885,10 @@ impl App {
         }
         self.fxc_sync_tick(down);
         self.fxc_capture_tick();
-        // Les images ne tournent que si le pad bouge vraiment (lu au
-        // battement) ou rattrape la souris.
-        let recent = self.fxc.anim_until.is_some_and(|t| Instant::now() < t);
-        if self.fxc_animating() && (recent || self.fxc.pad_target.is_some()) {
+        // Une source posee (LFO, sequenceur, enveloppe, macro menee) ou le
+        // pad qui marche : les images tournent a la cadence de l'ecran, que
+        // la souris touche la fenetre ou non.
+        if self.fxc_moving() {
             self.fxc_want_frames(true);
         }
         if self.fxc.ticks % 10 == 0 {
@@ -902,7 +906,10 @@ impl App {
             }
         }
         self.fxc_tip();
-        self.fxc_render(false);
+        // Les images tournent : la suivante dessine ce que le battement a lu.
+        if !self.fxc.win.as_ref().is_some_and(|w| w.frame.frames_on) {
+            self.fxc_render(false);
+        }
     }
 
     pub(crate) fn fxc_wnd(&mut self, m: &WinMsg) -> Option<isize> {
@@ -914,13 +921,19 @@ impl App {
         let md = mods();
         match m.msg {
             WM_CP_FRAME => {
-                let anim = ui::is_shown(hwnd) && self.fxc_animate();
+                let shown = ui::is_shown(hwnd);
+                let anim = shown && self.fxc_animate();
+                // Les sources, lues a chaque image (pas au battement).
+                if shown {
+                    self.fxc_frame_sources();
+                }
                 if self.fxc.view.dragging() {
                     self.fxc.view.mark();
                 }
                 self.fxc_render(false);
                 let idle = self.fxc.win.as_ref().is_none_or(|w| w.frame.idle());
-                if !self.fxc.view.dragging() && idle && !anim {
+                let moving = shown && self.fxc_moving();
+                if !self.fxc.view.dragging() && idle && !anim && !moving {
                     self.fxc_want_frames(false);
                 }
                 Some(0)

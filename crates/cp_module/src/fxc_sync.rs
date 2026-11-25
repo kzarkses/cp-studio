@@ -47,6 +47,12 @@ pub(crate) const FILES: [(&str, &str); 7] = [
 
 static INSTALLED: AtomicBool = AtomicBool::new(false);
 
+/// Ce qui bouge seul dans le Sound Gen (les enveloppes, la position de
+/// lecture) et dans le sequenceur (le pas, les sorties) : relu a chaque
+/// image, le reste au battement.
+const SG_OUTS: [usize; 5] = [31, 52, 63, 68, 73];
+const SEQ_OUTS: [usize; 10] = [12, 13, 14, 15, 16, 17, 18, 219, 220, 221];
+
 /// Ecrit les JSFX dans `Effects` s'ils manquent ou different (une fois par
 /// session). REAPER les compile au chargement d'un projet.
 pub(crate) fn install_jsfx(r: &Reaper, host: &HostRef) {
@@ -338,10 +344,19 @@ impl App {
     }
 
     /// Lit ce que la vue montre ; `full` : tout (sinon les sorties seules).
+    /// La vue n'est marquee que si quelque chose a change (une automation,
+    /// un reglage fait ailleurs, une source qui bouge).
     pub(crate) fn fxc_read_values(&mut self, full: bool) {
         let Some(t) = self.fxc_tk() else { return };
         let r = self.r;
         let chain = self.fxc.chain.clone();
+        let before = (
+            self.fxc.bank.clone(),
+            self.fxc.gbank.clone(),
+            self.fxc.sg.clone(),
+            self.fxc.seq.clone(),
+            self.fxc.macros,
+        );
         // Les banques.
         self.fxc.bank = chain.find(FxKind::Bank).map(|fx| {
             let prev = self.fxc.bank.take();
@@ -349,27 +364,23 @@ impl App {
         });
         if full || self.fxc.ticks % 30 == 0 {
             let gb = self.fxc_global_bank();
+            self.fxc.gbank_at = gb;
             self.fxc.gbank = gb.map(|(mt, fx)| {
                 let prev = self.fxc.gbank.take();
                 self.fxc_read_bank(mt, fx, true, prev.as_ref())
             });
+        } else {
+            self.fxc_read_gbank_outs();
         }
         self.fxc.sg = chain.find(FxKind::SoundGen).map(|fx| {
             let prev = self.fxc.sg.take();
             let f = full || prev.is_none();
-            self.fxc_read_js(t, fx, true, f, prev.as_ref(), &[31, 52, 63, 68, 73])
+            self.fxc_read_js(t, fx, true, f, prev.as_ref(), &SG_OUTS)
         });
         self.fxc.seq = chain.find(FxKind::Seq).map(|fx| {
             let prev = self.fxc.seq.take();
             let f = full || prev.is_none();
-            self.fxc_read_js(
-                t,
-                fx,
-                false,
-                f,
-                prev.as_ref(),
-                &[12, 13, 14, 15, 16, 17, 18, 219, 220, 221],
-            )
+            self.fxc_read_js(t, fx, false, f, prev.as_ref(), &SEQ_OUTS)
         });
         // Les macros et la position du pad.
         if let Some(bfx) = chain.find(FxKind::Bridge) {
@@ -377,7 +388,100 @@ impl App {
                 *m = r.xc_get_raw(t, bfx, bridge::MACRO_IN + n).0;
             }
         }
-        // Les sources, vives.
+        let mut changed = before
+            != (
+                self.fxc.bank.clone(),
+                self.fxc.gbank.clone(),
+                self.fxc.sg.clone(),
+                self.fxc.seq.clone(),
+                self.fxc.macros,
+            );
+        changed |= self.fxc_collect_src(t);
+        // Les parametres : la valeur jouee.
+        // Les rangees a l'ecran et les parametres suivis souvent ; les
+        // autres une fois par seconde (une chaine peut en avoir des
+        // milliers).
+        let visible: std::collections::HashSet<&str> = self
+            .fxc
+            .view
+            .items()
+            .iter()
+            .filter_map(|i| match &i.ctl {
+                cp_fxcview::Ctl::Knob(k) => Some(k.as_str()),
+                _ => None,
+            })
+            .collect();
+        let text_tick = full || self.fxc.ticks % 10 == 0;
+        let all = full || self.fxc.ticks % 30 == 0;
+        let dests: std::collections::HashSet<(usize, usize)> = self
+            .fxc
+            .plan
+            .links
+            .iter()
+            .map(|l| (l.fx, l.param))
+            .collect();
+        let mut rows = std::mem::take(&mut self.fxc.rows);
+        for row in rows.iter_mut() {
+            let Some(fx) = chain.index_of(&row.guid) else {
+                continue;
+            };
+            let en = r.xc_fx_enabled(t, fx);
+            changed |= en != row.enabled;
+            row.enabled = en;
+            for p in row.params.iter_mut() {
+                let tracked = self.fxc.t.params.get(&p.key).is_some_and(|s| s.sel);
+                let shown = visible.contains(p.key.as_str());
+                if !(all || tracked || shown) {
+                    continue;
+                }
+                let text_too = text_tick && (shown || full);
+                let read = r.xc_get(t, fx, p.index);
+                self.fxc.scan.entry(p.key.clone()).or_insert(read);
+                let live = self.fxc_live(&p.key, read, dests.contains(&(fx, p.index)));
+                changed |= (live - p.live).abs() > 1e-6;
+                p.live = live;
+                if text_too {
+                    let text = r
+                        .xc_format_at(t, fx, p.index, p.live)
+                        .unwrap_or_else(|| r.xc_format(t, fx, p.index));
+                    if text != p.text {
+                        p.text = text;
+                        changed = true;
+                    }
+                }
+            }
+        }
+        self.fxc.rows = rows;
+        if changed {
+            self.fxc.view.mark();
+        }
+    }
+
+    /// Les sorties de la banque globale seules (sa place est connue).
+    fn fxc_read_gbank_outs(&mut self) {
+        let Some((mt, fx)) = self.fxc.gbank_at else {
+            return;
+        };
+        if self.r.xc_guid(mt).is_none() {
+            self.fxc.gbank_at = None;
+            return;
+        }
+        if self
+            .fxc
+            .gbank
+            .as_ref()
+            .is_some_and(|b| b.slots.iter().any(|s| s.on))
+        {
+            let prev = self.fxc.gbank.take();
+            self.fxc.gbank = Some(self.fxc_read_bank(mt, fx, false, prev.as_ref()));
+        }
+    }
+
+    /// Les sources, vives, depuis ce qui vient d'etre lu (et le bridge, les
+    /// notes) ; vrai si l'une a bouge.
+    fn fxc_collect_src(&mut self, t: Tk) -> bool {
+        let r = self.r;
+        let chain = &self.fxc.chain;
         let mut src = BTreeMap::new();
         if let Some(b) = &self.fxc.bank {
             for (i, s) in b.slots.iter().enumerate() {
@@ -413,54 +517,62 @@ impl App {
                 src.insert(231 + k as i32, r.xc_get_raw(t, nfx, k).0);
             }
         }
+        let moved = src.len() != self.fxc.src.len()
+            || src
+                .iter()
+                .zip(self.fxc.src.iter())
+                .any(|((ka, a), (kb, b))| ka != kb || (a - b).abs() > 1e-6);
         self.fxc.src = src;
-        // Les parametres : la valeur jouee.
-        // Les rangees a l'ecran et les parametres suivis souvent ; les
-        // autres une fois par seconde (une chaine peut en avoir des
-        // milliers).
-        let visible: std::collections::HashSet<&str> = self
-            .fxc
-            .view
-            .items()
-            .iter()
-            .filter_map(|i| match &i.ctl {
-                cp_fxcview::Ctl::Knob(k) => Some(k.as_str()),
-                _ => None,
-            })
-            .collect();
-        let text_tick = full || self.fxc.ticks % 10 == 0;
-        let all = full || self.fxc.ticks % 30 == 0;
-        let dests: std::collections::HashSet<(usize, usize)> = self
-            .fxc
-            .plan
-            .links
-            .iter()
-            .map(|l| (l.fx, l.param))
-            .collect();
-        let mut rows = std::mem::take(&mut self.fxc.rows);
-        for row in rows.iter_mut() {
-            let Some(fx) = chain.index_of(&row.guid) else {
-                continue;
-            };
-            row.enabled = r.xc_fx_enabled(t, fx);
-            for p in row.params.iter_mut() {
-                let tracked = self.fxc.t.params.get(&p.key).is_some_and(|s| s.sel);
-                let shown = visible.contains(p.key.as_str());
-                if !(all || tracked || (shown && self.fxc.ticks % 3 == 0)) {
-                    continue;
-                }
-                let text_too = text_tick && (shown || full);
-                let read = r.xc_get(t, fx, p.index);
-                self.fxc.scan.entry(p.key.clone()).or_insert(read);
-                p.live = self.fxc_live(&p.key, read, dests.contains(&(fx, p.index)));
-                if text_too {
-                    p.text = r
-                        .xc_format_at(t, fx, p.index, p.live)
-                        .unwrap_or_else(|| r.xc_format(t, fx, p.index));
-                }
-            }
+        moved
+    }
+
+    /// Une image : les sorties des sources seules (LFO, banque globale,
+    /// enveloppes du Sound Gen, sequenceur, macros, notes), puis les valeurs
+    /// jouees qu'elles menent. Le battement (30 Hz) relit le reste ; les
+    /// sources bougent a la cadence de l'ecran, comme pendant un geste.
+    pub(crate) fn fxc_frame_sources(&mut self) {
+        let Some(t) = self.fxc_tk() else { return };
+        if let Some(fx) = self.fxc.chain.find(FxKind::Bank) {
+            let prev = self.fxc.bank.take();
+            let full = prev.is_none();
+            self.fxc.bank = Some(self.fxc_read_bank(t, fx, full, prev.as_ref()));
         }
-        self.fxc.rows = rows;
+        self.fxc_read_gbank_outs();
+        if let Some(fx) = self.fxc.chain.find(FxKind::SoundGen) {
+            let prev = self.fxc.sg.take();
+            let full = prev.is_none();
+            self.fxc.sg = Some(self.fxc_read_js(t, fx, true, full, prev.as_ref(), &SG_OUTS));
+        }
+        if let Some(fx) = self.fxc.chain.find(FxKind::Seq) {
+            let prev = self.fxc.seq.take();
+            let full = prev.is_none();
+            self.fxc.seq = Some(self.fxc_read_js(t, fx, false, full, prev.as_ref(), &SEQ_OUTS));
+        }
+        if self.fxc_collect_src(t) {
+            self.fxc_relive();
+            self.fxc.view.mark();
+        }
+    }
+
+    /// Quelque chose de la fenetre peut-il bouger seul (une source posee, le
+    /// pad qui marche) ? Les images tournent alors sans arret.
+    pub(crate) fn fxc_moving(&self) -> bool {
+        let c = &self.fxc.chain;
+        self.fxc_animating()
+            || self
+                .fxc
+                .bank
+                .as_ref()
+                .is_some_and(|b| b.slots.iter().any(|s| s.on))
+            || self
+                .fxc
+                .gbank
+                .as_ref()
+                .is_some_and(|b| b.slots.iter().any(|s| s.on))
+            || c.find(FxKind::SoundGen).is_some()
+            || c.find(FxKind::Seq).is_some()
+            || c.find(FxKind::Notes).is_some()
+            || c.find(FxKind::Bridge).is_some() && !self.fxc.plan.links.is_empty()
     }
 
     /// Relit un seul effet interne (le geste qui le regle tourne a la
@@ -473,7 +585,7 @@ impl App {
         match kind {
             FxKind::SoundGen => {
                 let prev = self.fxc.sg.take();
-                let j = self.fxc_read_js(t, fx, true, true, prev.as_ref(), &[31, 52, 63, 68, 73]);
+                let j = self.fxc_read_js(t, fx, true, true, prev.as_ref(), &SG_OUTS);
                 for (i, p) in sg::ENV_OUT.iter().enumerate() {
                     self.fxc.src.insert(201 + i as i32, j.r(*p));
                 }
@@ -481,14 +593,7 @@ impl App {
             }
             FxKind::Seq => {
                 let prev = self.fxc.seq.take();
-                let j = self.fxc_read_js(
-                    t,
-                    fx,
-                    false,
-                    true,
-                    prev.as_ref(),
-                    &[12, 13, 14, 15, 16, 17, 18, 219, 220, 221],
-                );
+                let j = self.fxc_read_js(t, fx, false, true, prev.as_ref(), &SEQ_OUTS);
                 self.fxc.src.insert(221, j.r(seq::MOD_OUT[0]));
                 self.fxc.src.insert(222, j.r(seq::MOD_OUT[1]));
                 self.fxc.seq = Some(j);
@@ -627,7 +732,7 @@ impl App {
 
     /// La valeur qu'un parametre joue : un lien rend sa base a
     /// `GetParamNormalized`, la modulation se recalcule depuis ses sources.
-    fn fxc_live(&self, key: &str, read: f64, has_link: bool) -> f64 {
+    pub(crate) fn fxc_live(&self, key: &str, read: f64, has_link: bool) -> f64 {
         let Some(ps) = self.fxc.t.params.get(key) else {
             return read;
         };
@@ -1472,17 +1577,10 @@ impl App {
                 self.fxc_apply();
             }
         }
-        // La fenetre bouge avec ce qui joue.
-        let anim = runs
-            || self
-                .fxc
-                .bank
-                .as_ref()
-                .is_some_and(|b| b.slots.iter().any(|s| s.on))
-            || self.fxc.seq.is_some();
-        if anim && self.fxc.ticks % 2 == 0 {
-            self.fxc.view.mark();
-        }
+        // Ce qui bouge seul se dessine a chaque image (`fxc_frame_sources`) ;
+        // le battement ne marque la vue que si sa lecture a change quelque
+        // chose (une image sur deux d'un battement a 30 Hz, c'etait 15 images
+        // par seconde des qu'on lachait la souris).
     }
 
     // -----------------------------------------------------------------------

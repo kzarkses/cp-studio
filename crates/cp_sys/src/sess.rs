@@ -167,6 +167,25 @@ impl Reaper {
             .collect()
     }
 
+    /// Les cretes seules (GUID, gauche, droite), piste par piste : ce que les
+    /// vumetres lisent a chaque image.
+    pub fn session_peaks(&self) -> Vec<(String, [f32; 2])> {
+        type Peak = unsafe extern "C" fn(P, i32) -> f64;
+        let Some(peak) = self.sf::<Peak>(c"Track_GetPeakInfo") else {
+            return Vec::new();
+        };
+        self.s_tracks()
+            .into_iter()
+            .map(|tr| {
+                (
+                    self.s_str(tr, "GUID").unwrap_or_default(),
+                    // SAFETY: piste vivante (prise a l'instant) ; canaux 0 et 1.
+                    unsafe { [peak(tr, 0) as f32, peak(tr, 1) as f32] },
+                )
+            })
+            .collect()
+    }
+
     // -----------------------------------------------------------------------
     // L'etat du projet
     // -----------------------------------------------------------------------

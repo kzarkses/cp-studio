@@ -27,6 +27,10 @@ pub(crate) struct Tuner {
     last_ok: Option<Instant>,
     since_scan: u32,
     capturing: bool,
+    /// La mesure a montrer : l'aiguille la rejoint image par image (une
+    /// mesure par battement, l'aiguille sautait a 30 Hz).
+    target: Option<TunerView>,
+    last_ease: Option<Instant>,
 }
 
 impl Tuner {
@@ -45,6 +49,8 @@ impl Tuner {
             last_ok: None,
             since_scan: 1000,
             capturing: false,
+            target: None,
+            last_ease: None,
         }
     }
 }
@@ -86,17 +92,46 @@ impl App {
     }
 
     fn tuner_show(&mut self, v: Option<TunerView>) {
-        let same = match (&self.tp.t.tuner, &v) {
-            (None, None) => true,
-            (Some(a), Some(b)) => {
-                a.note == b.note && a.octave == b.octave && (a.cents - b.cents).abs() < 0.3
+        self.tp.tu.target = v;
+        self.tuner_ease();
+    }
+
+    /// Une image : l'aiguille rejoint la mesure (une autre note, ou plus de
+    /// note : tout de suite). Rend vrai tant qu'elle bouge.
+    pub(crate) fn tuner_ease(&mut self) -> bool {
+        let now = Instant::now();
+        let dt = self
+            .tp
+            .tu
+            .last_ease
+            .map_or(1.0 / 60.0, |t| (now - t).as_secs_f64())
+            .clamp(0.001, 0.1);
+        self.tp.tu.last_ease = Some(now);
+        let target = self.tp.tu.target.clone();
+        let cur = self.tp.t.tuner.clone();
+        let next = match (&cur, target) {
+            (_, None) => None,
+            (Some(c), Some(t)) if c.note == t.note && c.octave == t.octave => {
+                let k = 1.0 - (-dt / 0.07).exp();
+                let cents = c.cents + (t.cents - c.cents) * k as f32;
+                let cents = if (t.cents - cents).abs() < 0.05 {
+                    t.cents
+                } else {
+                    cents
+                };
+                Some(TunerView { cents, ..t })
             }
+            (_, Some(t)) => Some(t),
+        };
+        let moving = match (&next, &self.tp.tu.target) {
+            (Some(n), Some(t)) => (n.cents - t.cents).abs() >= 0.05,
             _ => false,
         };
-        if !same {
-            self.tp.t.tuner = v;
+        if next != cur {
+            self.tp.t.tuner = next;
             self.tp.t.mark();
         }
+        moving
     }
 
     /// Le battement de l'accordeur.
