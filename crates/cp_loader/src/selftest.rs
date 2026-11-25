@@ -1995,6 +1995,14 @@ impl SelfTest {
                     ),
                 );
                 self.say(
+                    field(&st, "det_shown") == "1" && field(&st, "det_kept") == "1",
+                    format!(
+                        "FX Browser : un effet hors de ROLL est marque ({}) et le de le garde ({})",
+                        field(&st, "det_shown"),
+                        field(&st, "det_kept")
+                    ),
+                );
+                self.say(
                     field(&st, "post") == "2",
                     format!(
                         "FX Browser : la post-insertion suit 2 parametres de ReaEQ ({})",

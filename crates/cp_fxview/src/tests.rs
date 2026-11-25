@@ -165,14 +165,17 @@ fn chain() -> Chain {
             ChainFx {
                 name: "VST3i: Serum (Xfer Records)".into(),
                 on: true,
+                detached: false,
             },
             ChainFx {
                 name: "VST3: Pro-Q 3 (FabFilter)".into(),
                 on: true,
+                detached: false,
             },
             ChainFx {
                 name: "VST3: EchoBoy (Soundtoys)".into(),
                 on: false,
+                detached: true,
             },
         ],
     }

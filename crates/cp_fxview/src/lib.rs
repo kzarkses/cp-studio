@@ -29,6 +29,9 @@ pub struct ChainFx {
     /// Le nom de REAPER (« VST3: Pro-Q 3 (FabFilter) »).
     pub name: String,
     pub on: bool,
+    /// Hors de ROLL dans FX Constellation (DETACHED) : rien ne le tire au
+    /// hasard, ni ROLL ni le de.
+    pub detached: bool,
 }
 
 /// La chaine que montre le panneau de droite.
@@ -739,8 +742,13 @@ impl View {
             }
             Hit::Fx(i) => match chain.fx.get(i) {
                 Some(f) => format!(
-                    "{}\nDouble-click: open \u{00b7} drag: move (Ctrl: copy) \u{00b7} Shift+click: bypass \u{00b7} Alt+click: delete",
-                    f.name
+                    "{}{}\nDouble-click: open \u{00b7} drag: move (Ctrl: copy) \u{00b7} Shift+click: bypass \u{00b7} Alt+click: delete",
+                    f.name,
+                    if f.detached {
+                        "\nDetached: FX Constellation's ROLL and the dice leave it alone"
+                    } else {
+                        ""
+                    }
                 ),
                 None => String::new(),
             },

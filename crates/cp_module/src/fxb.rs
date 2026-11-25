@@ -63,6 +63,8 @@ pub(crate) struct FPart {
     /// se montrent pas, chaque geste traduit sa rangee.
     chain_real: Vec<usize>,
     chain_total: usize,
+    /// Le GUID de chaque effet montre (detacher, rattacher).
+    chain_guids: Vec<String>,
     /// La piste montree (son GUID).
     track: Option<String>,
     /// Le prochain ajout cree une piste ; la piste choisie quand on l'a
@@ -102,6 +104,7 @@ impl FPart {
             chain: Chain::default(),
             chain_real: Vec::new(),
             chain_total: 0,
+            chain_guids: Vec::new(),
             track: None,
             new_track: None,
             loaded: false,
@@ -358,22 +361,36 @@ impl App {
             new_track,
             ..Chain::default()
         };
-        let (mut real, mut total) = (Vec::new(), 0);
+        let (mut real, mut total, mut guids) = (Vec::new(), 0, Vec::new());
         if !new_track {
             if let Some(t) = sel.as_deref().and_then(|g| self.r.fx_track(g)) {
                 ch.track = Some(t.name);
                 ch.color = t.color.map(|(r, g, b)| rgb(r, g, b));
                 total = t.fx.len();
                 let (shown, places) = shown_fx(&t.fx);
-                real = places;
+                // Hors de ROLL dans FX Constellation (DETACHED) : par GUID.
+                let g = sel.as_deref().unwrap_or_default();
+                let tk = self.r.xc_track(g);
+                let detached = self.fxc_detached_of(g);
+                guids = places
+                    .iter()
+                    .map(|&k| tk.and_then(|t| self.r.xc_fx_guid(t, k)).unwrap_or_default())
+                    .collect();
                 ch.fx = shown
                     .into_iter()
-                    .map(|(name, on)| ChainFx { name, on })
+                    .zip(&guids)
+                    .map(|((name, on), id)| ChainFx {
+                        name,
+                        on,
+                        detached: !id.is_empty() && detached.contains(id),
+                    })
                     .collect();
+                real = places;
             }
         }
         self.fxb.chain_real = real;
         self.fxb.chain_total = total;
+        self.fxb.chain_guids = guids;
         self.fxb.track = sel;
         if ch != self.fxb.chain {
             if ch.fx.len() != self.fxb.chain.fx.len() || ch.track != self.fxb.chain.track {
@@ -512,15 +529,21 @@ impl App {
                 r.undo_begin();
                 // Les instruments restent : le de ne tire que des effets. Le
                 // coeur aussi (FX Constellation, ses sources, le kit).
-                // La vraie chaine (la chaine montree cache le systeme).
+                // La vraie chaine (la chaine montree cache le systeme). Un
+                // effet hors de ROLL (DETACHED) reste aussi.
                 let fx = r.fx_track(&g).map(|t| t.fx).unwrap_or_default();
+                let detached = self.fxc_detached_of(&g);
+                let tk = r.xc_track(&g);
                 for (i, (name, _)) in fx.iter().enumerate().rev() {
                     let inst = self
                         .fxb
                         .cat
                         .find(name)
                         .is_some_and(|k| self.fxb.cat.plugins[k].instrument);
-                    if !inst && !is_core(name) {
+                    let det = tk
+                        .and_then(|t| r.xc_fx_guid(t, i))
+                        .is_some_and(|id| detached.contains(&id));
+                    if !inst && !det && !is_core(name) {
                         r.fx_remove(&g, i);
                     }
                 }
@@ -997,10 +1020,18 @@ impl App {
         let Some(f) = self.fxb.chain.fx.get(fx).cloned() else {
             return;
         };
+        let id = self.fxb.chain_guids.get(fx).cloned().unwrap_or_default();
         let items = [
             Some(item(1, "Open", false, true)),
             Some(item(2, if f.on { "Bypass" } else { "Enable" }, false, true)),
             Some(item(3, "Delete", false, true)),
+            None,
+            Some(item(
+                5,
+                "Detached (ROLL and the dice leave it alone)",
+                f.detached,
+                !id.is_empty(),
+            )),
             None,
             Some(item(4, "Show REAPER's FX chain", false, true)),
         ];
@@ -1009,6 +1040,12 @@ impl App {
             1 => self.fxb_act(Act::FxOpen(fx)),
             2 => self.fxb_act(Act::FxToggle(fx)),
             3 => self.fxb_act(Act::FxDelete(fx)),
+            5 => {
+                if let Some(g) = self.fxb.track.clone() {
+                    self.fxc_set_detached_on(&g, &id, !f.detached);
+                }
+                self.fxb_sync_chain();
+            }
             4 => {
                 if let (Some(g), Some(k)) = (self.fxb.track.clone(), self.fxb_real(fx)) {
                     self.r.fx_open(&g, k, true);
@@ -1802,6 +1839,17 @@ impl App {
                 Some(model.tracked().filter(|(k, _)| k.starts_with(&fg)).count())
             })
             .unwrap_or(0);
+        // Un effet hors de ROLL (DETACHED) : la chaine le dit, le de qui
+        // remplace la chaine le garde.
+        self.fxb_sync_chain();
+        let id0 = self.fxb.chain_guids.first().cloned().unwrap_or_default();
+        self.fxc_set_detached_on(&g, &id0, true);
+        self.fxb_sync_chain();
+        let det_shown = self.fxb.chain.fx.first().is_some_and(|f| f.detached) as u8;
+        self.fxb.st.set.dice_count = 1;
+        self.fxb.st.set.dice_replace = true;
+        self.fxb_dice();
+        let det_kept = (!id0.is_empty() && self.fxb.chain_guids.contains(&id0)) as u8;
         // La recherche.
         let (cat, st) = (&self.fxb.cat, &mut self.fxb.st);
         self.fxb.view.set_source(cat, st, Src::All);
@@ -1812,7 +1860,7 @@ impl App {
         self.fxb.view.search.clear();
         self.fxb.view.refresh(&self.fxb.cat, &self.fxb.st);
         format!(
-            "report plugins={} folders={} favs={} tabs={} order1={order1} order2={order2} bypass={} copy={copied} dice={dice} replaced={replaced} core_kept={core_kept} hidden={hidden} toggled={toggled} post={post} search={} stolen={}",
+            "report plugins={} folders={} favs={} tabs={} order1={order1} order2={order2} bypass={} copy={copied} dice={dice} replaced={replaced} core_kept={core_kept} hidden={hidden} toggled={toggled} post={post} det_shown={det_shown} det_kept={det_kept} search={} stolen={}",
             self.fxb.cat.plugins.len(),
             self.fxb.cat.folders.len(),
             self.fxb.cat.reaper_favs.len(),

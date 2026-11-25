@@ -128,6 +128,12 @@ FxBrowser) :
   place) traduit sa rangée. Vérifié dans `reaper-test` pour le navigateur
   (le bridge caché, contourner la première rangée touche le bon effet) ; la
   Session n'a pas d'auto-test de ses effets.
+- ✅ Le navigateur sait qu'un effet est hors de ROLL (DETACHED, 2026-11-25,
+  demande de Cedric) : un maillon rompu devant son nom, l'infobulle le dit,
+  son menu le détache ou le rattache (le même chemin que FX Constellation :
+  ses paramètres relâchés), et « Replace the chain » du dé le garde. La
+  chaîne se relit 5 fois par seconde : un détachement fait dans FX
+  Constellation s'y voit.
 - ✅ La post-insertion (2026-11-25) : menu « After insert (FX
   Constellation) » du navigateur et du dé. Après un ajout, FX Constellation
   suit des paramètres de l'effet (aucun, tous, les continus, N au hasard ;

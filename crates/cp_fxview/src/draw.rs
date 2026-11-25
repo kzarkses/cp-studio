@@ -634,7 +634,21 @@ impl View {
                 th.text_faint,
                 Align::Right,
             );
-            let nx = c.x + pad * 0.5 + iw + (8.0 * s).round();
+            let mut nx = c.x + pad * 0.5 + iw + (8.0 * s).round();
+            // Hors de ROLL (FX Constellation) : un maillon rompu devant le nom.
+            if fx.detached {
+                let dz = isz.saturating_sub(2).max(8);
+                icons.draw(
+                    cv,
+                    Icon::Unlink,
+                    nx,
+                    y + (rh - dz as f32) * 0.5,
+                    dz,
+                    th.text_dim,
+                    false,
+                );
+                nx += dz as f32 + (5.0 * s).round();
+            }
             let del_x = c.right() - (6.0 * s).round() - box_w;
             let pow_x = del_x - (4.0 * s).round() - box_w;
             let tw = (if hot || !fx.on {

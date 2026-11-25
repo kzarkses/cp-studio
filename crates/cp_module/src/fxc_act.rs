@@ -1477,6 +1477,53 @@ impl App {
         self.fxc_changed();
     }
 
+    /// Les effets hors de ROLL d'une piste quelconque (GUID d'effets).
+    pub(crate) fn fxc_detached_of(&self, track: &str) -> Vec<String> {
+        self.r
+            .xc_track(track)
+            .and_then(|t| self.r.xc_track_ext(t, keys::DETACHED))
+            .unwrap_or_default()
+            .split_whitespace()
+            .map(str::to_string)
+            .collect()
+    }
+
+    /// Detache (ou rattache) un effet d'une piste quelconque, comme le fait
+    /// la fenetre : la piste montree passe par `fxc_set_detached` ; une
+    /// autre garde la liste et, au detachement, relache ses parametres dans
+    /// son etat (ses liens partent quand FX Constellation y vient).
+    pub(crate) fn fxc_set_detached_on(&mut self, track: &str, g: &str, det: bool) {
+        let r = self.r;
+        let Some(t) = r.xc_track(track) else { return };
+        if self.fxc_t() == Some(t) && self.fxc.guid == track {
+            self.fxc_set_detached(g, det);
+            return;
+        }
+        let mut d = self.fxc_detached_of(track);
+        if det {
+            d.push(g.to_string());
+        } else {
+            d.retain(|x| x != g);
+        }
+        d.sort();
+        d.dedup();
+        r.xc_set_track_ext(t, keys::DETACHED, &d.join(" "));
+        if det {
+            if let Some(mut m) = self
+                .fxc_stored_at(t, track)
+                .and_then(|s| cp_fxc::store::decode(&s))
+            {
+                for (k, p) in m.params.iter_mut() {
+                    if split_pkey(k).is_some_and(|(fg, _)| fg == g) {
+                        p.sel = false;
+                        p.srcs.clear();
+                    }
+                }
+                self.fxc_write_state(t, track, &cp_fxc::store::encode(&m));
+            }
+        }
+    }
+
     fn fxc_fx_verb(&mut self, g: &str, k: u8) {
         let Some(t) = self.fxc_t() else { return };
         let Some(fx) = self.fxc.chain.index_of(g) else {
