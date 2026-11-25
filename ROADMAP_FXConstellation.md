@@ -172,6 +172,14 @@ validée (artifact « FX Constellation v2 »), puis :
 - ✅ L'aspect : des cartes (marge, bordure fine, ombre), des icônes à la
   place des boutons à texte, des choix segmentés ; tout aux couleurs du
   thème de REAPER.
+- ✅ Une troisième relecture indépendante, de cette journée (10 défauts,
+  corrigés) : la recherche qui ne se repeignait pas en tapant, la lueur du
+  pad qui débordait de l'image partielle, des images qui tournaient sans fin
+  (et fenêtre cachée), Ctrl+X/V/Z de la recherche qui partaient à REAPER,
+  le pad lissé plus rapide sur un écran rapide, le curseur de défilement
+  allumé par n'importe quel geste, une teinte comptée deux fois à 125-150 %,
+  un axe mené contre la souris, une cible du pad lissé hors de la zone, la
+  recherche sans champ qui gardait le clavier.
 
 **Vérifié dans le vrai REAPER** (`cargo xtask reaper-test`, phase Fxc,
 2026-11-25) :
@@ -208,6 +216,8 @@ clavier, le son.
   pas. Sans route rapide, une source atteint le Sound Gen par un lien natif
   (une valeur par bloc).
 - ☐ La capture du clavier en item MIDI ; les vues des effets maison.
+- ☐ La recherche garde le clavier après un Alt+Tab sans clic (le module ne
+  voit pas encore la revendication du clavier du chargeur).
 
 ## Les faits
 
