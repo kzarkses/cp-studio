@@ -289,6 +289,13 @@ sources n'étaient lues qu'au battement.
 - ✅ Un bouton du Sound Gen mené par une source montre sa base, le point la
   valeur jouée (il suivait le point : la valeur lue sur le JSFX est déjà
   modulée).
+- ✅ Le séquenceur, sens des notes reçues « Override » (demande de Cedric) :
+  avec Run allumé (il joue même transport arrêté) et le Sound Gen à une
+  voix, la note d'un clip ou d'un item passait (Thru) mais la séquence
+  reprenait la voix au pas suivant. En Override, une note reçue tenue coupe
+  la note du séquenceur à sa date et fait taire ses pas ; il avance quand
+  même et reprend à son pas suivant au relâcher. Pas vérifié dans REAPER :
+  l'auto-test pose et retire le séquenceur, il ne lui envoie pas de notes.
 - ☐ Une source ne bouge qu'à chaque bloc audio (la sortie d'un JSFX) : un
   grand tampon de carte son donne des pas visibles même à 120 images/s.
   Calculer la phase d'un LFO côté vue lisserait ce cas.
