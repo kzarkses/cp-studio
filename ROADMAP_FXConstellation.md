@@ -89,23 +89,49 @@ des fichiers de Claude, et les JSFX installés dans REAPER.
   snapshots, Init, A → B, Sound Gen (garé dans la piste quand il
   s'éteint), séquenceur (patterns par requête), clavier.
 
+**Construit ensuite, la même nuit**
+- ✅ Moduler un réglage : les boutons du Sound Gen (le PITCH module son
+  `pm`), ceux du séquenceur (les réglages continus), RATE / PHASE / CURVE /
+  SLEW du slot choisi, les macros. Un réglage d'un effet interne est un
+  paramètre comme un autre (GUID de l'effet, indice) ; une source ne mène
+  jamais ses propres réglages ; presets et snapshots les gardent par genre
+  d'effet.
+- ✅ Des liens sur des liens : une source module la profondeur d'un lien,
+  et ainsi de suite ; les 8 voies de profondeur du Mod Mix, chaque
+  modulateur avant ce qu'il module ; « Modulate a depth » dans le menu des
+  sources, réglés dans l'onglet Links.
+- ✅ ROLL, le rappel d'un preset et Init : un pas d'annulation chacun.
+- ✅ Le pad lissé (SMOOTH), l'éditeur d'ENV 2..4 dans le rack, les menus des
+  sources de note (étendue, glissé) et des voies du séquenceur, le bouton
+  HOLD, un en-tête d'effet tiré d'un pool à l'autre, l'onglet
+  « Constellation » du sélecteur de vues de CP Transport, les réglages de
+  ROLL au complet.
+
 **Vérifié dans le vrai REAPER** (`cargo xtask reaper-test`, phase Fxc,
-2026-11-25) : suivre un paramètre pose le bridge et le lien du pad ; le pad
-écrit sa position ; une source tirée pose la banque et allume le slot ; deux
-sources passent par un bus du Mod Mix posé en tête, et le lien du pad suit
-son bridge ; ROLL ; un preset enregistré puis rappelé rend les mêmes
-paramètres ; le Sound Gen posé puis retiré (son réglage gardé) ; le
-séquenceur en tête puis retiré ; l'état relu du projet.
+2026-11-25) :
+- suivre un paramètre pose le bridge et le lien du pad ; le pad écrit sa
+  position ;
+- une source tirée pose la banque et allume le slot ;
+- deux sources passent par un bus du Mod Mix posé en tête, et le lien du
+  pad suit son bridge ;
+- un lien sur un lien : la voie de profondeur lit la banque et module
+  l'entrée du bus ;
+- une source sur une macro ; une macro ne se mène pas elle-même ;
+- ROLL ; trois ROLL de l'ordre de la chaîne : chaque lien suit son effet ;
+- un preset enregistré puis rappelé rend les mêmes paramètres (réglages
+  internes compris) ;
+- le Sound Gen posé puis retiré (son réglage gardé dans la piste) ; le
+  séquenceur en tête puis retiré ;
+- l'état de la piste relu du projet.
 
 **Pas vérifié dans le vrai REAPER** : les gestes à la souris (l'auto-test
 appelle les actions de la vue), l'image de la fenêtre (les planches PNG
 seulement), le son.
 
 **Reste**
-- ☐ Moduler un réglage : les boutons du Sound Gen, les macros, les
-  réglages d'un slot, ceux du séquenceur (les « destinations internes »).
-- ☐ Les liens sur des liens (moduler une profondeur) : les voies de
-  profondeur du Mod Mix (des curseurs, faisable).
+- ☐ Les réglages de la banque globale (sur CP MOD) menés par une source.
+- ☐ Les liens sur des liens adoptés d'un ancien projet (l'adoption lit les
+  sources, pas les voies de profondeur).
 - ☐ Les routes rapides (banque → Sound Gen tous les 32 échantillons), charger
   un sample dans le Sound Gen, lire les 16 patterns pour un preset : ils
   passent par la mémoire partagée des JSFX (`gmem`), qu'une extension n'a
