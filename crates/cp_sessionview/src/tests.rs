@@ -683,3 +683,28 @@ fn l_onglet_de_la_vue_ancree() {
         Some(Act::ViewMenu { x, y })
     );
 }
+
+/// Le cout d'une image entiere, grande vue, deux cases qui jouent (mesure ;
+/// `--ignored --nocapture`).
+#[test]
+#[ignore]
+fn le_cout_d_une_image_entiere() {
+    let mut e = Null { now: 0 };
+    let (mut ses, strips) = session(&mut e);
+    ses.click(&mut e, 0, 0);
+    ses.click(&mut e, 1, 1);
+    e.now = 30_000;
+    ses.tick(&mut e);
+    let mut v = View::new();
+    for (w, h) in [(1280, 720), (2560, 1300)] {
+        let mut b = Bench::new(w, h);
+        b.draw(&mut v, &ses, &strips, 30_000);
+        let t0 = std::time::Instant::now();
+        let n = 30;
+        for k in 0..n {
+            b.draw(&mut v, &ses, &strips, 30_000 + k * 400);
+        }
+        let ms = t0.elapsed().as_secs_f64() * 1000.0 / n as f64;
+        println!("session {w}x{h} : {ms:.2} ms par image");
+    }
+}

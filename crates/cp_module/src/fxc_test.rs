@@ -108,9 +108,14 @@ impl App {
         self.fxc_tick();
         let clock = self.fxc.win.as_ref().is_some_and(|w| w.frame.frames_on) as u8;
         let mut worst = 0.0f64;
-        for _ in 0..5 {
+        for k in 0..5 {
             let t0 = std::time::Instant::now();
             self.fxc_frame_sources();
+            // La source bouge a chaque image (le son ne tourne peut-etre pas
+            // pendant l'auto-test) : le point du bouton et le LFO se
+            // repeignent, comme quand ca joue.
+            self.fxc.src.insert(1, 0.1 + 0.2 * k as f64);
+            self.fxc_relive();
             self.fxc.view.mark();
             self.fxc_render(false);
             worst = worst.max(t0.elapsed().as_secs_f64() * 1000.0);
