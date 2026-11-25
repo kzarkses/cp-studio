@@ -1926,6 +1926,12 @@ fn sources_tab(b: &mut B, v: &View, d: &Data, r: R, global: bool) -> f32 {
         }
         y += (th0 + b.s(3.0)) * i.div_ceil(cols) as f32 + b.s(6.0);
     }
+    // L'enveloppe choisie (ENV 1..4) : son editeur, ici.
+    if !global {
+        if let (Some(Band::Env(n)), Some(j)) = (band_of(v.sel_slot), d.sg.filter(|j| j.enabled)) {
+            y = crate::panels::env_editor(b, j, n, R::new(r.x, y, r.w, 0.0)) + b.s(6.0);
+        }
+    }
     let bank = if global { d.gbank } else { d.bank };
     let base = if global { 100 } else { 0 };
     match bank {

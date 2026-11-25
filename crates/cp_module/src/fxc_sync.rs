@@ -395,8 +395,21 @@ impl App {
         }
         self.fxc.src = src;
         // Les parametres : la valeur jouee.
-        let text_too = full || self.fxc.ticks % 10 == 0;
-        let all = full || self.fxc.ticks % 6 == 0;
+        // Les rangees a l'ecran et les parametres suivis souvent ; les
+        // autres une fois par seconde (une chaine peut en avoir des
+        // milliers).
+        let visible: std::collections::HashSet<&str> = self
+            .fxc
+            .view
+            .items()
+            .iter()
+            .filter_map(|i| match &i.ctl {
+                cp_fxcview::Ctl::Knob(k) => Some(k.as_str()),
+                _ => None,
+            })
+            .collect();
+        let text_tick = full || self.fxc.ticks % 10 == 0;
+        let all = full || self.fxc.ticks % 30 == 0;
         let mut rows = std::mem::take(&mut self.fxc.rows);
         for row in rows.iter_mut() {
             let Some(fx) = chain.index_of(&row.guid) else {
@@ -405,9 +418,11 @@ impl App {
             row.enabled = r.xc_fx_enabled(t, fx);
             for p in row.params.iter_mut() {
                 let tracked = self.fxc.t.params.get(&p.key).is_some_and(|s| s.sel);
-                if !(all || tracked) {
+                let shown = visible.contains(p.key.as_str());
+                if !(all || tracked || (shown && self.fxc.ticks % 3 == 0)) {
                     continue;
                 }
+                let text_too = text_tick && (shown || full);
                 let read = r.xc_get(t, fx, p.index);
                 self.fxc.scan.entry(p.key.clone()).or_insert(read);
                 p.live = self.fxc_live(&p.key, read);
@@ -1123,6 +1138,16 @@ impl App {
             }
         }
         let full = self.fxc.ticks % 15 == 0;
+        // Le pad lisse rattrape la souris.
+        if let Some(tg) = self.fxc.pad_target {
+            let p = &self.fxc.t.pad;
+            let (x, y) = cp_fxc::pad::smooth_step((p.x, p.y), tg, p, 1.0 / 30.0);
+            self.fxc_pad_to(x, y);
+            if (x - tg.0).abs() + (y - tg.1).abs() < 0.001 {
+                self.fxc.pad_target = None;
+            }
+            self.fxc.view.mark();
+        }
         self.fxc_read_values(full);
         self.fxc_push_engine();
         // Le pad suit le bridge quand il marche ou qu'un axe est mene.

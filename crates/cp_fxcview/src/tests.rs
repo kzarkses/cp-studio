@@ -253,6 +253,8 @@ fn the_three_tabs_draw() {
     v.tab = 0;
     v.sel_slot = 3;
     b.shot(&mut v, &d, "step");
+    v.sel_slot = 202;
+    b.shot(&mut v, &d, "env");
     let mut small = Bench::new(820, 640);
     small.shot(&mut v, &d, "narrow");
 }

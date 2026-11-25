@@ -94,6 +94,8 @@ pub(crate) struct CPart {
     pub(crate) prefs_dirty: bool,
     /// L'auto-test : des compteurs.
     pub(crate) stats: BTreeMap<&'static str, u32>,
+    /// Le point que le pad lisse rattrape.
+    pub(crate) pad_target: Option<(f64, f64)>,
 }
 
 impl CPart {
@@ -146,6 +148,7 @@ impl CPart {
             preset_modified: false,
             prefs_dirty: false,
             stats: BTreeMap::new(),
+            pad_target: None,
         }
     }
 }

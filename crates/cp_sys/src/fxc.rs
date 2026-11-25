@@ -551,6 +551,24 @@ impl Reaper {
         })
     }
 
+    /// Le debut d'un pas d'annulation (le fermer par [`Reaper::xc_undo_end`]).
+    pub fn xc_undo_begin(&self) {
+        type B = unsafe extern "C" fn(P);
+        if let Some(b) = self.xf::<B>(c"Undo_BeginBlock2") {
+            // SAFETY: projet nul = courant.
+            unsafe { b(null_mut()) };
+        }
+    }
+
+    /// La fin d'un pas d'annulation : tout ce qui a change depuis le debut.
+    pub fn xc_undo_end(&self, name: &str) {
+        type E = unsafe extern "C" fn(P, *const c_char, i32);
+        if let (Some(e), Ok(n)) = (self.xf::<E>(c"Undo_EndBlock2"), CString::new(name)) {
+            // SAFETY: projet nul = courant ; -1 = tout ce qui a change.
+            unsafe { e(null_mut(), n.as_ptr(), -1) };
+        }
+    }
+
     /// Un pas d'annulation autour de `f`.
     pub fn xc_undo<R>(&self, name: &str, f: impl FnOnce() -> R) -> R {
         type B = unsafe extern "C" fn(P);

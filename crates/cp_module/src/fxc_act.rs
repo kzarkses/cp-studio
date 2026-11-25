@@ -220,9 +220,9 @@ impl App {
             Act::Drop(slot, c) => self.fxc_drop(slot, c),
             Act::PadPress(x, y) => {
                 self.fxc.t.pad.nav_on = false;
-                self.fxc_pad_to(x, y);
+                self.fxc_pad_aim(x, y);
             }
-            Act::PadDrag(x, y) => self.fxc_pad_to(x, y),
+            Act::PadDrag(x, y) => self.fxc_pad_aim(x, y),
             Act::PadRelease => self.fxc.dirty_at = Some(std::time::Instant::now()),
             Act::Zone(z) => {
                 if (z[1] - z[0]).abs() > 0.03 && (z[3] - z[2]).abs() > 0.03 {
@@ -256,8 +256,18 @@ impl App {
         self.fxc.view.mark();
     }
 
+    /// La souris vise ce point : le pad y va (lisse : il la rattrape).
+    fn fxc_pad_aim(&mut self, x: f64, y: f64) {
+        if self.fxc.t.pad.smooth > 0.0 && !self.fxc.t.pad.granular {
+            self.fxc.pad_target = Some(self.fxc.t.pad.clamp_to_zone(x, y));
+        } else {
+            self.fxc.pad_target = None;
+            self.fxc_pad_to(x, y);
+        }
+    }
+
     /// Le pad a ce point (les axes menes par une source n'obeissent pas).
-    fn fxc_pad_to(&mut self, x: f64, y: f64) {
+    pub(crate) fn fxc_pad_to(&mut self, x: f64, y: f64) {
         let (x, y) = self.fxc.t.pad.clamp_to_zone(x, y);
         let (lx, ly) = (self.fxc.plan.pad_link_x, self.fxc.plan.pad_link_y);
         if lx && ly {
@@ -533,7 +543,7 @@ impl App {
             Ctl::Tile(s) => {
                 self.fxc.view.sel_slot = s;
                 match band_of(s) {
-                    Some(Band::Env(_)) => self.fxc.view.tab = 1,
+                    Some(Band::Env(1)) => self.fxc.view.tab = 1,
                     Some(Band::Seq(_)) => self.fxc.view.tab = 2,
                     _ => {}
                 }
@@ -1138,6 +1148,7 @@ impl App {
             Ctl::SlotType | Ctl::SlotShape | Ctl::SlotSync | Ctl::SlotMode | Ctl::SlotSh => {
                 self.fxc_slot_menu(c, x, y)
             }
+            Ctl::Tile(s) if (231..=234).contains(&s) => self.fxc_notes_menu(s, x, y),
             Ctl::Tile(s) => {
                 self.fxc.view.sel_slot = s;
                 if let Some(Band::Lfo(_)) | Some(Band::Global(_)) = band_of(s) {
@@ -1145,6 +1156,7 @@ impl App {
                 }
             }
             Ctl::JsMenu(panel, p) => self.fxc_js_menu(panel, p, x, y),
+            Ctl::SeqLane(l) => self.fxc_lane_menu(l, x, y),
             Ctl::SeqPattern(k) => {
                 let e = vec![
                     MenuEntry::off(format!("Pattern {}", k + 1)),
@@ -1449,7 +1461,7 @@ impl App {
         let s = self.fxc.roll.clone();
         let on = |a: Axis| only.map_or(s.is_armed(a), |o| o == a);
         let (pool, fxs) = self.fxc_pool();
-        self.r.xc_undo("FX Constellation: ROLL", || ());
+        self.r.xc_undo_begin();
         if on(Axis::Params) {
             roll::select(&mut self.fxc.t, &pool, &s, &mut self.fxc.rng);
             for k in &pool {
@@ -1506,6 +1518,9 @@ impl App {
         self.fxc_count("roll");
         self.fxc_scan_chain();
         self.fxc_changed();
+        // Les liens dans le meme pas d'annulation.
+        self.fxc_apply();
+        self.r.xc_undo_end("FX Constellation: ROLL");
     }
 
     /// Un nouvel ordre pour les effets du pool (les autres ne bougent pas).
@@ -1810,7 +1825,7 @@ impl App {
                 };
                 self.fxc_read_values(true);
                 return;
-            } else if p == 76 {
+            } else if [76, 79, 82, 85].contains(&p) {
                 ENV_SYNCS
                     .iter()
                     .enumerate()
@@ -1896,6 +1911,123 @@ impl App {
             self.r.xc_set_raw(t, fx, p, id as f64 - 1000.0);
             self.fxc_read_values(true);
         }
+    }
+
+    /// Une source de note : l'etendue des notes (NOTE) et le glisse.
+    fn fxc_notes_menu(&mut self, slot: i32, x: f32, y: f32) {
+        let Some(t) = self.fxc_t() else { return };
+        let Some(fx) = self.fxc.chain.find(FxKind::Notes) else {
+            self.fxc_say("the note sources arrive with their first link");
+            return;
+        };
+        let k = (slot - 231) as usize;
+        let lo = self.r.xc_get_raw(t, fx, 4).0.round() as i64;
+        let hi = self.r.xc_get_raw(t, fx, 5).0.round() as i64;
+        let gl = self.r.xc_get_raw(t, fx, 6 + k).0.round() as i64;
+        let ranges = [
+            (24, 96, "C1 - C7"),
+            (36, 84, "C2 - C6"),
+            (48, 72, "C3 - C5"),
+            (12, 108, "C0 - C8"),
+            (0, 127, "Full 0 - 127"),
+        ];
+        let glides = [
+            (0, "Off"),
+            (10, "10 ms"),
+            (30, "30 ms"),
+            (100, "100 ms"),
+            (300, "300 ms"),
+            (1000, "1 s"),
+        ];
+        let e = vec![
+            MenuEntry::off(long_label(slot)),
+            MenuEntry::Sub(
+                "Range".into(),
+                ranges
+                    .iter()
+                    .enumerate()
+                    .map(|(i, (a, b, l))| MenuEntry::check(10 + i as u32, *l, lo == *a && hi == *b))
+                    .collect(),
+            ),
+            MenuEntry::Sub(
+                "Glide".into(),
+                glides
+                    .iter()
+                    .enumerate()
+                    .map(|(i, (ms, l))| MenuEntry::check(20 + i as u32, *l, gl == *ms))
+                    .collect(),
+            ),
+        ];
+        match self.fxc_popup(x, y, &e) {
+            i @ 10..=14 => {
+                let (a, b, _) = ranges[(i - 10) as usize];
+                self.r.xc_set_raw(t, fx, 4, a as f64);
+                self.r.xc_set_raw(t, fx, 5, b as f64);
+            }
+            i @ 20..=25 => {
+                self.r
+                    .xc_set_raw(t, fx, 6 + k, glides[(i - 20) as usize].0 as f64);
+            }
+            _ => {}
+        }
+    }
+
+    /// Une voie du sequenceur : la rouler, la remettre, la decaler.
+    fn fxc_lane_menu(&mut self, l: u8, x: f32, y: f32) {
+        let Some((t, fx)) = self.fxc_js(SEQ) else {
+            return;
+        };
+        let lane = &LANES[l as usize % 9];
+        let base = panels::lane_base(l as usize);
+        let len = self
+            .r
+            .xc_get_raw(t, fx, base + 16)
+            .0
+            .round()
+            .clamp(1.0, 16.0) as usize;
+        let mut e = vec![
+            MenuEntry::off(lane.name),
+            MenuEntry::item(1, "Roll lane"),
+            MenuEntry::item(2, "Reset lane"),
+            MenuEntry::item(3, "Shift left"),
+            MenuEntry::item(4, "Shift right"),
+        ];
+        if lane.bools {
+            e.push(MenuEntry::Sep);
+            e.push(MenuEntry::item(5, "All on"));
+            e.push(MenuEntry::item(6, "All off"));
+            e.push(MenuEntry::item(7, "Invert"));
+        }
+        let id = self.fxc_popup(x, y, &e);
+        let read = |a: &App, k: usize| a.r.xc_get_raw(t, fx, base + k).0;
+        let mut v: Vec<f64> = (0..16).map(|k| read(self, k)).collect();
+        let default = match l {
+            0 => 1.0,
+            3 => 100.0,
+            4 => 50.0,
+            5 => 100.0,
+            7 | 8 => 0.5,
+            _ => 0.0,
+        };
+        match id {
+            1 => {
+                self.fxc_seq_roll(1 << l);
+                return;
+            }
+            2 => v.iter_mut().for_each(|x| *x = default),
+            3 => v[..len].rotate_left(1),
+            4 => v[..len].rotate_right(1),
+            5 => v.iter_mut().for_each(|x| *x = 1.0),
+            6 => v.iter_mut().for_each(|x| *x = 0.0),
+            7 => v
+                .iter_mut()
+                .for_each(|x| *x = if *x > 0.5 { 0.0 } else { 1.0 }),
+            _ => return,
+        }
+        for (k, x) in v.iter().enumerate() {
+            self.r.xc_set_raw(t, fx, base + k, *x);
+        }
+        self.fxc_read_values(true);
     }
 
     /// Allume ou eteint le Sound Gen. Eteint, il quitte la chaine et son
@@ -2210,7 +2342,7 @@ impl App {
         };
         let Some(t) = self.fxc_t() else { return };
         let r = self.r;
-        r.xc_undo(&format!("Load FX Constellation preset: {name}"), || ());
+        r.xc_undo_begin();
         let mute = r.xc_track_value(t, "B_MUTE");
         r.xc_set_track_value(t, "B_MUTE", 1.0);
         // Les effets de l'utilisateur partent (les internes restent).
@@ -2326,6 +2458,8 @@ impl App {
         self.fxc.eng_cache.clear();
         self.fxc_scan_chain();
         self.fxc_count("preset_load");
+        self.fxc_apply();
+        r.xc_undo_end(&format!("Load FX Constellation preset: {name}"));
         if missing.is_empty() {
             self.fxc_say(format!("Preset '{name}'"));
         } else {
@@ -2713,7 +2847,7 @@ impl App {
         }
         let Some(t) = self.fxc_t() else { return };
         let r = self.r;
-        r.xc_undo("FX Constellation: Init", || ());
+        r.xc_undo_begin();
         self.fxc.t.params.clear();
         self.fxc.t.pad = Pad::default();
         self.fxc.t.macro_names = Default::default();
@@ -2762,6 +2896,8 @@ impl App {
         self.fxc_scan_chain();
         self.fxc_count("init");
         self.fxc_changed();
+        self.fxc_apply();
+        r.xc_undo_end("FX Constellation: Init");
     }
 
     /// Les liens de la piste avant de deplacer des effets (par GUID).

@@ -439,15 +439,29 @@ fn osc_card(b: &mut B, j: &Js, i: usize, o: &Osc, r: R) {
     );
 }
 
+/// Les curseurs d'une enveloppe du Sound Gen : (DLY, A, H, D, S, R, SYNC).
+pub fn env_params(n: u8) -> [usize; 7] {
+    match n {
+        2 => [77, 59, 78, 60, 61, 62, 79],
+        3 => [80, 64, 81, 65, 66, 67, 82],
+        4 => [83, 69, 84, 70, 71, 72, 85],
+        _ => [74, 11, 75, 12, 13, 14, 76],
+    }
+}
+
 fn env_curve(j: &Js) -> Vec<(f32, f32)> {
+    env_curve_of(j, env_params(1))
+}
+
+fn env_curve_of(j: &Js, e: [usize; 7]) -> Vec<(f32, f32)> {
     let sh = |t: f64, max: f64| (t / max).clamp(0.0, 1.0).sqrt() as f32;
     let (dl, a, h, dc, s, rl) = (
-        sh(j.r(74), 2.0) * 0.12,
-        sh(j.r(11), 2.0) * 0.22 + 0.01,
-        sh(j.r(75), 2.0) * 0.12,
-        sh(j.r(12), 2.0) * 0.22 + 0.01,
-        j.r(13) as f32,
-        sh(j.r(14), 5.0) * 0.20 + 0.01,
+        sh(j.r(e[0]), 2.0) * 0.12,
+        sh(j.r(e[1]), 2.0) * 0.22 + 0.01,
+        sh(j.r(e[2]), 2.0) * 0.12,
+        sh(j.r(e[3]), 2.0) * 0.22 + 0.01,
+        j.r(e[4]) as f32,
+        sh(j.r(e[5]), 5.0) * 0.20 + 0.01,
     );
     let mut x = 0.0;
     let mut pts = vec![(0.0, 0.0)];
@@ -589,6 +603,72 @@ fn env_card(b: &mut B, j: &Js, r: R) {
             "Follow the keyboard's latched note",
         );
     }
+}
+
+/// L'editeur d'une enveloppe (ENV 1..4) dans le rack : sa courbe, ses six
+/// boutons, sa synchronisation. Rend le bas.
+pub(crate) fn env_editor(b: &mut B, j: &Js, n: u8, r: R) -> f32 {
+    let th = b.th;
+    let e = env_params(n);
+    let mut y = r.y;
+    b.push(R::new(r.x, y, r.w, 1.0), Ctl::None, Look::Sep, "");
+    y += b.s(4.0);
+    b.text(
+        R::new(r.x, y, r.w, b.s(20.0)),
+        &if n == 1 {
+            "ENV 1 (amp)".to_string()
+        } else {
+            format!("ENV {n}")
+        },
+        F::Bold,
+        src_color(th, 200 + n as i32),
+        Align::Left,
+    );
+    y += b.s(20.0);
+    let gh = b.s(40.0);
+    b.panel(R::new(r.x, y, r.w, gh), Shade::Sunk);
+    let out = [31usize, 63, 68, 73][(n as usize - 1).min(3)];
+    b.push(
+        R::new(r.x, y, r.w, gh),
+        Ctl::None,
+        Look::Curve {
+            pts: env_curve_of(j, e),
+            color: src_color(th, 200 + n as i32),
+            level: Some(j.r(out) as f32),
+        },
+        "",
+    );
+    y += gh + b.s(4.0);
+    let sy = j.r(e[6]).round().clamp(0.0, 7.0) as usize;
+    let t = |p: usize, max: f64| {
+        if sy > 0 {
+            format!(
+                "{}x{}",
+                (j.r(p) * 16.0 / max).round().clamp(0.0, 16.0),
+                ENV_SYNCS[sy]
+            )
+        } else {
+            format!("{:.3} s", j.r(p))
+        }
+    };
+    let list = [
+        (e[0], "DLY", t(e[0], 2.0), true, false),
+        (e[1], "A", t(e[1], 2.0), true, false),
+        (e[2], "H", t(e[2], 2.0), true, false),
+        (e[3], "D", t(e[3], 2.0), true, false),
+        (e[4], "S", format!("{:.2}", j.r(e[4])), true, false),
+        (e[5], "R", t(e[5], 5.0), true, false),
+    ];
+    y = knobs(b, SG, j, r.x, y, r.w, &list) + b.s(6.0);
+    b.chip(
+        R::new(r.x, y, b.s(90.0), b.s(18.0)),
+        Ctl::JsMenu(SG, e[6]),
+        &format!("SYNC {}", ENV_SYNCS[sy]),
+        sy > 0,
+        true,
+        "Envelope timing: seconds or tempo divisions",
+    );
+    y + b.s(24.0)
 }
 
 fn filter_card(b: &mut B, j: &Js, r: R) {
