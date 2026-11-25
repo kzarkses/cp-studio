@@ -114,6 +114,52 @@ pub enum Icon {
     /// Les bases.
     Gauge,
     ChevronLeft,
+    /// Le pad seul (FX Constellation).
+    Crosshair,
+    /// Le geste a la main.
+    Hand,
+    /// La marche.
+    Footprints,
+    /// Les figures.
+    Spline,
+    /// Un filtre.
+    Funnel,
+    /// Montrer.
+    Eye,
+    /// Tout retirer d'une liste.
+    ListX,
+    /// Une zone.
+    Scan,
+    /// Inverser.
+    FlipVertical,
+    /// Un ordre.
+    ArrowDownUp,
+    /// Une modulation.
+    Activity,
+    /// Les elements choisis.
+    ListChecks,
+    /// Global.
+    Globe,
+    /// Le temps libre (Hz).
+    Clock,
+    /// Une seule fois.
+    ArrowRightToLine,
+    /// Une etendue.
+    MoveHorizontal,
+    /// Relacher des liens.
+    Unlink,
+    /// Des parametres.
+    SlidersVertical,
+    ChevronUp,
+    /// Les formes d'onde d'un LFO.
+    ShapeSine,
+    ShapeTriangle,
+    ShapeSawUp,
+    ShapeSawDown,
+    ShapeSquare,
+    ShapeRandom,
+    ShapeHold,
+    ShapeSteps,
 }
 
 impl Icon {
@@ -294,6 +340,69 @@ impl Icon {
             }
             Icon::Gauge => r#"<path d="m12 14 4-4" /><path d="M3.34 19a10 10 0 1 1 17.32 0" />"#,
             Icon::ChevronLeft => r#"<path d="m15 18-6-6 6-6" />"#,
+            Icon::Crosshair => {
+                r#"<circle cx="12" cy="12" r="10" /><line x1="22" x2="18" y1="12" y2="12" /><line x1="6" x2="2" y1="12" y2="12" /><line x1="12" x2="12" y1="6" y2="2" /><line x1="12" x2="12" y1="22" y2="18" />"#
+            }
+            Icon::Hand => {
+                r#"<path d="M18 11V6a2 2 0 0 0-2-2a2 2 0 0 0-2 2" /><path d="M14 10V4a2 2 0 0 0-2-2a2 2 0 0 0-2 2v2" /><path d="M10 10.5V6a2 2 0 0 0-2-2a2 2 0 0 0-2 2v8" /><path d="M18 8a2 2 0 1 1 4 0v6a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.86-5.99-2.34l-3.6-3.6a2 2 0 0 1 2.83-2.82L7 15" />"#
+            }
+            Icon::Footprints => {
+                r#"<path d="M4 16v-2.38C4 11.5 2.97 10.5 3 8c.03-2.72 1.49-6 4.5-6C9.37 2 10 3.8 10 5.5c0 3.11-2 5.66-2 8.68V16a2 2 0 1 1-4 0Z" /><path d="M20 20v-2.38c0-2.12 1.03-3.12 1-5.62-.03-2.72-1.49-6-4.5-6C14.63 6 14 7.8 14 9.5c0 3.11 2 5.66 2 8.68V20a2 2 0 1 0 4 0Z" /><path d="M16 17h4" /><path d="M4 13h4" />"#
+            }
+            Icon::Spline => {
+                r#"<circle cx="19" cy="5" r="2" /><circle cx="5" cy="19" r="2" /><path d="M5 17A12 12 0 0 1 17 5" />"#
+            }
+            Icon::Funnel => {
+                r#"<path d="M10 20a1 1 0 0 0 .553.895l2 1A1 1 0 0 0 14 21v-7a2 2 0 0 1 .517-1.341L21.74 4.67A1 1 0 0 0 21 3H3a1 1 0 0 0-.742 1.67l7.225 7.989A2 2 0 0 1 10 14z" />"#
+            }
+            Icon::Eye => {
+                r#"<path d="M2.062 12.348a1 1 0 0 1 0-.696 10.75 10.75 0 0 1 19.876 0 1 1 0 0 1 0 .696 10.75 10.75 0 0 1-19.876 0" /><circle cx="12" cy="12" r="3" />"#
+            }
+            Icon::ListX => {
+                r#"<path d="M11 12H3" /><path d="M16 6H3" /><path d="M11 18H3" /><path d="m15.5 10.5 5 5" /><path d="m20.5 10.5-5 5" />"#
+            }
+            Icon::Scan => {
+                r#"<path d="M3 7V5a2 2 0 0 1 2-2h2" /><path d="M17 3h2a2 2 0 0 1 2 2v2" /><path d="M21 17v2a2 2 0 0 1-2 2h-2" /><path d="M7 21H5a2 2 0 0 1-2-2v-2" />"#
+            }
+            Icon::FlipVertical => {
+                r#"<path d="m17 3-5 5-5-5h10" /><path d="m17 21-5-5-5 5h10" /><path d="M4 12H2" /><path d="M10 12H8" /><path d="M16 12h-2" /><path d="M22 12h-2" />"#
+            }
+            Icon::ArrowDownUp => {
+                r#"<path d="m3 16 4 4 4-4" /><path d="M7 20V4" /><path d="m21 8-4-4-4 4" /><path d="M17 4v16" />"#
+            }
+            Icon::Activity => {
+                r#"<path d="M22 12h-2.48a2 2 0 0 0-1.93 1.46l-2.35 8.36a.25.25 0 0 1-.48 0L9.24 2.18a.25.25 0 0 0-.48 0l-2.35 8.36A2 2 0 0 1 4.49 12H2" />"#
+            }
+            Icon::ListChecks => {
+                r#"<path d="m3 17 2 2 4-4" /><path d="m3 7 2 2 4-4" /><path d="M13 6h8" /><path d="M13 12h8" /><path d="M13 18h8" />"#
+            }
+            Icon::Globe => {
+                r#"<circle cx="12" cy="12" r="10" /><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20" /><path d="M2 12h20" />"#
+            }
+            Icon::Clock => r#"<circle cx="12" cy="12" r="10" /><path d="M12 6v6l4 2" />"#,
+            Icon::ArrowRightToLine => {
+                r#"<path d="M17 12H3" /><path d="m11 18 6-6-6-6" /><path d="M21 5v14" />"#
+            }
+            Icon::MoveHorizontal => {
+                r#"<path d="m18 8 4 4-4 4" /><path d="M2 12h20" /><path d="m6 8-4 4 4 4" />"#
+            }
+            Icon::Unlink => {
+                r#"<path d="m18.84 12.25 1.72-1.71h-.02a5.004 5.004 0 0 0-.12-7.07 5.006 5.006 0 0 0-6.95 0l-1.72 1.71" /><path d="m5.17 11.75-1.71 1.71a5.004 5.004 0 0 0 .12 7.07 5.006 5.006 0 0 0 6.95 0l1.71-1.71" /><line x1="8" x2="8" y1="2" y2="5" /><line x1="2" x2="5" y1="8" y2="8" /><line x1="16" x2="16" y1="19" y2="22" /><line x1="19" x2="22" y1="16" y2="16" />"#
+            }
+            Icon::SlidersVertical => {
+                r#"<line x1="4" x2="4" y1="21" y2="14" /><line x1="4" x2="4" y1="10" y2="3" /><line x1="12" x2="12" y1="21" y2="12" /><line x1="12" x2="12" y1="8" y2="3" /><line x1="20" x2="20" y1="21" y2="16" /><line x1="20" x2="20" y1="12" y2="3" /><line x1="2" x2="6" y1="14" y2="14" /><line x1="10" x2="14" y1="8" y2="8" /><line x1="18" x2="22" y1="16" y2="16" />"#
+            }
+            Icon::ChevronUp => r#"<path d="m18 15-6-6-6 6" />"#,
+            Icon::ShapeSine => r#"<path d="M2 12C5 2 9 2 12 12s7 10 10 0" />"#,
+            Icon::ShapeTriangle => r#"<path d="M2 12 7 4l10 16 5-8" />"#,
+            Icon::ShapeSawUp => r#"<path d="M2 18 12 6v12L22 6" />"#,
+            Icon::ShapeSawDown => r#"<path d="M2 6l10 12V6l10 12" />"#,
+            Icon::ShapeSquare => r#"<path d="M2 18V6h10v12h10V6" />"#,
+            Icon::ShapeRandom => r#"<path d="M2 12c3-7 5 6 8-1s5-6 7 2 4 2 5-2" />"#,
+            Icon::ShapeHold => r#"<path d="M2 14h4V8h4v8h4V6h4v6h4" />"#,
+            Icon::ShapeSteps => {
+                r#"<path d="M4 20v-6" /><path d="M8 20V8" /><path d="M12 20v-4" /><path d="M16 20V5" /><path d="M20 20v-9" />"#
+            }
         }
     }
 }
@@ -523,6 +632,33 @@ mod tests {
             Icon::Ruler,
             Icon::Gauge,
             Icon::ChevronLeft,
+            Icon::Crosshair,
+            Icon::Hand,
+            Icon::Footprints,
+            Icon::Spline,
+            Icon::Funnel,
+            Icon::Eye,
+            Icon::ListX,
+            Icon::Scan,
+            Icon::FlipVertical,
+            Icon::ArrowDownUp,
+            Icon::Activity,
+            Icon::ListChecks,
+            Icon::Globe,
+            Icon::Clock,
+            Icon::ArrowRightToLine,
+            Icon::MoveHorizontal,
+            Icon::Unlink,
+            Icon::SlidersVertical,
+            Icon::ChevronUp,
+            Icon::ShapeSine,
+            Icon::ShapeTriangle,
+            Icon::ShapeSawUp,
+            Icon::ShapeSawDown,
+            Icon::ShapeSquare,
+            Icon::ShapeRandom,
+            Icon::ShapeHold,
+            Icon::ShapeSteps,
         ];
         for i in all {
             let (n, m) = c.mask(i, 24, false);
