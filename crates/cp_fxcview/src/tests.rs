@@ -207,6 +207,7 @@ fn data<'a>(w: &'a World, p: &'a cp_fxc::links::Plan) -> Data<'a> {
         src: &w.src,
         msg: None,
         kb_note: None,
+        guids: Guids::default(),
     }
 }
 

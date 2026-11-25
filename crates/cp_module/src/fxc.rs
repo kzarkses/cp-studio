@@ -500,6 +500,7 @@ impl App {
             src: &p.src,
             msg: msg.as_deref(),
             kb_note: p.kb_note,
+            guids: self.fxc_guids(),
         };
         view.layout(&d, &th, w, h);
         self.fxc.view = view;
@@ -807,6 +808,19 @@ impl App {
                 None
             }
             _ => None,
+        }
+    }
+
+    /// Les GUID des effets internes de la piste.
+    pub(crate) fn fxc_guids(&self) -> cp_fxcview::Guids {
+        use cp_fxc::slots::FxKind;
+        let c = &self.fxc.chain;
+        let g = |k| c.find(k).and_then(|i| c.fx.get(i)).map(|f| f.guid.clone());
+        cp_fxcview::Guids {
+            sg: g(FxKind::SoundGen),
+            seq: g(FxKind::Seq),
+            bank: g(FxKind::Bank),
+            bridge: g(FxKind::Bridge),
         }
     }
 

@@ -167,11 +167,41 @@ impl App {
             still as u8
         ));
         ok &= bus_ok && in_ok && still;
+        // 4b. Une source sur une macro (destination interne) ; une macro
+        //     ne se mene pas elle-meme.
+        self.fxc_act(Act::Drop(3, Ctl::Macro(1)));
+        self.fxc_act(Act::Drop(211, Ctl::Macro(1)));
+        self.fxc_sync_tick(false);
+        self.fxc_sync_tick(false);
+        let bfx = self.fxc.chain.find(FxKind::Bridge);
+        let bk = self.fxc.chain.find(FxKind::Bank);
+        let lm = bfx.and_then(|b| self.fxc_test_link(t, b, bridge::MACRO_IN));
+        let macro_ok = lm == bk.map(|k| (k as i64, bank::out(3) as i64));
+        let self_refused = self
+            .fxc
+            .t
+            .params
+            .get(&pkey(
+                &r.xc_fx_guid(t, bfx.unwrap_or(0)).unwrap_or_default(),
+                bridge::MACRO_IN,
+            ))
+            .is_some_and(|p| p.srcs.len() == 1);
+        out.push(format!(
+            "macro_link={} self_refused={}",
+            macro_ok as u8, self_refused as u8
+        ));
+        ok &= macro_ok && self_refused;
         // 5. ROLL : rien ne casse, les parametres suivis restent bornes.
         self.fxc.roll.armed = [true, true, true, true, true, false, false, false];
         self.fxc_roll(None);
         self.fxc_sync_tick(false);
-        let n = self.fxc.t.tracked_count();
+        let eqg = eq_guid.clone();
+        let n = self
+            .fxc
+            .t
+            .tracked()
+            .filter(|(k, _)| k.starts_with(&eqg))
+            .count();
         out.push(format!("roll_tracked={n}"));
         ok &= (1..=8).contains(&n);
         // 6. Un preset : enregistre, la piste change, rappele.
@@ -183,7 +213,7 @@ impl App {
         }
         self.fxc_changed();
         self.fxc_sync_tick(false);
-        let names_before: Vec<String> = before
+        let mut names_before: Vec<String> = before
             .iter()
             .filter_map(|k| cp_fxc::model::split_pkey(k).map(|(_, i)| i.to_string()))
             .collect();
@@ -192,12 +222,14 @@ impl App {
         self.fxc_sync_tick(false);
         self.fxc_load_preset(PRESET);
         self.fxc_sync_tick(false);
-        let names_after: Vec<String> = self
+        let mut names_after: Vec<String> = self
             .fxc
             .t
             .tracked()
             .filter_map(|(k, _)| cp_fxc::model::split_pkey(k).map(|(_, i)| i.to_string()))
             .collect();
+        names_before.sort();
+        names_after.sort();
         let preset_ok = names_before == names_after && !names_after.is_empty();
         out.push(format!(
             "preset={} ({}→{})",

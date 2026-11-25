@@ -52,6 +52,8 @@ pub struct Snapshot {
     pub params: BTreeMap<String, PState>,
     /// Les reglages de la banque locale (normalises), s'il y en avait une.
     pub bank: Option<Vec<f64>>,
+    /// Les reglages internes menes par des sources (comme le preset).
+    pub internal: BTreeMap<(String, usize), PState>,
 }
 
 /// Un preset.
@@ -67,6 +69,9 @@ pub struct Preset {
     pub bank: Option<Vec<f64>>,
     /// Les liens internes (`FXC_ROUTES`).
     pub routes: String,
+    /// Les reglages des effets internes menes par des sources : (« sg »,
+    /// « seq », « bank », « bridge », indice) → ce qu'ils portent.
+    pub internal: BTreeMap<(String, usize), PState>,
     pub snapshots: BTreeMap<String, Snapshot>,
 }
 
@@ -158,6 +163,11 @@ pub fn encode(p: &Preset) -> String {
     if !p.routes.is_empty() {
         out.push(format!("routes\t{}", clean(&p.routes)));
     }
+    for ((k, i), ps) in &p.internal {
+        let e = encode_param("_", ps);
+        let rest = e.trim_start_matches("p _ ");
+        out.push(format!("int {k} {i}\t{rest}"));
+    }
     for (name, s) in &p.snapshots {
         out.push(format!("snap\t{}", clean(name)));
         out.push(format!("snap.pad {}", encode_pad(&s.pad)));
@@ -172,6 +182,11 @@ pub fn encode(p: &Preset) -> String {
         }
         if let Some(v) = &s.bank {
             out.push(format!("snap.bank\t{}", list(v)));
+        }
+        for ((k, i), ps) in &s.internal {
+            let e = encode_param("_", ps);
+            let rest = e.trim_start_matches("p _ ");
+            out.push(format!("snap.int {k} {i}\t{rest}"));
         }
     }
     out.join("\n")
@@ -254,6 +269,19 @@ pub fn decode(s: &str) -> Option<Preset> {
             "seq" => p.seq = Some(unlist(tail)),
             "bank" => p.bank = Some(unlist(tail)),
             "routes" => p.routes = tail.to_string(),
+            "int" | "snap.int" => {
+                let (Some(k), Some(i)) = (w.next(), idx(&mut w)) else {
+                    continue;
+                };
+                if let Some((_, ps)) = decode_param(&format!("_ {tail}")) {
+                    let key = (k.to_string(), i);
+                    if what == "int" {
+                        p.internal.insert(key, ps);
+                    } else if let Some((_, s)) = snap.as_mut() {
+                        s.internal.insert(key, ps);
+                    }
+                }
+            }
             "snap" => {
                 if let Some((n, s)) = snap.take() {
                     p.snapshots.insert(n, s);

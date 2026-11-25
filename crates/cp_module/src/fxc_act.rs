@@ -174,6 +174,20 @@ impl App {
         self.fxc_changed();
     }
 
+    /// Le parametre qu'un bouton d'un effet interne tient.
+    fn fxc_ikey(&self, c: &Ctl) -> Option<String> {
+        cp_fxcview::internal_key(c, &self.fxc_guids(), self.fxc.view.sel_slot)
+    }
+
+    /// Des sources menent-elles ce parametre ?
+    fn fxc_modulated(&self, key: &str) -> bool {
+        self.fxc
+            .t
+            .params
+            .get(key)
+            .is_some_and(|p| p.sel && !p.srcs.is_empty())
+    }
+
     /// La valeur qu'un parametre a dans REAPER (sa base s'il est lie).
     fn fxc_read_norm(&self, key: &str) -> f64 {
         self.fxc_loc(key)
@@ -285,6 +299,12 @@ impl App {
     }
 
     fn fxc_click(&mut self, c: Ctl, m: Mods) {
+        if m.alt || m.shift {
+            if let Some(k) = self.fxc_ikey(&c) {
+                self.fxc_click(Ctl::Knob(k), m);
+                return;
+            }
+        }
         match c {
             Ctl::PresetPrev | Ctl::PresetNext => {
                 let list = self.fxc_preset_list();
@@ -642,6 +662,16 @@ impl App {
     // -----------------------------------------------------------------------
 
     fn fxc_value(&mut self, c: Ctl, v: f64) {
+        if let Some(k) = self.fxc_ikey(&c) {
+            let own = match &c {
+                Ctl::Js(_, p) => k.ends_with(&format!("#{p}")),
+                _ => true,
+            };
+            if own && self.fxc_modulated(&k) {
+                self.fxc_set_base(&k, v);
+                return;
+            }
+        }
         match c {
             Ctl::Knob(k) => self.fxc_set_base(&k, v),
             Ctl::PadField(f) => {
@@ -716,8 +746,12 @@ impl App {
     }
 
     fn fxc_depth(&mut self, c: Ctl, d: f64) {
-        let Ctl::Knob(k) = c else {
-            return;
+        let k = match c {
+            Ctl::Knob(k) => k,
+            other => match self.fxc_ikey(&other) {
+                Some(k) => k,
+                None => return,
+            },
         };
         let g = self.fxc.t.pad.gesture_range;
         if self.fxc.view.map {
@@ -867,10 +901,40 @@ impl App {
                 self.fxc_ensure_bridge();
                 self.fxc_changed();
             }
-            Ctl::Macro(_) | Ctl::SlotKnob(_) | Ctl::Js(..) => {
-                self.fxc_say(
-                    "Modulating a setting of a source or of the Sound Gen is not rebuilt yet",
-                );
+            c @ (Ctl::Macro(_) | Ctl::SlotKnob(_) | Ctl::Js(..)) => {
+                if cp_fxcview::self_source(&c, slot, self.fxc.view.sel_slot) {
+                    self.fxc_say("a source cannot drive its own settings");
+                    return;
+                }
+                if let Ctl::Macro(_) = c {
+                    self.fxc_ensure_bridge();
+                }
+                let Some(k) = self.fxc_ikey(&c) else {
+                    self.fxc_say(match c {
+                        Ctl::SlotKnob(_) => {
+                            "a global source's settings follow only the global bank"
+                        }
+                        Ctl::Js(SEQ, _) => "this sequencer setting cannot be modulated",
+                        _ => "nothing to modulate here",
+                    });
+                    return;
+                };
+                let read = self.fxc_read_norm(&k);
+                let ps = self.fxc.t.param_mut(&k);
+                if !ps.sel && ps.srcs.is_empty() {
+                    ps.base = read;
+                    ps.x = false;
+                    ps.y = false;
+                    // Un reglage de source module : une portee moderee.
+                    ps.range = 0.5;
+                }
+                if let Err(e) = ps.add_source(slot) {
+                    self.fxc_say(e);
+                    return;
+                }
+                self.fxc_arm(slot);
+                self.fxc_count("drop_internal");
+                self.fxc_changed();
             }
             _ => {}
         }
@@ -1018,6 +1082,22 @@ impl App {
             Ctl::RollAxis(i) => {
                 if let Some(a) = AXES.get(i as usize) {
                     self.fxc_roll(Some(*a));
+                }
+            }
+            c @ (Ctl::Js(..) | Ctl::SlotKnob(_))
+                if self.fxc_ikey(&c).is_some_and(|k| self.fxc_modulated(&k)) =>
+            {
+                if let Some(k) = self.fxc_ikey(&c) {
+                    self.fxc_source_menu(&k, x, y);
+                }
+            }
+            Ctl::Macro(n)
+                if self
+                    .fxc_ikey(&Ctl::Macro(n))
+                    .is_some_and(|k| self.fxc_modulated(&k)) =>
+            {
+                if let Some(k) = self.fxc_ikey(&Ctl::Macro(n)) {
+                    self.fxc_source_menu(&k, x, y);
                 }
             }
             Ctl::Macro(n) | Ctl::MacroDot(n) => {
@@ -2082,6 +2162,7 @@ impl App {
             );
         }
         p.routes = r.xc_track_ext(t, keys::ROUTES).unwrap_or_default();
+        p.internal = self.fxc_internal_capture();
         Some(p)
     }
 
@@ -2221,8 +2302,9 @@ impl App {
             }
         }
         r.xc_set_track_ext(t, keys::ROUTES, &p.routes);
-        // Le pad, les macros, le mapping.
+        // Le pad, les macros, le mapping (les reglages internes aussi).
         self.fxc.t.params = model;
+        self.fxc_internal_restore(&p.internal);
         self.fxc.t.pad = p.pad.clone();
         self.fxc.t.macro_names = p.macro_names.clone();
         self.fxc.t.preset = name.to_string();
@@ -2287,6 +2369,7 @@ impl App {
                     .collect(),
             );
         }
+        s.internal = self.fxc_internal_capture();
         let name = name.to_string();
         if let Some(p) = self.fxc.preset.as_mut() {
             p.snapshots.insert(name.clone(), s);
@@ -2351,6 +2434,7 @@ impl App {
         }
         self.fxc.t.pad = s.pad.clone();
         self.fxc.t.macro_names = s.macro_names.clone();
+        self.fxc_internal_restore(&s.internal);
         if let Some(b) = self.fxc.chain.find(FxKind::Bridge) {
             for (n, v) in s.macros.iter().enumerate() {
                 r.xc_set_raw(t, b, bridge::MACRO_IN + n, *v);
@@ -2555,6 +2639,63 @@ impl App {
                 }
             }
             _ => {}
+        }
+    }
+
+    /// Les reglages des effets internes menes par des sources, par genre
+    /// d'effet (les GUID changent d'une piste ou d'un rappel a l'autre).
+    fn fxc_internal_capture(&self) -> BTreeMap<(String, usize), PState> {
+        let g = self.fxc_guids();
+        let kinds = [
+            ("sg", g.sg),
+            ("seq", g.seq),
+            ("bank", g.bank),
+            ("bridge", g.bridge),
+        ];
+        let mut out = BTreeMap::new();
+        for (k, ps) in &self.fxc.t.params {
+            if !ps.sel || ps.srcs.is_empty() {
+                continue;
+            }
+            let Some((fg, i)) = split_pkey(k) else {
+                continue;
+            };
+            if let Some((name, _)) = kinds.iter().find(|(_, x)| x.as_deref() == Some(fg)) {
+                out.insert((name.to_string(), i), ps.clone());
+            }
+        }
+        out
+    }
+
+    fn fxc_internal_restore(&mut self, int: &BTreeMap<(String, usize), PState>) {
+        // Ce que les effets internes portaient s'en va, puis ce que le preset
+        // dit.
+        let g = self.fxc_guids();
+        let ours: Vec<String> = [&g.sg, &g.seq, &g.bank, &g.bridge]
+            .iter()
+            .filter_map(|x| (*x).clone())
+            .collect();
+        self.fxc
+            .t
+            .params
+            .retain(|k, _| split_pkey(k).is_none_or(|(fg, _)| !ours.iter().any(|o| o == fg)));
+        for ((kind, i), ps) in int {
+            if kind == "bridge" && self.fxc.chain.find(FxKind::Bridge).is_none() {
+                self.fxc_ensure_bridge();
+            }
+            if kind == "bank" && self.fxc.chain.find(FxKind::Bank).is_none() {
+                self.fxc_ensure_bank();
+            }
+            let g = self.fxc_guids();
+            let fg = match kind.as_str() {
+                "sg" => g.sg,
+                "seq" => g.seq,
+                "bank" => g.bank,
+                _ => g.bridge,
+            };
+            if let Some(fg) = fg {
+                self.fxc.t.params.insert(pkey(&fg, *i), ps.clone());
+            }
         }
     }
 

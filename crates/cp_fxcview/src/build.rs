@@ -418,6 +418,7 @@ pub(crate) fn build(v: &View, d: &Data, th: &Theme, w: f32, h: f32) -> (Vec<Item
     content[2] = left_zone(&mut b, v, d, left);
     content[0] = center_zone(&mut b, v, d, center, &mut content);
     content[1] = rack(&mut b, v, d, right);
+    dress_internal(&mut b.items, v, d, th);
     (b.items, content)
 }
 
@@ -1459,6 +1460,58 @@ fn fx_group(b: &mut B, v: &View, d: &Data, f: &crate::FxRow, r: R, list: R) -> f
         y += b.s(18.0);
     }
     y
+}
+
+/// Les boutons des effets internes que des sources menent : leurs anneaux,
+/// leur profondeur (Alt + glisser), et ce qu'ils jouent.
+fn dress_internal(items: &mut [Item], v: &View, d: &Data, th: &Theme) {
+    for it in items.iter_mut() {
+        let Some(key) = crate::internal_key(&it.ctl, &d.guids, v.sel_slot) else {
+            continue;
+        };
+        let Some(ps) = d.t.params.get(&key) else {
+            continue;
+        };
+        if ps.srcs.is_empty() || !ps.sel {
+            continue;
+        }
+        if let Look::Knob {
+            depth,
+            rings,
+            live,
+            hl,
+            ..
+        } = &mut it.look
+        {
+            *rings = rings_of(d, th, ps, false);
+            *depth = ps.span(0, d.t.pad.gesture_range);
+            let g = d.t.pad.gesture_range;
+            let mut sum = 0.0;
+            for (i, s) in ps.srcs.iter().enumerate() {
+                if let Some(sv) = d.src.get(&s.slot) {
+                    sum += ps.span_eff(i, g) * (sv - link_center(d, s.slot, s.pol));
+                }
+            }
+            *live = Some((ps.base + sum).clamp(0.0, 1.0));
+            let hover = match &v.hover {
+                Ctl::Tile(s) | Ctl::TileDot(s) => Some(*s),
+                _ => v.carry.map(|c| c.0),
+            };
+            *hl = hover
+                .filter(|s| ps.srcs.iter().any(|x| x.slot == *s))
+                .map(|s| src_color(th, s));
+            it.tip = format!(
+                "{}\n{}\nAlt+drag: depth · Alt+click: release · Shift+click: bypass",
+                it.tip,
+                ps.srcs
+                    .iter()
+                    .enumerate()
+                    .map(|(i, s)| format!("{} {:+.0} %", long_label(s.slot), ps.span(i, g) * 100.0))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            );
+        }
+    }
 }
 
 /// Le neutre d'un lien (sa polarite, sinon celle de sa source).

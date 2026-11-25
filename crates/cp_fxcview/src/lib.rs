@@ -179,6 +179,88 @@ pub struct Data<'a> {
     pub msg: Option<&'a str>,
     /// La note que le clavier tient.
     pub kb_note: Option<u8>,
+    /// Les effets internes de la piste.
+    pub guids: Guids,
+}
+
+/// Les GUID des effets internes de la piste (les reglages modulables).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Guids {
+    pub sg: Option<String>,
+    pub seq: Option<String>,
+    pub bank: Option<String>,
+    pub bridge: Option<String>,
+}
+
+/// Les parametres du sequenceur qu'une source peut moduler : le swing, la
+/// transposition, les pas des voies a valeurs et leur bas, la mutation, le
+/// de et le haut de chaque voie.
+pub fn seq_modulable(p: usize) -> bool {
+    if p == 4 || p == 9 {
+        return true;
+    }
+    if !(20..218).contains(&p) {
+        return false;
+    }
+    let l = (p - 20) / 22;
+    let k = (p - 20) % 22;
+    let bools = panels::LANES[l].bools;
+    match k {
+        0..=15 | 20 => !bools,
+        18 | 19 | 21 => true,
+        _ => false,
+    }
+}
+
+/// Le parametre (cle du modele) qu'un bouton d'un effet interne tient : un
+/// bouton du Sound Gen ou du sequenceur, un reglage du slot choisi de la
+/// banque locale, une macro. Le PITCH d'un oscillateur module son `pm`.
+pub fn internal_key(c: &Ctl, g: &Guids, sel_slot: i32) -> Option<String> {
+    use cp_fxc::model::pkey;
+    use cp_fxc::slots::{bank, bridge};
+    match c {
+        Ctl::Js(panels::SG, p) => {
+            let p = panels::OSC
+                .iter()
+                .find(|o| o.freq == *p)
+                .map_or(*p, |o| o.pm);
+            Some(pkey(g.sg.as_ref()?, p))
+        }
+        Ctl::Js(panels::SEQ, p) => {
+            if !seq_modulable(*p) {
+                return None;
+            }
+            Some(pkey(g.seq.as_ref()?, *p))
+        }
+        Ctl::SlotKnob(k) => {
+            if !(1..=8).contains(&sel_slot) {
+                return None;
+            }
+            let i = sel_slot as usize;
+            let p = match k {
+                0 => bank::rate(i),
+                1 => bank::phase(i),
+                2 => bank::curve(i),
+                _ => bank::slew(i),
+            };
+            Some(pkey(g.bank.as_ref()?, p))
+        }
+        Ctl::Macro(n) => Some(pkey(g.bridge.as_ref()?, bridge::MACRO_IN + *n as usize - 1)),
+        _ => None,
+    }
+}
+
+/// Une source peut-elle moduler ce reglage ? (Jamais ses propres reglages.)
+pub fn self_source(c: &Ctl, slot: i32, sel_slot: i32) -> bool {
+    match c {
+        Ctl::SlotKnob(_) => slot == sel_slot,
+        Ctl::Macro(n) => slot == 210 + *n as i32,
+        Ctl::Js(panels::SEQ, p) => {
+            let l = p.saturating_sub(20) / 22;
+            (*p >= 20 && l == 7 && slot == 221) || (*p >= 20 && l == 8 && slot == 222)
+        }
+        _ => false,
+    }
 }
 
 /// Les controles. Le module les interprete (les menus aussi).

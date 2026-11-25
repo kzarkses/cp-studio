@@ -247,7 +247,14 @@ pub fn plan(t: &Track, chain: &Chain, ctx: &Ctx) -> Plan {
         .filter_map(|(k, _)| {
             let (gd, i) = split_pkey(k)?;
             let fx = chain.index_of(gd)?;
-            matches!(chain.kind(fx), FxKind::User | FxKind::SoundGen).then_some((fx, i, k))
+            let ok = match chain.kind(fx) {
+                FxKind::User | FxKind::SoundGen | FxKind::Seq | FxKind::Bank => true,
+                // Le bridge : ses macros (leurs entrees), jamais x_pos / y_pos
+                // (les axes du pad ont leur propre lien).
+                FxKind::Bridge => (bridge::MACRO_IN..bridge::MACRO_IN + 8).contains(&i),
+                _ => false,
+            };
+            ok.then_some((fx, i, k))
         })
         .collect();
     keys.sort();

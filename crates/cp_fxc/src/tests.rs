@@ -315,6 +315,34 @@ fn a_driven_pad_axis_stays_in_its_zone() {
 }
 
 #[test]
+fn a_setting_of_an_internal_fx_is_a_destination() {
+    // Une macro (l'entree du bridge) et un reglage de la banque, menes par
+    // une source ; x_pos du bridge n'est jamais une destination de ce genre.
+    let mut t = Track::default();
+    let mut m = PState {
+        sel: true,
+        base: 0.2,
+        range: 0.5,
+        x: false,
+        y: false,
+        ..PState::default()
+    };
+    m.add_source(3).unwrap();
+    t.params.insert(pkey("{B}", bridge::MACRO_IN), m.clone());
+    t.params.insert(pkey("{L}", bank::rate(1)), m.clone());
+    t.params.insert(pkey("{B}", bridge::X_POS), m);
+    let p = plan(&t, &chain(), &Ctx::default());
+    let to = |fx: usize, param: usize| p.links.iter().find(|l| l.fx == fx && l.param == param);
+    let src = LSrc::Fx {
+        fx: 2,
+        param: bank::out(3),
+    };
+    assert_eq!(to(1, bridge::MACRO_IN).map(|l| l.src), Some(src));
+    assert_eq!(to(2, bank::rate(1)).map(|l| l.src), Some(src));
+    assert!(to(1, bridge::X_POS).is_none());
+}
+
+#[test]
 fn the_mod_window_crosses_for_a_negative_depth() {
     assert_eq!(mod_window(0.5, 0.4, 0.5), (0.3, 0.7));
     assert_eq!(mod_window(0.5, 0.4, 0.0), (0.5, 0.9));
@@ -593,7 +621,11 @@ fn a_preset_reads_back() {
     p.sg = Some((true, vec![0.1, 0.2]));
     p.bank = Some(vec![1.0, 0.0]);
     p.routes = "v1;m:2=1@0.5000".into();
+    p.internal.insert(("bridge".into(), 6), ps.clone());
     let s = Snapshot {
+        internal: [(("bank".to_string(), 2usize), ps.clone())]
+            .into_iter()
+            .collect(),
         params: [("Pro-Q 3||Gain".to_string(), ps)].into_iter().collect(),
         fx: vec![("VST3: Pro-Q 3 (FabFilter)".into(), true)],
         ..Snapshot::default()

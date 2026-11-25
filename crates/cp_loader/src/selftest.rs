@@ -1793,6 +1793,12 @@ impl SelfTest {
                         "le Mod Mix en tete : le lien du pad suit son bridge",
                     ),
                     (
+                        "macro_link",
+                        "1",
+                        "une source sur une macro : le lien va a son entree",
+                    ),
+                    ("self_refused", "1", "une macro ne se mene pas elle-meme"),
+                    (
                         "preset",
                         "1",
                         "un preset enregistre puis rappele rend les memes parametres",
