@@ -160,6 +160,10 @@ pub enum Icon {
     ShapeRandom,
     ShapeHold,
     ShapeSteps,
+    /// Coche (un choix fait, une case cochee).
+    Check,
+    /// Moins (un pas de moins).
+    Minus,
 }
 
 impl Icon {
@@ -400,6 +404,8 @@ impl Icon {
             Icon::ShapeSquare => r#"<path d="M2 18V6h10v12h10V6" />"#,
             Icon::ShapeRandom => r#"<path d="M2 12c3-7 5 6 8-1s5-6 7 2 4 2 5-2" />"#,
             Icon::ShapeHold => r#"<path d="M2 14h4V8h4v8h4V6h4v6h4" />"#,
+            Icon::Check => r#"<path d="M20 6 9 17l-5-5" />"#,
+            Icon::Minus => r#"<path d="M5 12h14" />"#,
             Icon::ShapeSteps => {
                 r#"<path d="M4 20v-6" /><path d="M8 20V8" /><path d="M12 20v-4" /><path d="M16 20V5" /><path d="M20 20v-9" />"#
             }
@@ -659,6 +665,8 @@ mod tests {
             Icon::ShapeRandom,
             Icon::ShapeHold,
             Icon::ShapeSteps,
+            Icon::Check,
+            Icon::Minus,
         ];
         for i in all {
             let (n, m) = c.mask(i, 24, false);

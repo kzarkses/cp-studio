@@ -13,6 +13,8 @@
 
 pub mod handle;
 pub mod icons;
+pub mod paint;
+pub mod pop;
 pub mod scroll;
 pub mod svg;
 pub mod textfield;
