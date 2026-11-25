@@ -272,6 +272,27 @@ clavier, le son.
   Pas couverts : « Move everything to a new track », le survol à la vraie
   souris.
 
+### Le 2026-11-25, plus tard : fluide tout le temps
+
+« Dès que je touche un knob, le dot est fluide ; dès que je relâche, ça
+tourne de manière saccadée, genre 20 fps. » Hors d'un geste, la fenêtre ne
+se redessinait qu'un battement de REAPER sur deux (15 images/s), et les
+sources n'étaient lues qu'au battement.
+
+- ✅ Une source posée (LFO, banque globale, séquenceur, Sound Gen, notes,
+  macro menée) ou le pad qui marche : les images tournent sans arrêt ; chaque
+  image relit les sorties des sources seules puis les valeurs jouées qu'elles
+  mènent (`fxc_frame_sources`). Le battement ne marque la vue que si sa
+  lecture a changé quelque chose.
+- ✅ Un bouton tourné (non relié) suit la souris tout de suite : sa valeur
+  et son texte se posent au geste (avant : relus tous les 3 battements).
+- ✅ Un bouton du Sound Gen mené par une source montre sa base, le point la
+  valeur jouée (il suivait le point : la valeur lue sur le JSFX est déjà
+  modulée).
+- ☐ Une source ne bouge qu'à chaque bloc audio (la sortie d'un JSFX) : un
+  grand tampon de carte son donne des pas visibles même à 120 images/s.
+  Calculer la phase d'un LFO côté vue lisserait ce cas.
+
 ## Les faits
 
 - La mémoire partagée des JSFX (`gmem`) n'est pas offerte aux extensions (le

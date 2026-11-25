@@ -869,12 +869,41 @@ artifact « CP Studio popovers ».
   popover), FX Browser, Session (« Region and gain » en trois curseurs),
   l'éditeur, Guitar Tab, le navigateur de fichiers (`ask::PopHost` pour les
   vues qui n'en savent rien).
-- ☐ Le transport et l'accordeur : leur barre est trop basse pour qu'un
-  menu s'y ouvre. Il leur faut un popover dans sa propre fenêtre (sans
-  cadre, au-dessus de tout, fermée quand elle perd la main) : une sorte de
-  fenêtre de plus au chargeur. D'ici là, leurs menus (et les menus de place
-  des vues ouverts depuis le transport) restent ceux du système ; le tempo
-  et la référence de l'accordeur, la boîte de REAPER.
+- ✅ Le transport et l'accordeur (2026-11-25 soir) : leur barre est trop
+  basse pour un menu, le popover est posé sur l'écran
+  (`cp_module/src/screenpop.rs`) sans rien demander au chargeur : l'image
+  par `cp_sys::overlay` (que Windows ne rappelle jamais), la souris tenue
+  par le transport le temps du choix, le clavier par le crochet (le
+  transport n'est plus « sans clavier » : il rend tout à REAPER sauf à un
+  popover ouvert). Menu de la barre en sous-menus (Tuner, External MIDI
+  clock), menu d'une icône, mode d'enregistrement, place de chaque vue
+  depuis son icône, saisie du tempo, La de l'accordeur.
+- ✅ Les infobulles des sept vues : dans le style des popovers, posées sur
+  l'écran (`cp_module/src/tip.rs`), cachées quand REAPER passe derrière.
+- ✅ Plus de quoi ouvrir un menu ou une boîte de Windows : `popup_menu`,
+  `popup_tree`, `user_inputs`, `xc_message` et `Tooltip` retirés de
+  `cp_sys`.
+- ☐ Restent deux fenêtres de REAPER (pas de Windows) : sa liste d'actions
+  pour « Add action… » du transport, et sa console quand le transport de
+  REAPER n'est pas ancré en haut (le nôtre ne peut pas s'y poser).
+
+### Fluide tout le temps (2026-11-25 soir)
+
+« Dès que je relâche, ça tourne de manière saccadée, genre 20 fps… il faut
+que l'app paraisse fluide tout le temps. » La cause : FX Constellation ne
+redessinait qu'un battement de REAPER sur deux (30 Hz lus, 15 images/s)
+hors d'un geste.
+
+- ✅ Ce qui bouge seul se lit et se dessine à la cadence de l'écran :
+  Constellation (sources, valeurs qu'elles mènent, `fxc_frame_sources`),
+  les vumètres de la Session, l'aiguille de l'accordeur. Le battement ne
+  marque une vue que si sa lecture a changé quelque chose.
+- ✅ Un bouton tourné suit la souris tout de suite (il sautait à 10 Hz) ;
+  un bouton du Sound Gen mené par une source montre sa base.
+- ✅ Les coûts : écran à 120 Hz (8,3 ms) ; Session entière 2,3 ms à
+  2560 px (mesurée hors de REAPER). L'auto-test exige une image de sources
+  de Constellation sous 4 ms ; il demande le nouveau chargeur (REAPER
+  fermé) et n'a pas encore tourné.
 
 ---
 
