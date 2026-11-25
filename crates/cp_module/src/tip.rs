@@ -10,6 +10,21 @@ use cp_sys::ui;
 use cp_sys::win::Hwnd;
 use cp_ui::Theme;
 
+thread_local! {
+    /// Les images d'infobulle posees (pour les cacher toutes quand REAPER
+    /// passe derriere une autre application : elles sont au-dessus de tout).
+    static LIVE: std::cell::RefCell<Vec<Hwnd>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Cache toutes les infobulles (REAPER n'est plus au premier plan).
+pub(crate) fn hide_all() {
+    LIVE.with(|l| {
+        for &h in l.borrow().iter() {
+            cp_sys::overlay::hide_window(h);
+        }
+    });
+}
+
 pub(crate) struct Tip {
     owner: Hwnd,
     ov: Option<Overlay>,
@@ -43,7 +58,9 @@ impl Tip {
         text: &mut TextCache,
         scratch: &mut Scratch,
     ) {
-        if s.trim().is_empty() {
+        // Une autre application devant : rien (l'image passerait devant
+        // elle).
+        if s.trim().is_empty() || !ui::foreground_is_ours() {
             self.hide();
             return;
         }
@@ -76,6 +93,10 @@ impl Tip {
         }
         if self.ov.is_none() {
             self.ov = Overlay::new(self.owner);
+            if let Some(o) = &self.ov {
+                let h = o.hwnd();
+                LIVE.with(|l| l.borrow_mut().push(h));
+            }
         }
         if let Some(ov) = &mut self.ov {
             if ov.show(x - m as i32, y - m as i32, iw, ih, &self.surf.px) {
@@ -93,5 +114,14 @@ impl Tip {
 
     pub fn is_shown(&self) -> bool {
         self.ov.as_ref().is_some_and(|o| o.is_shown())
+    }
+}
+
+impl Drop for Tip {
+    fn drop(&mut self) {
+        if let Some(o) = &self.ov {
+            let h = o.hwnd();
+            LIVE.with(|l| l.borrow_mut().retain(|&x| x != h));
+        }
     }
 }

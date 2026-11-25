@@ -1920,6 +1920,11 @@ impl Module for App {
         self.ses_tick();
         self.fxb_tick();
         self.fxc_tick();
+        // Les infobulles sont au-dessus de tout : une autre application
+        // devant, elles se cachent.
+        if !ui::foreground_is_ours() {
+            crate::tip::hide_all();
+        }
         self.transport_tick();
         if self.view.is_none() {
             return;

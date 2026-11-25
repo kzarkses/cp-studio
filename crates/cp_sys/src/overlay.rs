@@ -71,6 +71,8 @@ unsafe extern "system" {
     fn OvDestroyWindow(h: Raw) -> i32;
     #[link_name = "ShowWindow"]
     fn OvShowWindow(h: Raw, cmd: i32) -> i32;
+    #[link_name = "IsWindowVisible"]
+    fn OvIsWindowVisible(h: Raw) -> i32;
     #[link_name = "SetWindowPos"]
     fn OvSetWindowPos(h: Raw, after: Raw, x: i32, y: i32, w: i32, hh: i32, flags: u32) -> i32;
     #[link_name = "GetDC"]
@@ -227,7 +229,7 @@ impl Overlay {
                 OvDeleteDC(mem);
             }
             OvReleaseDC(null_mut(), screen);
-            if ok && !self.shown {
+            if ok && (!self.shown || OvIsWindowVisible(self.h.0 as Raw) == 0) {
                 OvShowWindow(self.h.0 as Raw, SW_SHOWNOACTIVATE);
                 self.shown = true;
             }
@@ -260,17 +262,23 @@ impl Overlay {
 
     /// Cache l'image (elle se remontre a la prochaine pose).
     pub fn hide(&mut self) {
-        const SW_HIDE: i32 = 0;
-        if self.shown {
-            // SAFETY: notre fenetre ; sans effet si elle est morte.
-            unsafe { OvShowWindow(self.h.0 as Raw, SW_HIDE) };
-            self.shown = false;
-        }
+        hide_window(self.h);
+        self.shown = false;
     }
 
+    /// L'image est-elle a l'ecran (lu sur la fenetre : cachee d'ailleurs,
+    /// par [`hide_window`], elle le sait).
     pub fn is_shown(&self) -> bool {
-        self.shown
+        // SAFETY: rend 0 sur un handle mort.
+        unsafe { OvIsWindowVisible(self.h.0 as Raw) != 0 }
     }
+}
+
+/// Cache une image par sa fenetre (sans la tenir).
+pub fn hide_window(h: Hwnd) {
+    const SW_HIDE: i32 = 0;
+    // SAFETY: sans effet sur un handle mort.
+    unsafe { OvShowWindow(h.0 as Raw, SW_HIDE) };
 }
 
 impl Drop for Overlay {
