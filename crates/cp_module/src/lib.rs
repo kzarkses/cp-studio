@@ -163,6 +163,8 @@ struct Adapter<'a> {
     place: Place,
     perf: bool,
     action: &'a mut Option<u32>,
+    /// Les menus en popover devant la vue (le geste a rejouer : l'evenement).
+    ph: &'a mut crate::ask::PopHost<Ev>,
 }
 
 impl BrowserHost for Adapter<'_> {
@@ -245,8 +247,9 @@ impl BrowserHost for Adapter<'_> {
     fn clipboard(&mut self) -> Option<String> {
         ui::clipboard_text(self.hwnd)
     }
+    /// Un menu en popover : 0 tant que le choix n'est pas fait ; le choix
+    /// redonne l'evenement a la vue, la reponse en main (`crate::ask`).
     fn menu(&mut self, x: f32, y: f32, items: &[MenuEntry]) -> u32 {
-        let (sx, sy) = ui::client_to_screen(self.hwnd, x as i32, y as i32);
         let v: Vec<Option<MenuItem<'_>>> = items
             .iter()
             .map(|e| {
@@ -258,7 +261,8 @@ impl BrowserHost for Adapter<'_> {
                 })
             })
             .collect();
-        ui::popup_menu(self.hwnd, sx, sy, &v)
+        let e = ui::flat_to_tree(&v);
+        self.ph.menu(x, y, &e)
     }
     fn save(&mut self, key: &str, value: &str) {
         self.r
@@ -471,6 +475,8 @@ pub(crate) struct App {
     last_mods: Mods,
     /// Le glisser commun : ce qu'une vue tire vers une autre.
     carry: Option<carry::Carry>,
+    /// Les menus du navigateur de fichiers, en popover.
+    bph: ask::PopHost<Ev>,
 }
 
 fn read_shortcuts(r: &Reaper) -> (Vec<Shortcut>, PathBuf) {
@@ -568,6 +574,7 @@ impl App {
             place,
             perf: self.show_perf,
             action: &mut self.action,
+            ph: &mut self.bph,
         };
         f(&mut self.browser, &mut ad)
     }
@@ -856,7 +863,9 @@ impl App {
         // NE REDESSINER QUE CE QUI CHANGE : la tete de lecture et les mesures
         // ne touchent que le bas. Tout redessiner a chaque image d'une grande
         // vue ancree coutait plus d'une periode de l'ecran.
-        let kind = if force || resized {
+        // Un popover ouvert, ou qui vient de se fermer : tout.
+        let pop_full = self.bph.needs_full();
+        let kind = if force || resized || pop_full {
             self.browser.take_redraw();
             Redraw::Full
         } else {
@@ -888,9 +897,13 @@ impl App {
                 place,
                 perf: self.show_perf,
                 action: &mut self.action,
+                ph: &mut self.bph,
             };
             if kind == Redraw::Full {
                 self.browser.draw(&mut cv, &mut g, &mut ad);
+                // Un popover ouvert : par-dessus tout.
+                ad.ph
+                    .draw(&mut cv, theme, g.text, g.icons, w as f32, h as f32);
             } else {
                 cv.push_clip(0.0, band_y, w as f32, band_h);
                 self.browser.draw_wave_band(&mut cv, &mut g, &mut ad);
@@ -990,7 +1003,19 @@ impl App {
 
     /// Un evenement pour le navigateur ; redessine a la prochaine image.
     fn feed(&mut self, ev: Ev) {
+        // Un popover ouvert prend tout ; sa reponse redonne l'evenement qui
+        // l'a ouvert.
+        if let Some(replay) = self.bph.feed(&ev) {
+            if let Some(e) = replay {
+                self.feed(e);
+            }
+            self.browser.mark();
+            self.want_frames();
+            return;
+        }
+        let top = self.bph.ask.begin(&ev);
         let changed = self.with_browser(|b, h| b.event(h, &ev));
+        self.bph.ask.end(top);
         self.run_action();
         if changed || self.browser.animating() {
             self.browser.mark();
@@ -1006,6 +1031,29 @@ impl App {
     fn accel(&mut self, m: &WinMsg) -> isize {
         let Some(k) = key_event(m) else { return 0 };
         let vk = k.wp as u32;
+        let down = matches!(k.message, msg::KEYDOWN | msg::SYSKEYDOWN);
+        let chr = matches!(k.message, msg::CHAR | msg::SYSCHAR);
+        match self.bph.key(vk, mods(), down, chr) {
+            Some(crate::ask::KeyDo::Feed) => {
+                let hwnd = self.view.as_ref().map_or(Hwnd(0), |v| v.hwnd);
+                if mods().ctrl && vk == 0x56 {
+                    if let (Some(t), Some(p)) = (ui::clipboard_text(hwnd), self.bph.pop.as_mut()) {
+                        p.paste(&t);
+                    }
+                    self.browser.mark();
+                    self.want_frames();
+                } else {
+                    self.feed(Ev::Key {
+                        vk,
+                        mods: mods(),
+                        text: None,
+                    });
+                }
+                return 1;
+            }
+            Some(crate::ask::KeyDo::Code(c)) => return c,
+            None => {}
+        }
         match k.message {
             msg::KEYDOWN | msg::SYSKEYDOWN => match self.browser.key_use(vk, mods()) {
                 KeyUse::Eat => {
@@ -1685,6 +1733,7 @@ impl Module for App {
             main_keys: None,
             last_mods: Mods::default(),
             carry: None,
+            bph: Default::default(),
         };
         // Les curseurs personnalises de REAPER (Cursors\<nom>.cur).
         if let Some(res) = app.r.resource_path() {
@@ -1818,6 +1867,7 @@ impl Module for App {
             place,
             perf: self.show_perf,
             action: &mut self.action,
+            ph: &mut self.bph,
         };
         self.browser.release_all(&mut ad);
         if self.tp.prompt {

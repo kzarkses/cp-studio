@@ -46,6 +46,8 @@ pub(crate) struct EWin {
 }
 
 pub(crate) struct EPart {
+    /// Les menus en popover devant la vue (plus de menus de Windows).
+    pub ph: crate::ask::PopHost<Act>,
     pub ed: Ed,
     pub win: Option<EWin>,
     pub place: Place,
@@ -94,6 +96,7 @@ impl EPart {
         ed.hear = get("ed_hear") != "0";
         ed.isolate = get("ed_isolate") == "1";
         EPart {
+            ph: Default::default(),
             ed,
             win: None,
             place: Place::from_key(&get("ed_place")).unwrap_or(Place::Dock),
@@ -470,8 +473,16 @@ impl App {
     }
 
     fn ed_act(&mut self, acts: Vec<Act>) {
-        let r = self.r;
         for a in acts {
+            let top = self.ed.ph.ask.begin(&a);
+            self.ed_act_one(a);
+            self.ed.ph.ask.end(top);
+        }
+    }
+
+    fn ed_act_one(&mut self, a: Act) {
+        let r = self.r;
+        {
             match a {
                 Act::Commit(label) => self.ed_commit(label),
                 Act::Seek(q) => r.set_edit_cursor(r.qn_to_time(q)),
@@ -505,10 +516,14 @@ impl App {
                 Act::GridMenu { x, y } => self.ed_grid_menu(x, y),
                 Act::ScaleMenu { x, y } => self.ed_scale_menu(x, y),
                 Act::ViewMenu { x, y } => {
-                    if let Some(h) = self.ed.win.as_ref().map(|w| w.hwnd) {
-                        let (sx, sy) = ui::client_to_screen(h, x as i32, y as i32);
-                        self.ed_place_menu_at(h, sx, sy);
+                    let e = self.ed_place_entries();
+                    let items: Vec<ui::MenuEntry> = e;
+                    let id = self.ed.ph.menu(x, y, &items);
+                    if self.ed.ph.pop.is_some() {
+                        self.ed.ed.mark();
+                        self.ed_kick();
                     }
+                    self.ed_place_pick(id);
                 }
                 Act::Main(c) => r.main_on_command(c as i32),
                 Act::Close => self.queue(WinOp::EdClose),
@@ -547,12 +562,16 @@ impl App {
     // Les menus
     // -----------------------------------------------------------------------
 
-    fn ed_menu(&self, x: f32, y: f32, items: &[Option<MenuItem<'_>>]) -> u32 {
-        let Some(h) = self.ed.win.as_ref().map(|w| w.hwnd) else {
-            return 0;
-        };
-        let (sx, sy) = ui::client_to_screen(h, x as i32, y as i32);
-        ui::popup_menu(h, sx, sy, items)
+    /// Un menu en popover : 0 tant que le choix n'est pas fait ; le choix
+    /// rejoue le geste (`crate::ask`).
+    fn ed_menu(&mut self, x: f32, y: f32, items: &[Option<MenuItem<'_>>]) -> u32 {
+        let e = ui::flat_to_tree(items);
+        let id = self.ed.ph.menu(x, y, &e);
+        if self.ed.ph.pop.is_some() {
+            self.ed.ed.mark();
+            self.ed_kick();
+        }
+        id
     }
 
     fn ed_grid_menu(&mut self, x: f32, y: f32) {
@@ -968,7 +987,7 @@ impl App {
         self.ed_open();
     }
 
-    pub(crate) fn ed_place_menu_at(&mut self, owner: Hwnd, sx: i32, sy: i32) {
+    fn ed_place_entries(&self) -> Vec<ui::MenuEntry> {
         let p = self.ed.place;
         let open = self.ed.win.is_some();
         let items = [
@@ -1017,7 +1036,11 @@ impl App {
                 enabled: open,
             }),
         ];
-        match ui::popup_menu(owner, sx, sy, &items) {
+        ui::flat_to_tree(&items)
+    }
+
+    fn ed_place_pick(&mut self, id: u32) {
+        match id {
             k @ 20..=22 => self.set_handle_mode((k - 20) as u8),
             1 => self.queue(WinOp::EdPlace(Place::Arrange)),
             2 => self.queue(WinOp::EdPlace(Place::Dock)),
@@ -1025,6 +1048,14 @@ impl App {
             4 => self.queue(WinOp::EdClose),
             _ => {}
         }
+    }
+
+    /// Depuis le transport (son icone) : le popover vient avec la vue du
+    /// transport ; d'ici la, le menu du systeme.
+    pub(crate) fn ed_place_menu_at(&mut self, owner: Hwnd, sx: i32, sy: i32) {
+        let e = self.ed_place_entries();
+        let id = ui::popup_tree(owner, sx, sy, &e);
+        self.ed_place_pick(id);
     }
 
     fn ed_want_frames(&mut self, on: bool) {
@@ -1076,11 +1107,16 @@ impl App {
         if w.frame.resize(cw, ch) || force {
             self.ed.ed.mark();
         }
-        let damage = self.ed.ed.take_damage(cw, ch);
-        let ed = &mut self.ed.ed;
+        let mut damage = self.ed.ed.take_damage(cw, ch);
+        // Un popover ouvert (ou qui vient de se fermer) : toute l'image.
+        if self.ed.ph.needs_full() {
+            damage = vec![cp_gfx::IRect::new(0, 0, cw, ch)];
+        }
+        let (ed, ph) = (&mut self.ed.ed, &mut self.ed.ph);
         let (text, icons, th) = (&mut self.text, &mut self.icons, &w.theme);
         w.frame.paint(&damage, &mut self.scratch, |cv| {
             ed.draw(cv, text, icons, th, cw as f32, ch as f32);
+            ph.draw(cv, th, text, icons, cw as f32, ch as f32);
         });
         let strokes = self.ed.ed.strokes(&w.theme);
         w.frame.show(w.hwnd, &damage, &strokes);
@@ -1205,6 +1241,15 @@ impl App {
     }
 
     fn ed_feed(&mut self, ev: Ev) {
+        // Un popover ouvert prend tout ; sa reponse rejoue le geste.
+        if let Some(replay) = self.ed.ph.feed(&ev) {
+            if let Some(a) = replay {
+                self.ed_act(vec![a]);
+            }
+            self.ed.ed.mark();
+            self.ed_kick();
+            return;
+        }
         let acts = self.ed.ed.event(&ev);
         self.ed_act(acts);
         self.ed_kick();
@@ -1255,6 +1300,30 @@ impl App {
                 };
                 let vk = k.wp as u32;
                 let ext = (k.lp >> 24) & 1 == 1;
+                let down = matches!(k.message, msg::KEYDOWN | msg::SYSKEYDOWN);
+                let chr = matches!(k.message, msg::CHAR | msg::SYSCHAR);
+                match self.ed.ph.key(vk, md, down, chr) {
+                    Some(crate::ask::KeyDo::Feed) => {
+                        if md.ctrl && vk == 0x56 {
+                            if let (Some(t), Some(p)) =
+                                (ui::clipboard_text(hwnd), self.ed.ph.pop.as_mut())
+                            {
+                                p.paste(&t);
+                            }
+                            self.ed.ed.mark();
+                            self.ed_kick();
+                        } else {
+                            self.ed_feed(Ev::Key {
+                                vk,
+                                mods: md,
+                                text: None,
+                            });
+                        }
+                        return Some(1);
+                    }
+                    Some(crate::ask::KeyDo::Code(c)) => return Some(c),
+                    None => {}
+                }
                 Some(match k.message {
                     msg::KEYDOWN | msg::SYSKEYDOWN => {
                         let took = self.ed_key(vk, ext, md);
@@ -1267,6 +1336,14 @@ impl App {
                     }
                     _ => 0,
                 })
+            }
+            msg::CHAR => {
+                if let Some(c) = char::from_u32(m.wp as u32) {
+                    if self.ed.ph.pop.is_some() {
+                        self.ed_feed(Ev::Char(c));
+                    }
+                }
+                Some(0)
             }
             msg::SIZE => {
                 self.ed.ed.mark();

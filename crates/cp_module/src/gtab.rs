@@ -155,6 +155,8 @@ pub(crate) struct Job {
 }
 
 pub(crate) struct GPart {
+    /// Les menus et les noms en popover devant la vue.
+    pub ph: crate::ask::PopHost<GAct>,
     pub arr: Arr,
     pub win: Option<GWin>,
     pub place: Place,
@@ -259,6 +261,7 @@ impl GPart {
             rr.time_to_qn(rr.snap_time(rr.qn_to_time(q)))
         }));
         GPart {
+            ph: Default::default(),
             arr,
             win: None,
             place: r
@@ -2355,6 +2358,12 @@ impl App {
     }
 
     fn gtab_act(&mut self, a: GAct) {
+        let top = self.gt.ph.ask.begin(&a);
+        self.gtab_act_one(a);
+        self.gt.ph.ask.end(top);
+    }
+
+    fn gtab_act_one(&mut self, a: GAct) {
         let r = self.r;
         let head = |me: &App, t: usize| me.gt.arr.tracks.get(t).map(|x| x.head.clone());
         match a {
@@ -2872,12 +2881,20 @@ impl App {
         }
     }
 
-    fn gtab_menu(&self, x: f32, y: f32, items: &[Option<MenuItem<'_>>]) -> u32 {
-        let Some(h) = self.gt.win.as_ref().map(|w| w.hwnd) else {
-            return 0;
-        };
-        let (sx, sy) = ui::client_to_screen(h, x as i32, y as i32);
-        ui::popup_menu(h, sx, sy, items)
+    /// Un menu en popover : 0 tant que le choix n'est pas fait ; le choix
+    /// rejoue le geste (`crate::ask`).
+    fn gtab_menu(&mut self, x: f32, y: f32, items: &[Option<MenuItem<'_>>]) -> u32 {
+        let e = ui::flat_to_tree(items);
+        self.gtab_tree(x, y, &e)
+    }
+
+    fn gtab_tree(&mut self, x: f32, y: f32, e: &[ui::MenuEntry]) -> u32 {
+        let id = self.gt.ph.menu(x, y, e);
+        if self.gt.ph.pop.is_some() {
+            self.gt.arr.mark();
+            self.gtab_kick();
+        }
+        id
     }
 
     fn gtab_input_menu(&mut self, t: usize, x: f32, y: f32) {
@@ -3058,7 +3075,13 @@ impl App {
                 }
             }
             1 => {
-                if let Some(n) = r.user_inputs("Rename guitar track", 1, "Name", &h.name) {
+                let (mx, my) = (x, y);
+                let asked = self.gt.ph.text("Rename guitar track", &h.name, mx, my);
+                if self.gt.ph.pop.is_some() {
+                    self.gt.arr.mark();
+                    self.gtab_kick();
+                }
+                if let Some(n) = asked {
                     let n = n.trim().to_string();
                     if !n.is_empty() {
                         r.undo_begin();
@@ -3705,7 +3728,7 @@ impl App {
         self.gtab_open();
     }
 
-    pub(crate) fn gtab_place_menu_at(&mut self, owner: Hwnd, sx: i32, sy: i32) {
+    fn gtab_place_entries(&self) -> Vec<ui::MenuEntry> {
         let p = self.gt.place;
         let open = self.gt.win.is_some();
         let items = [
@@ -3754,7 +3777,11 @@ impl App {
                 enabled: open,
             }),
         ];
-        match ui::popup_menu(owner, sx, sy, &items) {
+        ui::flat_to_tree(&items)
+    }
+
+    fn gtab_place_pick(&mut self, id: u32) {
+        match id {
             k @ 20..=22 => self.set_handle_mode((k - 20) as u8),
             1 => self.queue(WinOp::GtabPlace(Place::Arrange)),
             2 => self.queue(WinOp::GtabPlace(Place::Dock)),
@@ -3764,12 +3791,18 @@ impl App {
         }
     }
 
+    /// Depuis le transport (son icone) : le popover vient avec la vue du
+    /// transport ; d'ici la, le menu du systeme.
+    pub(crate) fn gtab_place_menu_at(&mut self, owner: Hwnd, sx: i32, sy: i32) {
+        let e = self.gtab_place_entries();
+        let id = ui::popup_tree(owner, sx, sy, &e);
+        self.gtab_place_pick(id);
+    }
+
     fn gtab_place_menu(&mut self, x: f32, y: f32) {
-        let Some(h) = self.gt.win.as_ref().map(|w| w.hwnd) else {
-            return;
-        };
-        let (sx, sy) = ui::client_to_screen(h, x as i32, y as i32);
-        self.gtab_place_menu_at(h, sx, sy);
+        let e = self.gtab_place_entries();
+        let id = self.gtab_tree(x, y, &e);
+        self.gtab_place_pick(id);
     }
 
     fn gtab_want_frames(&mut self, on: bool) {
@@ -3822,17 +3855,31 @@ impl App {
         if w.frame.resize(cw, ch) || force {
             self.gt.arr.mark();
         }
-        let damage = self.gt.arr.take_damage(cw, ch);
-        let arr = &mut self.gt.arr;
+        let mut damage = self.gt.arr.take_damage(cw, ch);
+        // Un popover ouvert (ou qui vient de se fermer) : toute l'image.
+        if self.gt.ph.needs_full() {
+            damage = vec![cp_gfx::IRect::new(0, 0, cw, ch)];
+        }
+        let (arr, ph) = (&mut self.gt.arr, &mut self.gt.ph);
         let (text, icons, th) = (&mut self.text, &mut self.icons, &w.theme);
         w.frame.paint(&damage, &mut self.scratch, |cv| {
             arr.draw(cv, text, icons, th, cw as f32, ch as f32);
+            ph.draw(cv, th, text, icons, cw as f32, ch as f32);
         });
         let strokes = self.gt.arr.strokes(&w.theme);
         w.frame.show(w.hwnd, &damage, &strokes);
     }
 
     fn gtab_feed(&mut self, ev: Ev) {
+        // Un popover ouvert prend tout ; sa reponse rejoue le geste.
+        if let Some(replay) = self.gt.ph.feed(&ev) {
+            if let Some(a) = replay {
+                self.gtab_act(a);
+            }
+            self.gt.arr.mark();
+            self.gtab_kick();
+            return;
+        }
         if let Some(a) = self.gt.arr.event(&ev) {
             self.gtab_act(a);
         }
@@ -3877,6 +3924,30 @@ impl App {
                 };
                 let vk = k.wp as u32;
                 let ext = (k.lp >> 24) & 1 == 1;
+                let down = matches!(k.message, msg::KEYDOWN | msg::SYSKEYDOWN);
+                let chr = matches!(k.message, msg::CHAR | msg::SYSCHAR);
+                match self.gt.ph.key(vk, md, down, chr) {
+                    Some(crate::ask::KeyDo::Feed) => {
+                        if md.ctrl && vk == 0x56 {
+                            if let (Some(t), Some(p)) =
+                                (ui::clipboard_text(hwnd), self.gt.ph.pop.as_mut())
+                            {
+                                p.paste(&t);
+                            }
+                            self.gt.arr.mark();
+                            self.gtab_kick();
+                        } else {
+                            self.gtab_feed(Ev::Key {
+                                vk,
+                                mods: md,
+                                text: None,
+                            });
+                        }
+                        return Some(1);
+                    }
+                    Some(crate::ask::KeyDo::Code(c)) => return Some(c),
+                    None => {}
+                }
                 if let Some(r) = self.gtab_audition_key(hwnd, k.message, vk, ext, md) {
                     return Some(r);
                 }
@@ -3912,6 +3983,12 @@ impl App {
                     msg::KEYUP | msg::SYSKEYUP if wanted => 1,
                     _ => 0,
                 })
+            }
+            msg::CHAR if self.gt.ph.pop.is_some() => {
+                if let Some(c) = char::from_u32(m.wp as u32) {
+                    self.gtab_feed(Ev::Char(c));
+                }
+                Some(0)
             }
             msg::SIZE => {
                 self.gt.arr.mark();

@@ -180,6 +180,118 @@ impl<A: Clone> Asker<A> {
     }
 }
 
+/// Un popover pose devant une vue qui n'en sait rien (l'editeur, Guitar
+/// Tab, le transport, le navigateur de fichiers) : le module le tient, lui
+/// donne la souris et le clavier de la fenetre tant qu'il est ouvert, et le
+/// dessine apres la vue.
+pub(crate) struct PopHost<A> {
+    pub pop: Option<cp_ui::pop::Pop>,
+    pub ask: Asker<A>,
+    /// Ouvert a la derniere image (sa fermeture se repeint en entier).
+    was_open: bool,
+}
+
+impl<A> Default for PopHost<A> {
+    fn default() -> Self {
+        PopHost {
+            pop: None,
+            ask: Asker::default(),
+            was_open: false,
+        }
+    }
+}
+
+/// Ce qu'une touche devient quand un popover est ouvert (le code rendu au
+/// crochet du clavier : 1 pris, -1 du texte pour la fenetre, 0 a REAPER).
+pub(crate) enum KeyDo {
+    /// La touche va au popover (`feed`), puis 1.
+    Feed,
+    Code(isize),
+}
+
+impl<A: Clone> PopHost<A> {
+    /// Un menu : le choix du rejeu, ou l'ouvrir (0).
+    pub fn menu(&mut self, x: f32, y: f32, entries: &[MenuEntry]) -> u32 {
+        match self.ask.pick(entries) {
+            Ask::Ready(id) => id,
+            Ask::Open => {
+                let e = entries.iter().map(MenuEntry::to_pop).collect();
+                self.pop = Some(cp_ui::pop::Pop::menu(0, e, x, y));
+                0
+            }
+            Ask::Skip => 0,
+        }
+    }
+
+    /// Un nom ou une valeur : celle du rejeu, ou ouvrir la saisie.
+    pub fn text(&mut self, title: &str, cur: &str, x: f32, y: f32) -> Option<String> {
+        match self.ask.text() {
+            Ask::Ready(t) => Some(t),
+            Ask::Open => {
+                self.pop = Some(cp_ui::pop::Pop::ask(0, title, cur, "OK", x, y));
+                None
+            }
+            Ask::Skip => None,
+        }
+    }
+
+    /// Un evenement de la fenetre : `None` s'il n'y a pas de popover (la
+    /// vue le prend) ; sinon le geste a rejouer s'il y en a un.
+    pub fn feed(&mut self, ev: &cp_ui::Ev) -> Option<Option<A>> {
+        let p = self.pop.as_mut()?;
+        let Some(out) = p.event(ev) else {
+            return Some(None);
+        };
+        if out.closes() {
+            self.pop = None;
+        }
+        if out == Out::Closed {
+            self.ask.cancel();
+            return Some(None);
+        }
+        Some(self.ask.answer(&out))
+    }
+
+    /// Une touche du crochet (`down` : enfoncee ; `chr` : un caractere).
+    pub fn key(&self, vk: u32, m: cp_ui::Mods, down: bool, chr: bool) -> Option<KeyDo> {
+        use cp_ui::pop::KeyRoute;
+        let p = self.pop.as_ref()?;
+        if chr {
+            return Some(KeyDo::Code(if p.wants_text() { -1 } else { 0 }));
+        }
+        Some(match p.key_route(vk, m) {
+            KeyRoute::Eat if down => KeyDo::Feed,
+            KeyRoute::Eat => KeyDo::Code(1),
+            KeyRoute::Text => KeyDo::Code(-1),
+            KeyRoute::Pass => KeyDo::Code(0),
+        })
+    }
+
+    /// Repeindre toute la fenetre : un popover ouvert, ou qui vient de se
+    /// fermer.
+    pub fn needs_full(&mut self) -> bool {
+        let r = self.pop.is_some() || self.was_open;
+        self.was_open = self.pop.is_some();
+        r
+    }
+
+    /// Le dessine par-dessus la vue (dans la decoupe courante).
+    pub fn draw(
+        &mut self,
+        cv: &mut cp_gfx::Canvas<'_>,
+        th: &cp_ui::Theme,
+        text: &mut cp_gfx::text::TextCache,
+        icons: &mut cp_ui::IconCache,
+        w: f32,
+        h: f32,
+    ) {
+        if let Some(p) = self.pop.as_mut() {
+            p.layout(th, text, w, h);
+            p.draw(cv, th, text, icons);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
