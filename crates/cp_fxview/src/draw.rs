@@ -73,6 +73,11 @@ impl View {
             self.draw_msg(cv, text, th, &l, m);
         }
         self.draw_ghost(cv, text, th, cat, &l);
+        // Un popover ouvert : par-dessus tout.
+        if let Some(p) = self.pop.as_mut() {
+            p.layout(th, text, w, h);
+            p.draw(cv, th, text, icons);
+        }
     }
 
     /// Les largeurs des pastilles (elles dependent du texte).

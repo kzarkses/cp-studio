@@ -59,6 +59,11 @@ impl View {
         // d'etat.
         self.dock.draw(cv, text, th, w, h, self.grabbing_handle());
         self.draw_ghost(cv, text, th, ses, &l);
+        // Un popover ouvert : par-dessus tout.
+        if let Some(p) = self.pop.as_mut() {
+            p.layout(th, text, w, h);
+            p.draw(cv, th, text, icons);
+        }
     }
 
     fn draw_toolbar(

@@ -20,6 +20,7 @@ use std::collections::BTreeSet;
 use cp_fxlist::{Catalog, Src, Store, list};
 use cp_gfx::Color;
 use cp_gfx::text::TextCache;
+use cp_ui::pop::{Out, Pop};
 use cp_ui::textfield::Edit;
 use cp_ui::{Button, Ev, Mods, TextField, Theme, vk};
 
@@ -82,6 +83,8 @@ pub enum Hit {
 /// Ce que le module doit faire.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Act {
+    /// Ce qu'un popover rend : (son contexte, le resultat).
+    Pop(u32, Out),
     /// Ajouter des effets (rangs du catalogue) a la chaine, a la place `at`
     /// (aucune : la place par defaut).
     Add {
@@ -269,6 +272,9 @@ enum Drag {
 
 /// L'etat de la vue.
 pub struct View {
+    /// Un popover ouvert (menu, saisie d'un nom, confirmation) : il prend
+    /// la souris et le clavier, il se dessine par-dessus.
+    pub pop: Option<Pop>,
     pub search: TextField,
     /// La frappe va a la recherche (sinon, Espace va a REAPER).
     pub focus_search: bool,
@@ -314,6 +320,7 @@ impl Default for View {
 impl View {
     pub fn new() -> View {
         View {
+            pop: None,
             search: TextField::default(),
             focus_search: true,
             src: Src::All,
@@ -341,6 +348,32 @@ impl View {
             nfx: 0,
             list_h: 0.0,
         }
+    }
+
+    /// Ouvre un popover (il remplace celui qui l'etait) ; le geste en cours
+    /// s'arrete.
+    pub fn open_pop(&mut self, p: Pop) {
+        self.drag = None;
+        self.pop = Some(p);
+        self.mark();
+    }
+
+    /// Un evenement pour le popover ouvert : ce qu'il rend devient une
+    /// [`Act::Pop`] ; ferme, il se retire.
+    fn pop_event(&mut self, ev: &Ev) -> Option<Act> {
+        let p = self.pop.as_mut()?;
+        let before = p.stamp();
+        let out = p.event(ev);
+        let ctx = p.ctx;
+        if p.stamp() != before {
+            self.mark();
+        }
+        let o = out?;
+        if o.closes() {
+            self.pop = None;
+        }
+        self.mark();
+        Some(Act::Pop(ctx, o))
     }
 
     pub fn mark(&mut self) {
@@ -772,6 +805,15 @@ impl View {
         text: &mut TextCache,
         ev: &Ev,
     ) -> Option<Act> {
+        if self.pop.is_some() {
+            match *ev {
+                // Le presse-papiers d'une saisie passe par `key`.
+                Ev::Key { vk, mods, .. } => return self.key(cat, st, vk, mods),
+                Ev::Move { x, y, .. } => self.mouse = (x, y),
+                _ => {}
+            }
+            return self.pop_event(ev);
+        }
         self.nfx = chain.fx.len();
         let (w, h) = self.size;
         let l = self.layout(th, st, w, h);
@@ -1234,6 +1276,13 @@ impl View {
 
     /// Ce que le module fait de la touche `vk`.
     pub fn key_use(&self, vk: u32, m: Mods) -> KeyUse {
+        if let Some(p) = &self.pop {
+            return match p.key_route(vk, m) {
+                cp_ui::pop::KeyRoute::Eat => KeyUse::Eat,
+                cp_ui::pop::KeyRoute::Text => KeyUse::Text,
+                cp_ui::pop::KeyRoute::Pass => KeyUse::NotMine,
+            };
+        }
         match vk {
             vk::UP | vk::DOWN | vk::PRIOR | vk::NEXT | vk::RETURN | vk::ESCAPE | vk::TAB => {
                 KeyUse::Eat
@@ -1298,6 +1347,16 @@ impl View {
     }
 
     pub fn key(&mut self, cat: &Catalog, st: &mut Store, k: u32, m: Mods) -> Option<Act> {
+        if let Some(p) = &self.pop {
+            if p.wants_text() && m.ctrl && !m.alt && k == 0x56 {
+                return Some(Act::Paste);
+            }
+            return self.pop_event(&Ev::Key {
+                vk: k,
+                mods: m,
+                text: None,
+            });
+        }
         let page = ((self.list_h / (geo::ROW * self.scale).round()).floor() as usize).max(1);
         let cur = self.cursor;
         match k {
@@ -1378,6 +1437,9 @@ impl View {
     }
 
     pub fn char(&mut self, cat: &Catalog, st: &mut Store, c: char) -> Option<Act> {
+        if self.pop.is_some() {
+            return self.pop_event(&Ev::Char(c));
+        }
         if c.is_control() {
             return None;
         }
@@ -1391,6 +1453,13 @@ impl View {
 
     /// Colle du texte dans la recherche.
     pub fn paste(&mut self, cat: &Catalog, st: &Store, s: &str) {
+        if let Some(p) = self.pop.as_mut() {
+            if p.wants_text() {
+                p.paste(s);
+                self.mark();
+            }
+            return;
+        }
         let one_line: String = s.lines().next().unwrap_or("").to_string();
         self.focus_search = true;
         if self.search.insert(&one_line) == Edit::Changed {

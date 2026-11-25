@@ -26,6 +26,9 @@ use cp_gfx::{IRect, rgb};
 use cp_sys::module::key_event;
 use cp_sys::reaper::Reaper;
 use cp_sys::ui::{self, MenuEntry, MenuItem};
+use cp_ui::pop::Pop;
+
+use crate::ask::Ask;
 use cp_sys::win::{self, Hwnd, WinMsg};
 use cp_ui::{Button, Ev, Theme};
 
@@ -52,6 +55,8 @@ pub(crate) struct FWin {
 }
 
 pub(crate) struct FPart {
+    /// Les questions (menus, noms) en popover : le geste a rejouer.
+    pub ask: crate::ask::Asker<Act>,
     pub cat: Catalog,
     pub st: Store,
     pub view: View,
@@ -115,6 +120,7 @@ impl FPart {
             stolen: None,
             taken: 0,
             adds: 0,
+            ask: Default::default(),
         }
     }
 }
@@ -578,8 +584,25 @@ impl App {
     // -----------------------------------------------------------------------
 
     fn fxb_act(&mut self, a: Act) {
+        if let Act::Pop(_, out) = a {
+            // La reponse a une question : le geste qui l'a posee se rejoue.
+            if out == cp_ui::pop::Out::Closed {
+                self.fxb.ask.cancel();
+            } else if let Some(g) = self.fxb.ask.answer(&out) {
+                self.fxb_act(g);
+            }
+            self.fxb.view.mark();
+            return;
+        }
+        let top = self.fxb.ask.begin(&a);
+        self.fxb_act_one(a);
+        self.fxb.ask.end(top);
+    }
+
+    fn fxb_act_one(&mut self, a: Act) {
         let r = self.r;
         match a {
+            Act::Pop(..) => {}
             Act::Add { plugins, at } => {
                 let at = at.map(|a| self.fxb_real_slot(a));
                 self.fxb_add(&plugins, at, None, false)
@@ -671,22 +694,15 @@ impl App {
                     self.dock_switch(h, i);
                 }
             }
-            Act::ViewMenu { x, y } => {
-                if let Some(h) = self.fxb.win.as_ref().map(|w| w.hwnd) {
-                    let (sx, sy) = ui::client_to_screen(h, x as i32, y as i32);
-                    self.fxb_place_menu_at(h, sx, sy);
-                }
-            }
+            Act::ViewMenu { x, y } => self.fxb_place_menu(x, y),
         }
         self.fxb.view.mark();
     }
 
-    fn fxb_popup(&self, x: f32, y: f32, items: &[Option<MenuItem<'_>>]) -> u32 {
-        let Some(h) = self.fxb.win.as_ref().map(|w| w.hwnd) else {
-            return 0;
-        };
-        let (sx, sy) = ui::client_to_screen(h, x as i32, y as i32);
-        ui::popup_menu(h, sx, sy, items)
+    /// Un menu plat, en popover (voir [`App::fxb_tree`]).
+    fn fxb_popup(&mut self, x: f32, y: f32, items: &[Option<MenuItem<'_>>]) -> u32 {
+        let e = ui::flat_to_tree(items);
+        self.fxb_tree(x, y, &e)
     }
 
     fn fxb_row_menu(&mut self, x: f32, y: f32) {
@@ -767,11 +783,22 @@ impl App {
         }
     }
 
-    /// Un nom demande (la boite de REAPER). `None` : annule ou vide.
-    fn fxb_ask_name(&self, title: &str, cur: &str) -> Option<String> {
-        let v = self.r.user_inputs(title, 1, "Name:,extrawidth=120", cur)?;
-        let v = v.trim().replace(['\t', '\n', '\r'], " ");
-        (!v.is_empty()).then_some(v)
+    /// Un nom demande, en popover (meme rejeu que les menus). `None` :
+    /// pas encore, annule ou vide.
+    fn fxb_ask_name(&mut self, title: &str, cur: &str) -> Option<String> {
+        match self.fxb.ask.text() {
+            Ask::Ready(v) => {
+                let v = v.trim().replace(['\t', '\n', '\r'], " ");
+                (!v.is_empty()).then_some(v)
+            }
+            Ask::Open => {
+                let (x, y) = self.fxb.view.mouse;
+                self.fxb.view.open_pop(Pop::ask(0, title, cur, "OK", x, y));
+                self.fxb_kick();
+                None
+            }
+            Ask::Skip => None,
+        }
     }
 
     fn fxb_show_tab(&mut self, name: &str) {
@@ -847,12 +874,8 @@ impl App {
                     .as_ref()
                     .map_or("", |r| r.query.as_str())
                     .to_string();
-                if let Some(v) = self.r.user_inputs(
-                    "Tab search (every word must match, -word excludes)",
-                    1,
-                    "Search:,extrawidth=200",
-                    &cur,
-                ) {
+                if let Some(v) = self.fxb_ask_name("Tab search (every word, -word excludes)", &cur)
+                {
                     let src = tab
                         .rule
                         .as_ref()
@@ -975,12 +998,20 @@ impl App {
         self.fxb_save_soon();
     }
 
-    fn fxb_tree(&self, x: f32, y: f32, entries: &[MenuEntry]) -> u32 {
-        let Some(h) = self.fxb.win.as_ref().map(|w| w.hwnd) else {
-            return 0;
-        };
-        let (sx, sy) = ui::client_to_screen(h, x as i32, y as i32);
-        ui::popup_tree(h, sx, sy, entries)
+    /// Un menu en popover : 0 tant que le choix n'est pas fait (le geste
+    /// s'arrete) ; le choix rejoue le geste et rend ici son numero
+    /// (`crate::ask`).
+    fn fxb_tree(&mut self, x: f32, y: f32, entries: &[MenuEntry]) -> u32 {
+        match self.fxb.ask.pick(entries) {
+            Ask::Ready(id) => id,
+            Ask::Open => {
+                let e = entries.iter().map(MenuEntry::to_pop).collect();
+                self.fxb.view.open_pop(Pop::menu(0, e, x, y));
+                self.fxb_kick();
+                0
+            }
+            Ask::Skip => 0,
+        }
     }
 
     fn fxb_menu(&mut self, x: f32, y: f32) {
@@ -1311,7 +1342,8 @@ impl App {
         self.fxb_open();
     }
 
-    pub(crate) fn fxb_place_menu_at(&mut self, owner: Hwnd, sx: i32, sy: i32) {
+    /// Les choix de place de la fenetre (et la poignee du docker).
+    fn fxb_place_entries(&self) -> Vec<MenuEntry> {
         let p = self.fxb.place;
         let open = self.fxb.win.is_some();
         let items = [
@@ -1340,7 +1372,11 @@ impl App {
             None,
             Some(item(4, "Close the FX Browser", false, open)),
         ];
-        match ui::popup_menu(owner, sx, sy, &items) {
+        ui::flat_to_tree(&items)
+    }
+
+    fn fxb_place_pick(&mut self, id: u32) {
+        match id {
             k @ 20..=22 => self.set_handle_mode((k - 20) as u8),
             1 => self.queue(WinOp::FxbPlace(Place::Arrange)),
             2 => self.queue(WinOp::FxbPlace(Place::Dock)),
@@ -1348,6 +1384,21 @@ impl App {
             4 => self.queue(WinOp::FxbClose),
             _ => {}
         }
+    }
+
+    /// La place de la fenetre, en popover (le choix rejoue le geste).
+    fn fxb_place_menu(&mut self, x: f32, y: f32) {
+        let e = self.fxb_place_entries();
+        let id = self.fxb_tree(x, y, &e);
+        self.fxb_place_pick(id);
+    }
+
+    /// Depuis le transport (son icone) : le popover vient avec la vue du
+    /// transport ; d'ici la, le menu du systeme.
+    pub(crate) fn fxb_place_menu_at(&mut self, owner: Hwnd, sx: i32, sy: i32) {
+        let e = self.fxb_place_entries();
+        let id = ui::popup_tree(owner, sx, sy, &e);
+        self.fxb_place_pick(id);
     }
 
     fn fxb_theme(&self) -> Theme {
@@ -1580,11 +1631,11 @@ impl App {
                         KeyUse::NotMine => 0,
                     },
                     msg::CHAR | msg::SYSCHAR => {
-                        if self.fxb.view.focus_search {
-                            -1
-                        } else {
-                            0
-                        }
+                        let typing = match &self.fxb.view.pop {
+                            Some(p) => p.wants_text(),
+                            None => self.fxb.view.focus_search,
+                        };
+                        if typing { -1 } else { 0 }
                     }
                     msg::KEYUP | msg::SYSKEYUP => match usage {
                         KeyUse::Eat => 1,

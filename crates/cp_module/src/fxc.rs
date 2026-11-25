@@ -947,11 +947,9 @@ impl App {
                     // La recherche a le clavier : le caractere va a la
                     // fenetre (WM_CHAR).
                     msg::CHAR | msg::SYSCHAR => {
-                        if self.fxc.view.search_focus {
-                            -1
-                        } else {
-                            0
-                        }
+                        let typing = self.fxc.view.search_focus
+                            || self.fxc.view.pop.as_ref().is_some_and(|p| p.wants_text());
+                        if typing { -1 } else { 0 }
                     }
                     msg::KEYUP | msg::SYSKEYUP => match usage {
                         KeyUse::Eat => 1,

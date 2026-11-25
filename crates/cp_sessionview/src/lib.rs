@@ -16,6 +16,7 @@ mod draw;
 mod tests;
 
 use cp_session::{CellState, Session};
+use cp_ui::pop::{Out, Pop};
 use cp_ui::{Button, Ev, Mods, Theme};
 
 /// Les boutons de la barre d'outils.
@@ -103,6 +104,8 @@ pub struct Strip {
 /// Ce que le module doit faire.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Act {
+    /// Ce qu'un popover rend : (son contexte, le resultat).
+    Pop(u32, Out),
     /// Lancer, annuler, ou arreter a la frontiere (le geste de la case).
     Click {
         col: usize,
@@ -307,6 +310,9 @@ enum Drag {
 
 /// L'etat de la vue (ce que le modele ne garde pas).
 pub struct View {
+    /// Un popover ouvert (menu, saisie d'un nom) : il prend la souris et le
+    /// clavier, il se dessine par-dessus.
+    pub pop: Option<Pop>,
     /// La premiere colonne montree.
     pub scroll_col: usize,
     /// La premiere scene montree.
@@ -364,6 +370,7 @@ pub struct Layout {
 impl View {
     pub fn new() -> View {
         View {
+            pop: None,
             scroll_col: 0,
             scroll_row: 0,
             cell_h: geo::CELL_H,
@@ -766,7 +773,55 @@ impl View {
     }
 
     /// Un evenement. `strips` : les tranches (le fader part de leur valeur).
+    /// Ouvre un popover (il remplace celui qui l'etait) ; le geste en cours
+    /// s'arrete.
+    pub fn open_pop(&mut self, p: Pop) {
+        self.drag = None;
+        self.pop = Some(p);
+        self.dirty = true;
+    }
+
+    /// Un evenement pour le popover ouvert : ce qu'il rend devient une
+    /// [`Act::Pop`] ; ferme, il se retire.
+    pub fn pop_event(&mut self, ev: &Ev) -> Option<Act> {
+        let p = self.pop.as_mut()?;
+        if let Ev::Move { x, y, .. } = *ev {
+            self.mouse = (x, y);
+        }
+        let before = p.stamp();
+        let out = p.event(ev);
+        let ctx = p.ctx;
+        if p.stamp() != before {
+            self.dirty = true;
+        }
+        let o = out?;
+        if o.closes() {
+            self.pop = None;
+        }
+        self.dirty = true;
+        Some(Act::Pop(ctx, o))
+    }
+
+    /// Un caractere tape (une saisie de popover).
+    pub fn char(&mut self, c: char) -> Option<Act> {
+        self.pop.as_ref()?;
+        self.pop_event(&Ev::Char(c))
+    }
+
+    /// Colle du texte dans la saisie d'un popover.
+    pub fn paste(&mut self, s: &str) {
+        if let Some(p) = self.pop.as_mut() {
+            if p.wants_text() {
+                p.paste(s);
+                self.dirty = true;
+            }
+        }
+    }
+
     pub fn event(&mut self, ses: &Session, strips: &[Strip], th: &Theme, ev: &Ev) -> Option<Act> {
+        if self.pop.is_some() {
+            return self.pop_event(ev);
+        }
         let (w, h) = self.size;
         let l = self.layout(th, w, h);
         match ev {
@@ -1155,6 +1210,13 @@ impl View {
     /// Le clavier de l'ancienne Session. `None` : pas a elle (REAPER garde
     /// ses raccourcis, Espace compris).
     pub fn key(&mut self, ses: &Session, th: &Theme, vk: u32, m: Mods) -> Option<Act> {
+        if self.pop.is_some() {
+            return self.pop_event(&Ev::Key {
+                vk,
+                mods: m,
+                text: None,
+            });
+        }
         use cp_ui::vk::*;
         let (c, s) = ses.sel;
         let ncols = ses.cols.len().max(1);

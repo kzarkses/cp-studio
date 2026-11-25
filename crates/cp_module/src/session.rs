@@ -31,6 +31,13 @@ use cp_sys::reaper::Reaper;
 use cp_sys::sess::{SessTrack, input_label, midi_out_label};
 use cp_sys::transport::play;
 use cp_sys::ui::{self, MenuItem};
+use cp_ui::pop::Pop;
+
+use crate::ask::Ask;
+
+/// Le popover du panneau « Region and gain » (les autres sont des questions
+/// rejouees).
+const POP_REGION: u32 = 2;
 use cp_sys::win::{self, Hwnd, WinMsg};
 use cp_ui::{Button, Ev, Theme};
 
@@ -369,6 +376,10 @@ pub(crate) struct SWin {
 }
 
 pub(crate) struct SPart {
+    /// Les questions (menus, noms) en popover : le geste a rejouer.
+    pub ask: crate::ask::Asker<Act>,
+    /// La case dont le panneau « Region and gain » est ouvert.
+    region: Option<(usize, usize)>,
     pub ses: Session,
     pub view: View,
     pub win: Option<SWin>,
@@ -413,6 +424,8 @@ impl SPart {
             cache: AudioCache::default(),
             strips: Vec::new(),
             strip_fx: Vec::new(),
+            ask: Default::default(),
+            region: None,
             proj: None,
             state_seen: i32::MIN,
             saved: 0,
@@ -848,8 +861,27 @@ impl App {
     // -----------------------------------------------------------------------
 
     fn ses_act(&mut self, a: Act) {
+        if let Act::Pop(ctx, out) = a {
+            if ctx == POP_REGION {
+                self.ses_region_out(out);
+            } else if out == cp_ui::pop::Out::Closed {
+                self.ses.ask.cancel();
+            } else if let Some(g) = self.ses.ask.answer(&out) {
+                // La reponse a une question : le geste se rejoue.
+                self.ses_act(g);
+            }
+            self.ses.view.mark();
+            return;
+        }
+        let top = self.ses.ask.begin(&a);
+        self.ses_act_one(a);
+        self.ses.ask.end(top);
+    }
+
+    fn ses_act_one(&mut self, a: Act) {
         let r = self.r;
         match a {
+            Act::Pop(..) => {}
             Act::Click { col, scene } => self.ses_with(|s, e| s.click(e, col, scene)),
             Act::Record { col, scene } => {
                 self.ses_with(|s, e| {
@@ -966,10 +998,9 @@ impl App {
                 }
             }
             Act::ViewMenu { x, y } => {
-                if let Some(h) = self.ses.win.as_ref().map(|w| w.hwnd) {
-                    let (sx, sy) = ui::client_to_screen(h, x as i32, y as i32);
-                    self.ses_place_menu_at(h, sx, sy);
-                }
+                let e = self.ses_place_entries();
+                let id = self.ses_tree(x, y, &e);
+                self.ses_place_pick(id);
             }
             Act::SetVol { col, vol, done } => {
                 if let Some(g) = self.ses_guid(col) {
@@ -1090,10 +1121,7 @@ impl App {
     fn ses_rename_track(&mut self, col: usize) {
         let Some(g) = self.ses_guid(col) else { return };
         let cur = self.ses.ses.cols[col].track.name.clone();
-        if let Some(v) = self
-            .r
-            .user_inputs("Rename track", 1, "Name:,extrawidth=150", &cur)
-        {
+        if let Some(v) = self.ses_ask("Rename track", &cur) {
             let r = self.r;
             r.undo_begin();
             r.set_track_name(&g, v.trim());
@@ -1434,12 +1462,149 @@ impl App {
     // Les menus
     // -----------------------------------------------------------------------
 
-    fn ses_menu(&self, x: f32, y: f32, items: &[Option<MenuItem<'_>>]) -> u32 {
-        let Some(h) = self.ses.win.as_ref().map(|w| w.hwnd) else {
-            return 0;
+    /// Un menu en popover : 0 tant que le choix n'est pas fait (le geste
+    /// s'arrete) ; le choix rejoue le geste et rend ici son numero
+    /// (`crate::ask`).
+    fn ses_menu(&mut self, x: f32, y: f32, items: &[Option<MenuItem<'_>>]) -> u32 {
+        let e = ui::flat_to_tree(items);
+        self.ses_tree(x, y, &e)
+    }
+
+    fn ses_tree(&mut self, x: f32, y: f32, e: &[ui::MenuEntry]) -> u32 {
+        match self.ses.ask.pick(e) {
+            Ask::Ready(id) => id,
+            Ask::Open => {
+                let pe = e.iter().map(ui::MenuEntry::to_pop).collect();
+                self.ses.view.open_pop(Pop::menu(0, pe, x, y));
+                self.ses_kick();
+                0
+            }
+            Ask::Skip => 0,
+        }
+    }
+
+    /// Un nom (ou une valeur), en popover : meme rejeu que les menus.
+    fn ses_ask(&mut self, title: &str, cur: &str) -> Option<String> {
+        match self.ses.ask.text() {
+            Ask::Ready(v) => Some(v),
+            Ask::Open => {
+                let (x, y) = self.ses.view.mouse;
+                self.ses.view.open_pop(Pop::ask(0, title, cur, "OK", x, y));
+                self.ses_kick();
+                None
+            }
+            Ask::Skip => None,
+        }
+    }
+
+    /// La duree de la source d'un clip audio (s), si elle est chargee.
+    fn ses_source_len(&self, path: &str) -> Option<f64> {
+        self.ses
+            .cache
+            .files
+            .get(path)
+            .filter(|e| e.srate > 0.0 && e.frames > 0)
+            .map(|e| e.frames as f64 / e.srate)
+    }
+
+    /// Le panneau « Region and gain » d'une case audio : trois curseurs qui
+    /// s'appliquent en direct (plus trois champs a virgules).
+    fn ses_region_panel(&self, col: usize, scene: usize) -> Option<cp_ui::pop::Panel> {
+        use cp_ui::pop::{Panel, Row, Section};
+        let clip = self.ses.ses.clip(col, scene)?;
+        let Kind::Audio(a) = &clip.kind else {
+            return None;
         };
-        let (sx, sy) = ui::client_to_screen(h, x as i32, y as i32);
-        ui::popup_menu(h, sx, sy, items)
+        let dur = self
+            .ses_source_len(&a.path)
+            .unwrap_or((a.offs + a.len).max(30.0));
+        let gdb = if a.gain > 1e-6 {
+            20.0 * a.gain.log10()
+        } else {
+            -60.0
+        };
+        Some(Panel {
+            title: "Region and gain".into(),
+            icon: cp_ui::Icon::AudioLines,
+            sections: vec![Section {
+                label: clip.name.clone(),
+                icon: cp_ui::Icon::AudioLines,
+                rows: vec![
+                    Row::Slider {
+                        id: 1,
+                        label: "Start".into(),
+                        v: (a.offs / dur).clamp(0.0, 1.0),
+                        text: format!("{:.2} s", a.offs),
+                    },
+                    Row::Slider {
+                        id: 2,
+                        label: "Length".into(),
+                        v: (a.len / dur).clamp(0.0, 1.0),
+                        text: if a.len <= 0.0 {
+                            "to the end".into()
+                        } else {
+                            format!("{:.2} s", a.len)
+                        },
+                    },
+                    Row::Slider {
+                        id: 3,
+                        label: "Gain".into(),
+                        v: ((gdb + 60.0) / 84.0).clamp(0.0, 1.0),
+                        text: format!("{gdb:+.1} dB"),
+                    },
+                ],
+            }],
+        })
+    }
+
+    fn ses_region_open(&mut self, col: usize, scene: usize) {
+        let Some(p) = self.ses_region_panel(col, scene) else {
+            return;
+        };
+        let (x, y) = self.ses.view.mouse;
+        self.ses.region = Some((col, scene));
+        self.ses
+            .view
+            .open_pop(Pop::panel(POP_REGION, p, x + 300.0, y));
+        self.ses_kick();
+    }
+
+    fn ses_region_out(&mut self, out: cp_ui::pop::Out) {
+        use cp_ui::pop::Out;
+        let Some((col, scene)) = self.ses.region else {
+            return;
+        };
+        let Out::Slide { id, v, done } = out else {
+            if out == Out::Closed {
+                self.ses.region = None;
+            }
+            return;
+        };
+        let dur = match self.ses.ses.clip(col, scene).map(|c| &c.kind) {
+            Some(Kind::Audio(a)) => self
+                .ses_source_len(&a.path)
+                .unwrap_or((a.offs + a.len).max(30.0)),
+            _ => return,
+        };
+        if let Some(c) = self.ses.ses.clip_mut(col, scene) {
+            if let Kind::Audio(a) = &mut c.kind {
+                match id {
+                    1 => a.offs = (v * dur * 100.0).round() / 100.0,
+                    2 => a.len = (v * dur * 100.0).round() / 100.0,
+                    _ => a.gain = 10f64.powf((v * 84.0 - 60.0).clamp(-60.0, 24.0) / 20.0),
+                }
+                // La passe se recalcule sur la region.
+                c.bars = 0.0;
+            }
+        }
+        if done {
+            self.ses_with(|s, e| s.clip_changed(e, col, scene));
+        }
+        let p = self.ses_region_panel(col, scene);
+        if let (Some(p), Some(pop)) = (p, self.ses.view.pop.as_mut()) {
+            pop.set_panel(p);
+        }
+        self.ses.view.mark();
     }
 
     fn ses_cell_menu(&mut self, col: usize, scene: usize, x: f32, y: f32) {
@@ -1509,7 +1674,6 @@ impl App {
             Some(item(31, "Clear cell", false, true)),
         ];
         let k = self.ses_menu(x, y, &items);
-        let r = self.r;
         let mut changed = true;
         match k {
             1 => {
@@ -1517,8 +1681,7 @@ impl App {
                 changed = false;
             }
             2 => {
-                if let Some(v) = r.user_inputs("Rename clip", 1, "Name:,extrawidth=150", &clip.name)
-                {
+                if let Some(v) = self.ses_ask("Rename clip", &clip.name) {
                     if let Some(c) = self.ses.ses.clip_mut(col, scene) {
                         c.name = v.trim().to_string();
                     }
@@ -1595,7 +1758,8 @@ impl App {
                     Kind::Audio(a) => a.src_bpm.map(|b| format!("{b}")).unwrap_or_default(),
                     _ => String::new(),
                 };
-                if let Some(v) = r.user_inputs("Source tempo", 1, "BPM (empty: find it):", &cur) {
+                let cur = if cur.is_empty() { "0".to_string() } else { cur };
+                if let Some(v) = self.ses_ask("Source tempo (BPM; 0: find it)", &cur) {
                     let b = v
                         .trim()
                         .parse::<f64>()
@@ -1613,42 +1777,9 @@ impl App {
                 }
             }
             16 => {
-                if let Kind::Audio(a) = &clip.kind {
-                    let gdb = if a.gain > 1e-6 {
-                        20.0 * a.gain.log10()
-                    } else {
-                        -60.0
-                    };
-                    let vals = format!("{:.3},{:.3},{:.1}", a.offs, a.len, gdb);
-                    if let Some(v) = r.user_inputs(
-                        "Region and gain",
-                        3,
-                        "Start (s):,Length (s; 0 = to the end):,Gain (dB):",
-                        &vals,
-                    ) {
-                        let f: Vec<f64> = v
-                            .split(',')
-                            .map(|x| x.trim().parse().unwrap_or(f64::NAN))
-                            .collect();
-                        if let Some(Kind::Audio(au)) =
-                            self.ses.ses.clip_mut(col, scene).map(|c| &mut c.kind)
-                        {
-                            if f.first().is_some_and(|x| x.is_finite()) {
-                                au.offs = f[0].max(0.0);
-                            }
-                            if f.get(1).is_some_and(|x| x.is_finite()) {
-                                au.len = f[1].max(0.0);
-                            }
-                            if f.get(2).is_some_and(|x| x.is_finite()) {
-                                au.gain = 10f64.powf(f[2].clamp(-60.0, 24.0) / 20.0);
-                            }
-                        }
-                        // La passe se recalcule sur la region.
-                        if let Some(c) = self.ses.ses.clip_mut(col, scene) {
-                            c.bars = 0.0;
-                        }
-                    }
-                }
+                // Trois curseurs en direct (plus de champs a virgules).
+                self.ses_region_open(col, scene);
+                changed = false;
             }
             14 | 15 => {
                 if let Some(Kind::Audio(a)) = self.ses.ses.clip_mut(col, scene).map(|c| &mut c.kind)
@@ -1931,11 +2062,17 @@ impl App {
             "Ctrl+Shift+I: capture the playing clips into an empty scene",
             "Drop audio files on a cell, or on + for a new track",
         ];
-        let items: Vec<Option<MenuItem<'_>>> = lines
+        // Les gestes, en popover : « geste : effet » -> l'effet, le geste a
+        // droite.
+        let e: Vec<cp_ui::pop::Entry> = lines
             .iter()
-            .map(|l| Some(item(0, l, false, false)))
+            .map(|l| {
+                let (g, what) = l.split_once(": ").unwrap_or(("", l));
+                cp_ui::pop::Entry::item(0, what).hint(g)
+            })
             .collect();
-        self.ses_menu(x, y, &items);
+        self.ses.view.open_pop(Pop::menu(0, e, x, y));
+        self.ses_kick();
     }
 
     fn ses_theme(&self) -> Theme {
@@ -2062,7 +2199,7 @@ impl App {
         self.ses_open();
     }
 
-    pub(crate) fn ses_place_menu_at(&mut self, owner: Hwnd, sx: i32, sy: i32) {
+    fn ses_place_entries(&self) -> Vec<ui::MenuEntry> {
         let p = self.ses.place;
         let open = self.ses.win.is_some();
         let items = [
@@ -2091,7 +2228,11 @@ impl App {
             None,
             Some(item(4, "Close the Session", false, open)),
         ];
-        match ui::popup_menu(owner, sx, sy, &items) {
+        ui::flat_to_tree(&items)
+    }
+
+    fn ses_place_pick(&mut self, id: u32) {
+        match id {
             k @ 20..=22 => self.set_handle_mode((k - 20) as u8),
             1 => self.queue(WinOp::SesPlace(Place::Arrange)),
             2 => self.queue(WinOp::SesPlace(Place::Dock)),
@@ -2099,6 +2240,14 @@ impl App {
             4 => self.queue(WinOp::SesClose),
             _ => {}
         }
+    }
+
+    /// Depuis le transport (son icone) : le popover vient avec la vue du
+    /// transport ; d'ici la, le menu du systeme.
+    pub(crate) fn ses_place_menu_at(&mut self, owner: Hwnd, sx: i32, sy: i32) {
+        let e = self.ses_place_entries();
+        let id = ui::popup_tree(owner, sx, sy, &e);
+        self.ses_place_pick(id);
     }
 
     fn ses_want_frames(&mut self, on: bool) {
@@ -2218,6 +2367,37 @@ impl App {
                     return Some(0);
                 };
                 let vk = k.wp as u32;
+                // Un popover ouvert : la meme regle que les autres vues.
+                if let Some(route) = self.ses.view.pop.as_ref().map(|p| p.key_route(vk, md)) {
+                    use cp_ui::pop::KeyRoute;
+                    let down = matches!(k.message, msg::KEYDOWN | msg::SYSKEYDOWN);
+                    let chr = matches!(k.message, msg::CHAR | msg::SYSCHAR);
+                    return Some(match route {
+                        KeyRoute::Eat if down => {
+                            if md.ctrl && vk == 0x56 {
+                                if let Some(t) = ui::clipboard_text(hwnd) {
+                                    self.ses.view.paste(&t);
+                                }
+                            } else {
+                                let th = self.ses_theme();
+                                if let Some(a) = self.ses.view.key(&self.ses.ses, &th, vk, md) {
+                                    self.ses_act(a);
+                                }
+                            }
+                            self.ses_kick();
+                            1
+                        }
+                        KeyRoute::Eat => 1,
+                        KeyRoute::Text => -1,
+                        KeyRoute::Pass
+                            if chr
+                                && self.ses.view.pop.as_ref().is_some_and(|p| p.wants_text()) =>
+                        {
+                            -1
+                        }
+                        KeyRoute::Pass => 0,
+                    });
+                }
                 Some(match k.message {
                     msg::KEYDOWN | msg::SYSKEYDOWN => {
                         let th = self.ses_theme();
@@ -2233,6 +2413,15 @@ impl App {
                     }
                     _ => 0,
                 })
+            }
+            msg::CHAR => {
+                if let Some(c) = char::from_u32(m.wp as u32) {
+                    if let Some(a) = self.ses.view.char(c) {
+                        self.ses_act(a);
+                    }
+                    self.ses_kick();
+                }
+                Some(0)
             }
             msg::SIZE => {
                 self.ses.view.mark();

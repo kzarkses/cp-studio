@@ -214,6 +214,18 @@ pub struct Panel {
     pub sections: Vec<Section>,
 }
 
+/// Ou va une touche quand un popover est ouvert.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum KeyRoute {
+    /// Au popover (la vue la prend, REAPER ne la voit pas).
+    Eat,
+    /// Du texte pour une saisie : la fenetre la recoit (WM_KEYDOWN puis
+    /// WM_CHAR).
+    Text,
+    /// A REAPER (ses raccourcis restent actifs, comme sous un menu).
+    Pass,
+}
+
 /// Ce que le popover rend a l'appelant.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Out {
@@ -479,6 +491,25 @@ impl Pop {
             Kind::Ask { .. } => true,
             Kind::Panel(st) => st.focus.is_some(),
             _ => false,
+        }
+    }
+
+    /// Ou va une touche (la meme regle pour toutes les vues).
+    pub fn key_route(&self, k: u32, m: crate::Mods) -> KeyRoute {
+        let text = self.wants_text();
+        match k {
+            vk::ESCAPE | vk::RETURN | vk::TAB | vk::UP | vk::DOWN | vk::LEFT | vk::RIGHT => {
+                KeyRoute::Eat
+            }
+            vk::SPACE if !text => KeyRoute::Eat,
+            _ if !text => KeyRoute::Pass,
+            // AltGr (Ctrl + Alt) : un caractere (@, #, [, ]...).
+            _ if m.ctrl && m.alt && !m.win => KeyRoute::Text,
+            // Les raccourcis d'une saisie : a nous, jamais a REAPER.
+            0x41 | 0x43 | 0x56 | 0x58 | 0x5A if m.ctrl && !m.alt => KeyRoute::Eat,
+            _ if m.ctrl || m.alt || m.win => KeyRoute::Pass,
+            vk::HOME | vk::END | vk::BACK | vk::DELETE => KeyRoute::Eat,
+            _ => KeyRoute::Text,
         }
     }
 

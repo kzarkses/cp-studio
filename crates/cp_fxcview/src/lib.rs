@@ -942,41 +942,10 @@ impl View {
 
     pub fn key_use(&self, vk_code: u32, m: Mods) -> KeyUse {
         if let Some(p) = &self.pop {
-            // Un popover ouvert prend les touches de navigation et la
-            // saisie ; les raccourcis restent a REAPER, comme sous un menu.
-            return match vk_code {
-                vk::ESCAPE | vk::RETURN | vk::TAB | vk::UP | vk::DOWN | vk::LEFT | vk::RIGHT => {
-                    KeyUse::Eat
-                }
-                _ if !p.wants_text() => {
-                    if vk_code == vk::SPACE {
-                        KeyUse::Eat
-                    } else {
-                        KeyUse::NotMine
-                    }
-                }
-                _ if m.ctrl && m.alt && !m.win => KeyUse::Text,
-                _ if m.ctrl
-                    && !m.alt
-                    && !m.win
-                    && matches!(
-                        vk_code,
-                        vk::HOME
-                            | vk::END
-                            | vk::BACK
-                            | vk::DELETE
-                            | 0x41
-                            | 0x43
-                            | 0x56
-                            | 0x58
-                            | 0x5A
-                    ) =>
-                {
-                    KeyUse::Eat
-                }
-                _ if m.ctrl || m.alt || m.win => KeyUse::NotMine,
-                vk::HOME | vk::END | vk::BACK | vk::DELETE => KeyUse::Eat,
-                _ => KeyUse::Text,
+            return match p.key_route(vk_code, m) {
+                cp_ui::pop::KeyRoute::Eat => KeyUse::Eat,
+                cp_ui::pop::KeyRoute::Text => KeyUse::Text,
+                cp_ui::pop::KeyRoute::Pass => KeyUse::NotMine,
             };
         }
         if self.search_focus {
@@ -1111,8 +1080,11 @@ impl View {
     /// Un evenement de la souris ou du clavier.
     pub fn event(&mut self, ev: &Ev) -> Option<Act> {
         if self.pop.is_some() {
-            if let Ev::Move { x, y, .. } = *ev {
-                self.mouse = (x, y);
+            match *ev {
+                // Le presse-papiers d'une saisie passe par `key`.
+                Ev::Key { vk, mods, .. } => return self.key(vk, mods),
+                Ev::Move { x, y, .. } => self.mouse = (x, y),
+                _ => {}
             }
             return self.pop_event(ev);
         }
