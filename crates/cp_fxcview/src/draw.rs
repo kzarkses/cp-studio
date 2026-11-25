@@ -116,6 +116,12 @@ fn rrect(cv: &mut Canvas<'_>, x: f32, y: f32, w: f32, h: f32, r: f32, c: Color) 
     }
     let (x0, y0, x1, y1) = (x.round(), y.round(), (x + w).round(), (y + h).round());
     let k = r.ceil();
+    if 2.0 * k > x1 - x0 || 2.0 * k > y1 - y0 {
+        // Les bandes et les coins se recouvriraient (une teinte translucide
+        // compterait deux fois).
+        cv.fill_round_rect(x0, y0, x1 - x0, y1 - y0, r, c);
+        return;
+    }
     cv.fill_rect(x0, y0 + k, x1 - x0, (y1 - y0 - 2.0 * k).max(0.0), c);
     cv.fill_rect(x0 + k, y0, (x1 - x0 - 2.0 * k).max(0.0), k, c);
     cv.fill_rect(x0 + k, y1 - k, (x1 - x0 - 2.0 * k).max(0.0), k, c);
@@ -145,6 +151,10 @@ fn rline(cv: &mut Canvas<'_>, x: f32, y: f32, w: f32, h: f32, r: f32, t: f32, c:
         return;
     }
     let k = r.ceil().max(t);
+    if 2.0 * k > x1 - x0 || 2.0 * k > y1 - y0 {
+        cv.stroke_round_rect(x0, y0, x1 - x0, y1 - y0, r, t, c);
+        return;
+    }
     let (iw, ih) = ((x1 - x0 - 2.0 * k).max(0.0), (y1 - y0 - 2.0 * k).max(0.0));
     cv.fill_rect(x0 + k, y0, iw, t, c);
     cv.fill_rect(x0 + k, y1 - t, iw, t, c);
@@ -207,7 +217,7 @@ impl View {
             }
             // Hors de la zone a repeindre (et de la zone qui defile) : rien.
             let c = cv.clip();
-            let m = th.s(12.0);
+            let m = th.s(16.0);
             if it.r.x - m > c.right() as f32
                 || it.r.right() + m < c.x as f32
                 || it.r.y - m > c.bottom() as f32
@@ -693,15 +703,15 @@ impl View {
                     Align::Left,
                 );
             }
-            Look::Scroll { pos, len } => {
-                let c = if hov || matches!(it.ctl, Ctl::ScrollBar(_)) && self.dragging() {
+            Look::Scroll { pos, len, active } => {
+                let c = if hov || *active {
                     th.text.fade(0.38)
                 } else {
                     th.text.fade(0.2)
                 };
                 rrect(cv, r.x, r.y + pos, r.w, *len, r.w / 2.0, c);
             }
-            Look::Search { focus } => {
+            Look::Search { focus, .. } => {
                 rrect(cv, r.x, r.y, r.w, r.h, rad, p.sunk);
                 let line = if *focus {
                     th.accent.fade(0.7)
@@ -1411,6 +1421,14 @@ impl View {
     }
 
     fn draw_pad(&self, cv: &mut Canvas<'_>, th: &Theme, p: &Pal, r: R, pl: &PadLook) {
+        // Tout reste dans le carre : la lueur du point ne deborde pas sur la
+        // carte (la ou la comparaison des images ne repeint pas).
+        cv.push_clip(r.x, r.y, r.w, r.h);
+        self.draw_pad_in(cv, th, p, r, pl);
+        cv.pop_clip();
+    }
+
+    fn draw_pad_in(&self, cv: &mut Canvas<'_>, th: &Theme, p: &Pal, r: R, pl: &PadLook) {
         let s = th.scale;
         let rr = th.s(8.0);
         rrect(cv, r.x, r.y, r.w, r.h, rr, p.sunk);

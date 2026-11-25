@@ -432,6 +432,10 @@ pub enum Act {
     MoveFx(String, bool),
     /// Rien a faire de plus que redessiner.
     Changed,
+    /// Copier ce texte dans le presse-papiers (la recherche).
+    Clip(String),
+    /// Coller le presse-papiers dans la recherche.
+    Paste,
 }
 
 /// Une touche : a nous, du texte, ou a REAPER.
@@ -686,6 +690,20 @@ impl View {
         self.drag.is_some()
     }
 
+    /// Le curseur de defilement de cette zone est tire.
+    pub(crate) fn scrolling(&self, z: u8) -> bool {
+        matches!(self.drag, Some(Drag::Scroll { z: k, .. }) if k == z)
+    }
+
+    /// Colle un texte dans la recherche (une ligne).
+    pub fn paste(&mut self, s: &str) {
+        let one = s.lines().next().unwrap_or("");
+        if self.search.insert(one) == cp_ui::textfield::Edit::Changed {
+            self.scroll[0] = 0.0;
+        }
+        self.mark();
+    }
+
     /// L'en-tete d'effet qu'on tire (son GUID), pour le dessiner.
     pub fn moving_fx(&self) -> Option<&str> {
         match &self.drag {
@@ -740,6 +758,11 @@ impl View {
             self.clamp_scroll(z);
         }
         self.prev_hover = std::mem::replace(&mut self.drawn_hover, self.hover.clone());
+        // Une recherche qui n'a plus de champ (la fenetre trop etroite) rend
+        // le clavier.
+        if self.search_focus && !self.items.iter().any(|i| i.ctl == Ctl::Search) {
+            self.search_focus = false;
+        }
         let ov = self.overlay();
         self.prev_overlay = std::mem::replace(&mut self.drawn_overlay, ov);
         self.prev_dock_hot = std::mem::replace(&mut self.drawn_dock_hot, self.dock.hot);
@@ -816,13 +839,31 @@ impl View {
         if self.search_focus {
             return match vk_code {
                 vk::ESCAPE | vk::RETURN | vk::TAB => KeyUse::Eat,
-                _ if m.ctrl || m.alt || m.win => {
-                    if matches!(vk_code, vk::LEFT | vk::RIGHT | vk::BACK | vk::DELETE | 0x41) {
-                        KeyUse::Eat
-                    } else {
-                        KeyUse::NotMine
-                    }
+                // AltGr (Ctrl + Alt) : un caractere (@, #, [, ]...).
+                _ if m.ctrl && m.alt && !m.win => KeyUse::Text,
+                // Les raccourcis d'un champ : a nous, jamais a REAPER (Ctrl+Z
+                // n'annule pas le projet pendant qu'on tape).
+                _ if m.ctrl
+                    && !m.alt
+                    && !m.win
+                    && matches!(
+                        vk_code,
+                        vk::LEFT
+                            | vk::RIGHT
+                            | vk::HOME
+                            | vk::END
+                            | vk::BACK
+                            | vk::DELETE
+                            | 0x41
+                            | 0x43
+                            | 0x56
+                            | 0x58
+                            | 0x5A
+                    ) =>
+                {
+                    KeyUse::Eat
                 }
+                _ if m.ctrl || m.alt || m.win => KeyUse::NotMine,
                 vk::LEFT | vk::RIGHT | vk::HOME | vk::END | vk::BACK | vk::DELETE => KeyUse::Eat,
                 _ => KeyUse::Text,
             };
@@ -857,6 +898,22 @@ impl View {
                     self.search.clear();
                 }
                 vk::RETURN | vk::TAB => self.search_focus = false,
+                0x43 if m.ctrl => {
+                    let s = self.search.selected().to_string();
+                    return (!s.is_empty()).then_some(Act::Clip(s));
+                }
+                0x58 if m.ctrl => {
+                    let s = self.search.selected().to_string();
+                    if s.is_empty() {
+                        return None;
+                    }
+                    self.search.insert("");
+                    self.scroll[0] = 0.0;
+                    self.mark();
+                    return Some(Act::Clip(s));
+                }
+                0x56 if m.ctrl => return Some(Act::Paste),
+                0x5A if m.ctrl => return None,
                 k => {
                     if self.search.key(k, m) == cp_ui::textfield::Edit::Changed {
                         self.scroll[0] = 0.0;
@@ -1011,7 +1068,7 @@ impl View {
                 self.mark();
                 Some(Act::Changed)
             }
-            (Ctl::ScrollBar(z), Some(Look::Scroll { pos, len })) => {
+            (Ctl::ScrollBar(z), Some(Look::Scroll { pos, len, .. })) => {
                 let r = self.rect_of(&c)?;
                 let z = *z;
                 let view_h = self.zone_h(z as usize).max(1.0);
@@ -1417,6 +1474,10 @@ impl View {
                     .map(|d| Act::MoveFx(guid, d))
             }
             Some(Drag::Paint { ctl, .. }) => Some(Act::End(ctl)),
+            Some(Drag::Scroll { .. }) => {
+                self.mark();
+                Some(Act::Changed)
+            }
             Some(Drag::Key(n)) => Some(Act::Note(n, false)),
             Some(Drag::Press { ctl, mods }) => {
                 if ctl == Ctl::SgHold {

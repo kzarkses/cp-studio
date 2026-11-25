@@ -238,6 +238,7 @@ impl App {
             Act::PadDrag(x, y) => self.fxc_pad_aim(x, y),
             Act::PadRelease => self.fxc.dirty_at = Some(std::time::Instant::now()),
             Act::Zone(z) => {
+                self.fxc.pad_target = None;
                 if (z[1] - z[0]).abs() > 0.03 && (z[3] - z[2]).abs() > 0.03 {
                     self.fxc.t.pad.zone = z;
                     let (x, y) = self
@@ -260,6 +261,16 @@ impl App {
             Act::Note(n, on) => self.fxc_key_gesture(n, on),
             Act::MoveFx(g, det) => self.fxc_set_detached(&g, det),
             Act::DockGrab | Act::DockSwitch(_) | Act::ViewMenu(..) => {}
+            Act::Clip(s) => {
+                let h = self.fxc_hwnd();
+                ui::set_clipboard_text(h, &s);
+            }
+            Act::Paste => {
+                let h = self.fxc_hwnd();
+                if let Some(t) = ui::clipboard_text(h) {
+                    self.fxc.view.paste(&t);
+                }
+            }
         }
         self.fxc.view.mark();
     }
@@ -311,9 +322,13 @@ impl App {
                 self.r.xc_set_raw(t, b, bridge::Y_POS, self.fxc.t.pad.y);
             }
             // Les boutons que le pad mene suivent au meme geste (pas au
-            // battement suivant).
-            self.fxc.src.insert(-1, self.fxc.t.pad.x);
-            self.fxc.src.insert(-2, self.fxc.t.pad.y);
+            // battement suivant) ; un axe mene garde ce que joue le bridge.
+            if !lx {
+                self.fxc.src.insert(-1, self.fxc.t.pad.x);
+            }
+            if !ly {
+                self.fxc.src.insert(-2, self.fxc.t.pad.y);
+            }
             self.fxc_relive();
         } else if self.fxc.t.tracked_count() > 0 {
             self.fxc_ensure_bridge();

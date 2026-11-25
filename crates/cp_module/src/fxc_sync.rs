@@ -557,7 +557,7 @@ impl App {
         let p = &self.fxc.t.pad;
         let runs = p.nav_on && p.nav != Nav::Manual && !p.granular;
         let (lx, ly) = (self.fxc.plan.pad_link_x, self.fxc.plan.pad_link_y);
-        if (runs || lx || ly) && !self.fxc.view.gesture_on(&cp_fxcview::Ctl::Pad) {
+        if runs || lx || ly {
             if let Some(b) = self.fxc.chain.find(FxKind::Bridge) {
                 let x = self.r.xc_get_raw(t, b, bridge::X_OUT).0.clamp(0.0, 1.0);
                 let y = self.r.xc_get_raw(t, b, bridge::Y_OUT).0.clamp(0.0, 1.0);
@@ -576,10 +576,13 @@ impl App {
             }
         }
         if moved {
+            self.fxc.anim_until = Some(now + std::time::Duration::from_millis(600));
             self.fxc_relive();
             self.fxc.view.mark();
         }
-        true
+        // Tant que ca bouge (et un peu apres : le bridge n'avance qu'a chaque
+        // bloc audio), ou que le pad rattrape la souris.
+        self.fxc.pad_target.is_some() || self.fxc.anim_until.is_some_and(|t| now < t)
     }
 
     /// Les valeurs jouees des parametres a nous, recalculees depuis le
@@ -1433,14 +1436,25 @@ impl App {
         // Le pad suit le bridge quand il marche ou qu'un axe est mene.
         let p = &self.fxc.t.pad;
         let runs = p.nav_on && p.nav != Nav::Manual && !p.granular;
-        if !down && (runs || self.fxc.plan.pad_link_x || self.fxc.plan.pad_link_y) {
-            let (x, y) = (
-                self.fxc.src.get(&-1).copied().unwrap_or(p.x),
-                self.fxc.src.get(&-2).copied().unwrap_or(p.y),
-            );
+        let (lx, ly) = (self.fxc.plan.pad_link_x, self.fxc.plan.pad_link_y);
+        if !down && (runs || lx || ly) {
+            // Seuls les axes que le bridge mene (tous s'il marche) : un axe
+            // libre que le pad lisse rattrape n'est pas ecrase.
+            let x = if runs || lx {
+                self.fxc.src.get(&-1).copied().unwrap_or(p.x)
+            } else {
+                p.x
+            };
+            let y = if runs || ly {
+                self.fxc.src.get(&-2).copied().unwrap_or(p.y)
+            } else {
+                p.y
+            };
             if (x - p.x).abs() > 0.0005 || (y - p.y).abs() > 0.0005 {
                 self.fxc.t.pad.x = x;
                 self.fxc.t.pad.y = y;
+                self.fxc.anim_until =
+                    Some(std::time::Instant::now() + std::time::Duration::from_millis(600));
             }
         }
         if self.fxc.links_dirty {

@@ -123,6 +123,8 @@ pub(crate) struct CPart {
     pub(crate) show_hidden: bool,
     /// L'image d'avant (le pas du pad lisse se mesure).
     pub(crate) last_frame: Option<std::time::Instant>,
+    /// Le pad a bouge seul recemment : les images tournent jusque-la.
+    pub(crate) anim_until: Option<std::time::Instant>,
 }
 
 /// Les mots caches par defaut : ceux de l'ancienne version.
@@ -203,6 +205,7 @@ impl CPart {
             ),
             show_hidden: r.ext_get(SECTION, "fxc_show_hidden").as_deref() == Some("1"),
             last_frame: None,
+            anim_until: None,
         }
     }
 }
@@ -814,7 +817,10 @@ impl App {
         }
         self.fxc_sync_tick(down);
         self.fxc_capture_tick();
-        if self.fxc_animating() {
+        // Les images ne tournent que si le pad bouge vraiment (lu au
+        // battement) ou rattrape la souris.
+        let recent = self.fxc.anim_until.is_some_and(|t| Instant::now() < t);
+        if self.fxc_animating() && (recent || self.fxc.pad_target.is_some()) {
             self.fxc_want_frames(true);
         }
         if self.fxc.ticks % 10 == 0 {
@@ -844,7 +850,7 @@ impl App {
         let md = mods();
         match m.msg {
             WM_CP_FRAME => {
-                let anim = self.fxc_animate();
+                let anim = ui::is_shown(hwnd) && self.fxc_animate();
                 if self.fxc.view.dragging() {
                     self.fxc.view.mark();
                 }

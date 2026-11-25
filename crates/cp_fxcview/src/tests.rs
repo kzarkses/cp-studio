@@ -600,3 +600,40 @@ fn what_costs_in_a_frame() {
         eprintln!("{k:>10} {t:7.2} ms  x{n}");
     }
 }
+
+#[test]
+fn typing_in_the_search_repaints_it() {
+    let w = world();
+    let p = plan(&w.t, &chain(), &Ctx::default());
+    let d = data(&w, &p);
+    let th = Theme::dark(1.0);
+    let mut v = View::new();
+    v.layout(&d, &th, 1500.0, 820.0);
+    let r = rect(&v, &Ctl::Search);
+    v.event(&down(r.cx(), r.cy(), Button::Left, none()));
+    v.event(&up(r.cx(), r.cy(), Button::Left, none()));
+    v.layout(&d, &th, 1500.0, 820.0);
+    v.event(&Ev::Char('P'));
+    v.layout(&d, &th, 1500.0, 820.0);
+    // « P » et « Pa » gardent les memes parametres : seul le champ change.
+    v.event(&Ev::Char('a'));
+    v.layout(&d, &th, 1500.0, 820.0);
+    let dmg = v.damage().expect("une partie");
+    assert!(
+        dmg.iter().any(|d| d.x <= r.x && d.right() >= r.right()),
+        "{dmg:?}"
+    );
+    // Ctrl+Z dans la recherche ne va pas a REAPER.
+    let ctrl = Mods {
+        ctrl: true,
+        ..Mods::default()
+    };
+    assert_eq!(v.key_use(0x5A, ctrl), KeyUse::Eat);
+    // AltGr (Ctrl + Alt) tape un caractere.
+    let altgr = Mods {
+        ctrl: true,
+        alt: true,
+        ..Mods::default()
+    };
+    assert_eq!(v.key_use(0x32, altgr), KeyUse::Text);
+}

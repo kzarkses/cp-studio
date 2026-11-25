@@ -30,6 +30,11 @@ impl TextField {
         self.anchor = self.cur;
     }
 
+    /// Le curseur et le debut de la selection (octets).
+    pub fn caret(&self) -> (usize, usize) {
+        (self.cur, self.anchor)
+    }
+
     pub fn clear(&mut self) {
         self.text.clear();
         self.cur = 0;

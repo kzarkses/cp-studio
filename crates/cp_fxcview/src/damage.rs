@@ -34,7 +34,9 @@ impl View {
                 _ => None,
             })
             .collect();
-        let pad = self.scale.max(0.5) * 6.0;
+        // Ce qui deborde d'un element : la lueur d'une pastille survolee,
+        // l'anneau d'un bouton allume.
+        let pad = self.scale.max(0.5) * 9.0;
         let vis = |it: &Item| -> Option<R> {
             let r = R::new(
                 it.r.x - pad,

@@ -81,7 +81,10 @@ pub fn smooth_step(pos: (f64, f64), target: (f64, f64), pad: &Pad, dt: f64) -> (
         dx *= lim / d;
         dy *= lim / d;
     }
+    // Le facteur est celui d'un pas de 1/30 s : rapporte au pas reel, le
+    // rattrapage a la meme vitesse a 30, 60 ou 144 images par seconde.
     let k = pad.smooth.clamp(0.0, 1.0);
+    let k = 1.0 - (1.0 - k).powf((dt * 30.0).max(0.0));
     (pos.0 + dx * k, pos.1 + dy * k)
 }
 

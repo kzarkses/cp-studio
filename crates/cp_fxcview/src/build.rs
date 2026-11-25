@@ -188,14 +188,19 @@ pub enum Look {
         label: String,
         driven: bool,
     },
-    /// Le curseur d'une barre de defilement (debut, longueur dans la piste).
+    /// Le curseur d'une barre de defilement (debut, longueur dans la piste ;
+    /// tire en ce moment).
     Scroll {
         pos: f32,
         len: f32,
+        active: bool,
     },
-    /// Le champ de recherche (le texte vit dans la vue).
+    /// Le champ de recherche : son texte et son curseur (la comparaison des
+    /// images voit la frappe).
     Search {
         focus: bool,
+        text: String,
+        caret: (usize, usize),
     },
     /// Un petit compte dans une pastille.
     Badge {
@@ -567,7 +572,11 @@ fn scroll_bars(b: &mut B, v: &View, content: &[f32; 5]) {
         b.push(
             R::new(r.right() - bw - b.s(1.0), r.y, bw, r.h),
             Ctl::ScrollBar(z),
-            Look::Scroll { pos, len },
+            Look::Scroll {
+                pos,
+                len,
+                active: v.scrolling(z),
+            },
             "",
         );
     }
@@ -1333,6 +1342,8 @@ fn center_zone(b: &mut B, v: &View, d: &Data, r: R, content: &mut [f32; 5]) -> f
                 Ctl::Search,
                 Look::Search {
                     focus: v.search_focus,
+                    text: v.search.text.clone(),
+                    caret: v.search.caret(),
                 },
                 "Filter the params by name (Esc clears)",
             );
