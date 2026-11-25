@@ -627,6 +627,16 @@ fn toggle_reply(r: i32) -> i32 {
     }
 }
 
+/// La touche d'un WM_CP_ACCEL (le chargeur passe son adresse dans `lp`).
+pub fn key_event(m: &WinMsg) -> Option<cp_abi::KeyEvent> {
+    if m.msg != cp_abi::WM_CP_ACCEL || m.lp == 0 {
+        return None;
+    }
+    // SAFETY: pour WM_CP_ACCEL, le chargeur passe l'adresse d'un KeyEvent a
+    // lui, valide pendant l'appel ; on le copie.
+    Some(unsafe { *(m.lp as *const cp_abi::KeyEvent) })
+}
+
 #[cfg(test)]
 mod toggle_tests {
     use super::*;
@@ -641,14 +651,4 @@ mod toggle_tests {
         assert_eq!(toggle_reply(0), 0);
         assert_eq!(toggle_reply(FAULT), FAULT);
     }
-}
-
-/// La touche d'un WM_CP_ACCEL (le chargeur passe son adresse dans `lp`).
-pub fn key_event(m: &WinMsg) -> Option<cp_abi::KeyEvent> {
-    if m.msg != cp_abi::WM_CP_ACCEL || m.lp == 0 {
-        return None;
-    }
-    // SAFETY: pour WM_CP_ACCEL, le chargeur passe l'adresse d'un KeyEvent a
-    // lui, valide pendant l'appel ; on le copie.
-    Some(unsafe { *(m.lp as *const cp_abi::KeyEvent) })
 }
