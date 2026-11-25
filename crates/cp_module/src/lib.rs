@@ -42,6 +42,7 @@ mod frame;
 mod fxb;
 mod fxc;
 mod fxc_act;
+mod fxc_capture;
 mod fxc_sync;
 mod fxc_test;
 mod grip;

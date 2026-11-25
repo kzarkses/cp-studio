@@ -369,9 +369,12 @@ pub(crate) fn build(v: &View, d: &Data, th: &Theme, w: f32, h: f32) -> (Vec<Item
     };
     let mut content = [0.0f32; 5];
     b.panel(R::new(0.0, 0.0, w, h), Shade::Zone);
-    let bar_h = b.s(32.0);
+    // Etroite, la barre de commande passe sur deux rangees.
+    let row_h = b.s(32.0);
+    let two = w < b.s(1240.0);
+    let bar_h = if two { 2.0 * row_h } else { row_h };
     let info_h = b.s(24.0);
-    command_bar(&mut b, v, d, w, bar_h);
+    command_bar(&mut b, v, d, w, row_h, two);
     info_bar(&mut b, v, d, w, h - info_h, info_h);
     let Some(_) = d.track else {
         let r = R::new(0.0, bar_h, w, h - bar_h - info_h);
@@ -426,14 +429,18 @@ pub(crate) fn build(v: &View, d: &Data, th: &Theme, w: f32, h: f32) -> (Vec<Item
 // La barre de commande
 // ---------------------------------------------------------------------------
 
-fn command_bar(b: &mut B, v: &View, d: &Data, w: f32, bh: f32) {
+fn command_bar(b: &mut B, v: &View, d: &Data, w: f32, bh: f32, two: bool) {
     let th = b.th;
-    b.panel(R::new(0.0, 0.0, w, bh), Shade::Bar);
+    b.panel(
+        R::new(0.0, 0.0, w, if two { 2.0 * bh } else { bh }),
+        Shade::Bar,
+    );
     let s = th.scale;
     let ch = bh - 2.0 * b.s(5.0);
-    let y = b.s(5.0);
+    let mut y = b.s(5.0);
     let mut x = b.s(8.0);
-    let title = "FX Constellation";
+    let narrow = w < b.s(1000.0);
+    let title = if narrow { "" } else { "FX Constellation" };
     b.text(
         R::new(x, 0.0, tw(th, title), bh),
         title,
@@ -564,7 +571,31 @@ fn command_bar(b: &mut B, v: &View, d: &Data, w: f32, bh: f32) {
         Tone::Normal,
         "Lock: stay on this track whatever REAPER selects",
     );
-    x += lw + b.s(10.0);
+    x += lw + b.s(4.0);
+    let cw = b.s(78.0);
+    b.button_ex(
+        R::new(x, y, cw, ch),
+        Ctl::Capture,
+        &if d.capture > 0 {
+            format!("Capture {}", d.capture)
+        } else {
+            "Capture".to_string()
+        },
+        Some(Icon::Circle),
+        false,
+        true,
+        if d.capture > 0 {
+            Tone::Danger
+        } else {
+            Tone::Normal
+        },
+        "Capture to envelopes: the armed pad axes and macros are written while REAPER plays",
+    );
+    x += cw + b.s(10.0);
+    if two {
+        x = b.s(8.0);
+        y += bh;
+    }
     let gw = b.s(140.0);
     let gran = d.t.pad.granular;
     b.seg(

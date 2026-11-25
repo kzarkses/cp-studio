@@ -181,6 +181,8 @@ pub struct Data<'a> {
     pub kb_note: Option<u8>,
     /// Les effets internes de la piste.
     pub guids: Guids,
+    /// Les sources armees pour la capture.
+    pub capture: usize,
 }
 
 /// Les GUID des effets internes de la piste (les reglages modulables).
@@ -278,6 +280,8 @@ pub enum Ctl {
     SnapField,
     SnapAdd,
     Lock,
+    /// La capture : le menu de ce qu'on arme.
+    Capture,
     Granular(bool),
     Nav(u8),
     Morph,
