@@ -119,6 +119,21 @@ des fichiers de Claude, et les JSFX installés dans REAPER.
 - ✅ Un paramètre sur lequel REAPER refuse un lien (ReaComp : AudIn,
   Multichannel Mode) devient « non modulable » : plus suivi, plus tiré par
   ROLL.
+- ✅ Une seconde relecture indépendante, de la vue et de la capture (12
+  défauts, corrigés) :
+  - la capture : un saut en avant n'efface plus le passage sauté, une
+    valeur tenue reste plate, le passage se raccorde à l'enveloppe d'origine
+    à ses deux bords, les enveloppes sont triées à chaque battement ;
+  - les gestes : la couture des colonnes à toute échelle d'écran, la perte
+    de la souris qui termine le geste (rien ne reste tenu), un clic droit
+    pendant un geste ignoré, le mode Map qui part de la bonne profondeur,
+    la peinture des pas qui remplit les pas sautés ;
+  - le module : la cible du pad lissé qui restait, un geste sur un effet
+    interne qui relisait toute la chaîne, l'état perdu quand on changeait
+    d'onglet de projet (il attend désormais que sa piste revienne), le
+    clavier qui accroche la note en Continuous, HOLD seulement en
+    Triggered + Manual, REMOVE du séquenceur qui demande confirmation quand
+    il a plusieurs patterns.
 - ✅ Le pad lissé (SMOOTH), l'éditeur d'ENV 2..4 dans le rack, les menus des
   sources de note (étendue, glissé) et des voies du séquenceur, le bouton
   HOLD, un en-tête d'effet tiré d'un pool à l'autre, l'onglet
@@ -144,7 +159,7 @@ des fichiers de Claude, et les JSFX installés dans REAPER.
 - une annulation de ROLL ramène le modèle d'avant ;
 - une base changée hors de FX Constellation est reprise, pas écrasée ;
 - Init relâche chaque lien à nous, celui d'une macro aussi ;
-- la capture : lecture, le pad bouge, deux points d'enveloppe écrits.
+- la capture : lecture, le pad bouge, les points d'enveloppe écrits.
 
 **Pas vérifié dans le vrai REAPER** : les gestes à la souris (l'auto-test
 appelle les actions de la vue), l'image de la fenêtre (les planches PNG
@@ -152,8 +167,6 @@ seulement), le son.
 
 **Reste**
 - ☐ Les réglages de la banque globale (sur CP MOD) menés par une source.
-- ☐ Les liens sur des liens adoptés d'un ancien projet (l'adoption lit les
-  sources, pas les voies de profondeur).
 - ☐ Les routes rapides (banque → Sound Gen tous les 32 échantillons), charger
   un sample dans le Sound Gen, lire les 16 patterns pour un preset : ils
   passent par la mémoire partagée des JSFX (`gmem`), qu'une extension n'a
