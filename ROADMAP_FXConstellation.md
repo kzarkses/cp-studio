@@ -36,9 +36,12 @@ des fichiers de Claude, et les JSFX installés dans REAPER.
   natifs des projets sont le seul endroit qui dit quels paramètres suivent le
   pad, avec quelle portée et quelle source. À la première visite d'une piste,
   CP Studio les relit et en refait son modèle. Il ne les relâche pas.
-- **L'état d'une piste vit dans le projet** (`CPS_FXC`, clé = GUID de la
-  piste). Plus de fichier pour toute la machine : il voyageait mal entre les
-  projets.
+- **L'état d'une piste vit dans la piste** (`P_EXT:CPS_FXC`). L'annulation de
+  REAPER le ramène avec le reste, et le module le relit quand il change sans
+  lui. Au-delà de 48 Ko, il va dans le projet (ExtState `CPS_FXC`, sans
+  annulation). Plus de fichier pour toute la machine : il voyageait mal
+  entre les projets. (D'abord rangé dans le projet ; la relecture a montré
+  qu'une annulation ne l'atteignait pas.)
 - **Un paramètre se nomme par le GUID de son effet** et son indice. L'ancienne
   clé par nom confondait deux instances du même effet.
 - **Le modèle est la vérité pendant la session**, le lien l'est à
@@ -100,7 +103,22 @@ des fichiers de Claude, et les JSFX installés dans REAPER.
   et ainsi de suite ; les 8 voies de profondeur du Mod Mix, chaque
   modulateur avant ce qu'il module ; « Modulate a depth » dans le menu des
   sources, réglés dans l'onglet Links.
-- ✅ ROLL, le rappel d'un preset et Init : un pas d'annulation chacun.
+- ✅ ROLL, le rappel d'un preset et Init : un pas d'annulation chacun, avec
+  l'état de la piste et le Mod Mix posé ou retiré (sinon Ctrl+Z annulait le
+  retrait du bus au lieu de ROLL).
+- ✅ La capture : Pad X, Pad Y et les macros armés s'écrivent en points
+  d'enveloppe sur les curseurs du bridge pendant que REAPER joue (la
+  source, jamais ce qu'elle mène).
+- ✅ Une relecture indépendante du moteur des liens (12 défauts, corrigés) :
+  l'annulation, Init qui écrivait dans le mauvais effet, les liens oubliés
+  par le modèle, l'adoption des réglages internes et des voies de
+  profondeur, une base changée hors de FXC reprise, trois gestes qui
+  faisaient sauter une valeur à 0,5, deux instances du même effet dans un
+  snapshot, un vieux bridge qui pouvait être doublé, un bouton MIDI CC 16
+  pris pour la banque globale.
+- ✅ Un paramètre sur lequel REAPER refuse un lien (ReaComp : AudIn,
+  Multichannel Mode) devient « non modulable » : plus suivi, plus tiré par
+  ROLL.
 - ✅ Le pad lissé (SMOOTH), l'éditeur d'ENV 2..4 dans le rack, les menus des
   sources de note (étendue, glissé) et des voies du séquenceur, le bouton
   HOLD, un en-tête d'effet tiré d'un pool à l'autre, l'onglet
@@ -122,7 +140,11 @@ des fichiers de Claude, et les JSFX installés dans REAPER.
   internes compris) ;
 - le Sound Gen posé puis retiré (son réglage gardé dans la piste) ; le
   séquenceur en tête puis retiré ;
-- l'état de la piste relu du projet.
+- l'état de la piste relu ;
+- une annulation de ROLL ramène le modèle d'avant ;
+- une base changée hors de FX Constellation est reprise, pas écrasée ;
+- Init relâche chaque lien à nous, celui d'une macro aussi ;
+- la capture : lecture, le pad bouge, deux points d'enveloppe écrits.
 
 **Pas vérifié dans le vrai REAPER** : les gestes à la souris (l'auto-test
 appelle les actions de la vue), l'image de la fenêtre (les planches PNG
@@ -137,8 +159,7 @@ seulement), le son.
   passent par la mémoire partagée des JSFX (`gmem`), qu'une extension n'a
   pas. Sans route rapide, une source atteint le Sound Gen par un lien natif
   (une valeur par bloc).
-- ☐ La capture (« Capture » : les gestes en enveloppes) ; les vues des
-  effets maison.
+- ☐ La capture du clavier en item MIDI ; les vues des effets maison.
 
 ## Les faits
 
