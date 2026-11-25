@@ -168,8 +168,10 @@ fn les_fichiers_se_comparent() {
 #[test]
 fn le_catalogue_reunit_liste_dossiers_et_etiquettes() {
     let c = catalog();
-    // 12 effets + 3 du coeur de CP Studio + 2 chaines.
-    assert_eq!(c.plugins.len(), 17);
+    // 12 effets + 2 chaines ; les 3 effets du systeme de CP Studio n'entrent
+    // pas.
+    assert_eq!(c.plugins.len(), 14);
+    assert!(c.plugins.iter().all(|p| !is_internal(&p.name)));
     let haas = &c.plugins[idx(&c, "VST3: kHs Haas")];
     assert_eq!(haas.file, "khs_haas.vst3");
     assert_eq!(haas.dev, "Kilohearts");
@@ -328,10 +330,8 @@ fn le_de_tire_sans_remise_et_sans_instrument() {
             d.iter().map(|&i| &c.plugins[i].name).collect::<Vec<_>>()
         );
     }
-    // Une liste qui ne montre que le coeur : rien a tirer.
-    let core = list(&c, &st, &Src::All, "constellation");
-    assert!(!core.is_empty());
-    assert!(dice(&c, &core, 3, 5).is_empty());
+    // Le systeme n'est dans aucune liste.
+    assert!(list(&c, &st, &Src::All, "constellation").is_empty());
     assert!(is_internal("CP_Mod MIDI.jsfx"));
     assert!(is_internal("JS: CP Guitar Tab Synth"));
     assert!(!is_internal("VST3: kHs Delay (Kilohearts)"));

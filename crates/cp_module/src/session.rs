@@ -375,6 +375,9 @@ pub(crate) struct SPart {
     pub place: Place,
     cache: AudioCache,
     strips: Vec<Strip>,
+    /// Par tranche, la vraie place de chaque effet montre (les effets du
+    /// systeme -- FX Constellation, ses sources -- ne se montrent pas).
+    strip_fx: Vec<Vec<usize>>,
     /// Le projet lu (son onglet, son fichier).
     proj: Option<(usize, String)>,
     state_seen: i32,
@@ -409,6 +412,7 @@ impl SPart {
             place,
             cache: AudioCache::default(),
             strips: Vec::new(),
+            strip_fx: Vec::new(),
             proj: None,
             state_seen: i32::MIN,
             saved: 0,
@@ -596,32 +600,39 @@ impl App {
             .map(|t| (t.guid.clone(), t))
             .collect();
         let old = std::mem::take(&mut self.ses.strips);
-        self.ses.strips = self
-            .ses
-            .ses
-            .cols
-            .iter()
-            .enumerate()
-            .map(|(i, c)| match tr.get(&c.track.guid) {
-                Some(t) => Strip {
-                    vol: t.vol,
-                    pan: t.pan,
-                    mute: t.mute,
-                    solo: t.solo,
-                    auto: t.auto,
-                    input: input_label(t.input, &self.ses.ins_audio, &self.ses.ins_midi),
-                    midi_out: midi_out_label(t.midi_out, &self.ses.outs_midi),
-                    monitor: t.monitor,
-                    meter: t.peak,
-                    fx: if fx {
-                        t.fx.clone()
-                    } else {
-                        old.get(i).map(|s| s.fx.clone()).unwrap_or_default()
-                    },
-                },
-                None => Strip::default(),
-            })
-            .collect();
+        let old_map = std::mem::take(&mut self.ses.strip_fx);
+        let mut strips = Vec::with_capacity(self.ses.ses.cols.len());
+        let mut map = Vec::with_capacity(self.ses.ses.cols.len());
+        for (i, c) in self.ses.ses.cols.iter().enumerate() {
+            let Some(t) = tr.get(&c.track.guid) else {
+                strips.push(Strip::default());
+                map.push(Vec::new());
+                continue;
+            };
+            let (shown, real) = if fx {
+                crate::fxb::shown_fx(&t.fx)
+            } else {
+                (
+                    old.get(i).map(|s| s.fx.clone()).unwrap_or_default(),
+                    old_map.get(i).cloned().unwrap_or_default(),
+                )
+            };
+            strips.push(Strip {
+                vol: t.vol,
+                pan: t.pan,
+                mute: t.mute,
+                solo: t.solo,
+                auto: t.auto,
+                input: input_label(t.input, &self.ses.ins_audio, &self.ses.ins_midi),
+                midi_out: midi_out_label(t.midi_out, &self.ses.outs_midi),
+                monitor: t.monitor,
+                meter: t.peak,
+                fx: shown,
+            });
+            map.push(real);
+        }
+        self.ses.strips = strips;
+        self.ses.strip_fx = map;
     }
 
     fn ses_save_now(&mut self) {
@@ -1865,13 +1876,24 @@ impl App {
         }
     }
 
-    fn ses_fx_menu(&mut self, col: usize, fx: usize, x: f32, y: f32) {
+    fn ses_fx_menu(&mut self, col: usize, shown: usize, x: f32, y: f32) {
         let Some(g) = self.ses_guid(col) else { return };
+        // La rangee montree -> la vraie place dans la chaine.
+        let Some(fx) = self
+            .ses
+            .strip_fx
+            .get(col)
+            .and_then(|m| m.get(shown))
+            .copied()
+        else {
+            return;
+        };
+        let fx_shown = shown;
         let on = self
             .ses
             .strips
             .get(col)
-            .and_then(|s| s.fx.get(fx))
+            .and_then(|s| s.fx.get(fx_shown))
             .is_some_and(|f| f.1);
         let items = [
             Some(item(1, "Open", false, true)),

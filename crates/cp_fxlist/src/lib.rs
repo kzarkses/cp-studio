@@ -325,6 +325,11 @@ impl Catalog {
             if name.trim().is_empty() || seen.insert(name.clone(), ()).is_some() {
                 continue;
             }
+            // Les effets du systeme ne se montrent dans aucune liste : FX
+            // Constellation les pose lui-meme.
+            if is_internal(name) || is_internal(ident) {
+                continue;
+            }
             let (kind, inst, rest) = split_name(name);
             let (mut label, mut dev) = if kind == Kind::Js {
                 (rest.clone(), String::new())
@@ -742,17 +747,21 @@ pub fn list(cat: &Catalog, st: &Store, src: &Src, query: &str) -> Vec<usize> {
     v
 }
 
-/// Les effets du coeur de CP Studio (FX Constellation, ses sources, le synthe
-/// de Guitar Tab) : le de ne les tire jamais, et remplacer la chaine les
-/// garde. Par nom, sans casse (« JS: FX Constellation Bridge », son fichier,
-/// ou le nom montre).
+/// Les effets du systeme de CP Studio (FX Constellation, ses sources, le
+/// synthe de Guitar Tab, le kit) : aucune liste a nous ne les montre (le
+/// catalogue, la chaine du navigateur, les tranches de la Session), le de ne
+/// les tire jamais, remplacer la chaine les garde. Par nom, sans casse
+/// (« JS: FX Constellation Bridge », son fichier, ou le nom montre).
 pub fn is_internal(name: &str) -> bool {
-    const CORE: [&str; 5] = [
+    const CORE: [&str; 8] = [
         "fx constellation bridge",
         "fx constellation - ",
         "cp_mod lfo",
         "cp_mod midi",
         "cp guitar tab synth",
+        "cp_kit_choke",
+        "cp_kitsampler",
+        "cp kit sampler",
     ];
     let l = name.to_lowercase();
     CORE.iter().any(|c| l.contains(c))

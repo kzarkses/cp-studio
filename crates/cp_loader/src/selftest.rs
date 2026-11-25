@@ -1987,6 +1987,14 @@ impl SelfTest {
                     ),
                 );
                 self.say(
+                    field(&st, "hidden") == "1" && field(&st, "toggled") == "1",
+                    format!(
+                        "FX Browser : la chaine cache le systeme (bridge cache {}), une rangee touche son vrai effet ({})",
+                        field(&st, "hidden"),
+                        field(&st, "toggled")
+                    ),
+                );
+                self.say(
                     field(&st, "post") == "2",
                     format!(
                         "FX Browser : la post-insertion suit 2 parametres de ReaEQ ({})",

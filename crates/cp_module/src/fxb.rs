@@ -58,6 +58,11 @@ pub(crate) struct FPart {
     pub win: Option<FWin>,
     pub place: Place,
     chain: Chain,
+    /// La vraie place de chaque effet montre, et le nombre d'effets de la
+    /// piste : les effets du systeme (FX Constellation, ses sources...) ne
+    /// se montrent pas, chaque geste traduit sa rangee.
+    chain_real: Vec<usize>,
+    chain_total: usize,
     /// La piste montree (son GUID).
     track: Option<String>,
     /// Le prochain ajout cree une piste ; la piste choisie quand on l'a
@@ -95,6 +100,8 @@ impl FPart {
             win: None,
             place,
             chain: Chain::default(),
+            chain_real: Vec::new(),
+            chain_total: 0,
             track: None,
             new_track: None,
             loaded: false,
@@ -151,6 +158,17 @@ fn item(id: u32, text: &str, checked: bool, enabled: bool) -> MenuItem<'_> {
         checked,
         enabled,
     }
+}
+
+/// Les effets montres d'une chaine (jamais ceux du systeme : FX
+/// Constellation, ses sources, le synthe de Guitar Tab, le kit) et la vraie
+/// place de chacun. Toute liste d'effets a nous passe par la.
+pub(crate) fn shown_fx(fx: &[(String, bool)]) -> (Vec<(String, bool)>, Vec<usize>) {
+    fx.iter()
+        .enumerate()
+        .filter(|(_, f)| !cp_fxlist::is_internal(&f.0))
+        .map(|(i, f)| (f.clone(), i))
+        .unzip()
 }
 
 /// Un effet du coeur de CP Studio (FX Constellation, ses sources, le kit,
@@ -313,6 +331,21 @@ impl App {
     // La chaine de la piste choisie
     // -----------------------------------------------------------------------
 
+    /// La vraie place d'une rangee montree de la chaine.
+    fn fxb_real(&self, shown: usize) -> Option<usize> {
+        self.fxb.chain_real.get(shown).copied()
+    }
+
+    /// La vraie place d'un emplacement montre (0..=n : avant cette rangee) ;
+    /// apres la derniere rangee, la fin de la chaine.
+    fn fxb_real_slot(&self, slot: usize) -> usize {
+        self.fxb
+            .chain_real
+            .get(slot)
+            .copied()
+            .unwrap_or(self.fxb.chain_total)
+    }
+
     fn fxb_sync_chain(&mut self) {
         let sel = self.r.fx_selected_track();
         if let Some(asked) = &self.fxb.new_track {
@@ -325,16 +358,22 @@ impl App {
             new_track,
             ..Chain::default()
         };
+        let (mut real, mut total) = (Vec::new(), 0);
         if !new_track {
             if let Some(t) = sel.as_deref().and_then(|g| self.r.fx_track(g)) {
                 ch.track = Some(t.name);
                 ch.color = t.color.map(|(r, g, b)| rgb(r, g, b));
-                ch.fx =
-                    t.fx.into_iter()
-                        .map(|(name, on)| ChainFx { name, on })
-                        .collect();
+                total = t.fx.len();
+                let (shown, places) = shown_fx(&t.fx);
+                real = places;
+                ch.fx = shown
+                    .into_iter()
+                    .map(|(name, on)| ChainFx { name, on })
+                    .collect();
             }
         }
+        self.fxb.chain_real = real;
+        self.fxb.chain_total = total;
         self.fxb.track = sel;
         if ch != self.fxb.chain {
             if ch.fx.len() != self.fxb.chain.fx.len() || ch.track != self.fxb.chain.track {
@@ -473,14 +512,15 @@ impl App {
                 r.undo_begin();
                 // Les instruments restent : le de ne tire que des effets. Le
                 // coeur aussi (FX Constellation, ses sources, le kit).
-                let fx = self.fxb.chain.fx.clone();
-                for (i, f) in fx.iter().enumerate().rev() {
+                // La vraie chaine (la chaine montree cache le systeme).
+                let fx = r.fx_track(&g).map(|t| t.fx).unwrap_or_default();
+                for (i, (name, _)) in fx.iter().enumerate().rev() {
                     let inst = self
                         .fxb
                         .cat
-                        .find(&f.name)
+                        .find(name)
                         .is_some_and(|k| self.fxb.cat.plugins[k].instrument);
-                    if !inst && !is_core(&f.name) {
+                    if !inst && !is_core(name) {
                         r.fx_remove(&g, i);
                     }
                 }
@@ -498,7 +538,10 @@ impl App {
     fn fxb_act(&mut self, a: Act) {
         let r = self.r;
         match a {
-            Act::Add { plugins, at } => self.fxb_add(&plugins, at, None, false),
+            Act::Add { plugins, at } => {
+                let at = at.map(|a| self.fxb_real_slot(a));
+                self.fxb_add(&plugins, at, None, false)
+            }
             Act::DropOut { plugins } => self.fxb_drop_out(plugins),
             Act::ToggleFav(i) => {
                 self.fxb.st.toggle_fav(&self.fxb.cat, i);
@@ -521,31 +564,39 @@ impl App {
                 self.fxb_save_soon();
                 self.fxb_say(format!("+{k} {tab}"));
             }
+            // Une rangee de la chaine montree -> sa vraie place (les effets
+            // du systeme ne se montrent pas).
             Act::FxOpen(i) => {
-                if let Some(g) = self.fxb.track.clone() {
-                    r.fx_open(&g, i, false);
+                if let (Some(g), Some(k)) = (self.fxb.track.clone(), self.fxb_real(i)) {
+                    r.fx_open(&g, k, false);
                 }
             }
             Act::FxToggle(i) => {
-                if let (Some(g), Some(f)) = (self.fxb.track.clone(), self.fxb.chain.fx.get(i)) {
+                if let (Some(g), Some(f), Some(k)) = (
+                    self.fxb.track.clone(),
+                    self.fxb.chain.fx.get(i),
+                    self.fxb_real(i),
+                ) {
                     r.undo_begin();
-                    r.fx_set_enabled(&g, i, !f.on);
+                    r.fx_set_enabled(&g, k, !f.on);
                     r.undo_end("CP FX Browser: bypass FX", -1);
                 }
                 self.fxb_sync_chain();
             }
             Act::FxDelete(i) => {
-                if let Some(g) = self.fxb.track.clone() {
+                if let (Some(g), Some(k)) = (self.fxb.track.clone(), self.fxb_real(i)) {
                     r.undo_begin();
-                    r.fx_remove(&g, i);
+                    r.fx_remove(&g, k);
                     r.undo_end("CP FX Browser: delete FX", -1);
                 }
                 self.fxb_sync_chain();
             }
             Act::FxMove { from, to, copy } => {
-                if let Some(g) = self.fxb.track.clone() {
+                let mut at = None;
+                if let (Some(g), Some(k)) = (self.fxb.track.clone(), self.fxb_real(from)) {
+                    let slot = self.fxb_real_slot(to);
                     r.undo_begin();
-                    let at = r.fx_move(&g, from, to, copy);
+                    at = r.fx_move(&g, k, slot, copy);
                     r.undo_end(
                         if copy {
                             "CP FX Browser: copy FX"
@@ -554,9 +605,11 @@ impl App {
                         },
                         -1,
                     );
-                    self.fxb.view.fx_sel = at;
                 }
                 self.fxb_sync_chain();
+                // La nouvelle place -> sa rangee montree.
+                self.fxb.view.fx_sel =
+                    at.and_then(|a| self.fxb.chain_real.iter().position(|&k| k == a));
             }
             Act::FxMenu { fx, x, y } => self.fxb_fx_menu(fx, x, y),
             Act::Paste => {
@@ -957,8 +1010,8 @@ impl App {
             2 => self.fxb_act(Act::FxToggle(fx)),
             3 => self.fxb_act(Act::FxDelete(fx)),
             4 => {
-                if let Some(g) = self.fxb.track.clone() {
-                    self.r.fx_open(&g, fx, true);
+                if let (Some(g), Some(k)) = (self.fxb.track.clone(), self.fxb_real(fx)) {
+                    self.r.fx_open(&g, k, true);
                 }
             }
             _ => {}
@@ -1714,14 +1767,21 @@ impl App {
         self.fxb.st.set.dice_count = 1;
         self.fxb.st.set.dice_replace = true;
         self.fxb_dice();
-        let core_kept = self
-            .fxb
-            .chain
-            .fx
-            .iter()
-            .filter(|f| is_core(&f.name))
-            .count();
-        let replaced = self.fxb.chain.fx.len() - core_kept;
+        // Le bridge reste sur la piste, mais la chaine montree le cache.
+        let real = r.fx_track(&g).map(|t| t.fx).unwrap_or_default();
+        let core_kept = real.iter().filter(|f| is_core(&f.0)).count();
+        let hidden = self.fxb.chain_total - self.fxb.chain.fx.len();
+        let replaced = self.fxb.chain.fx.len();
+        // Une rangee montree touche son vrai effet : contourner la premiere
+        // (le bridge est avant elle dans la vraie chaine).
+        let first_real = self.fxb_real(0);
+        self.fxb_act(Act::FxToggle(0));
+        let toggled = first_real.is_some_and(|k| {
+            let now = r.fx_track(&g).map(|t| t.fx).unwrap_or_default();
+            now.get(k).is_some_and(|f| !f.1 && !is_core(&f.0))
+                && now.iter().filter(|f| is_core(&f.0)).all(|f| f.1)
+        }) as u8;
+        self.fxb_act(Act::FxToggle(0));
         // La post-insertion : deux parametres de ReaEQ suivis par FX
         // Constellation.
         self.fxb.st.set.post = PostInsert {
@@ -1752,7 +1812,7 @@ impl App {
         self.fxb.view.search.clear();
         self.fxb.view.refresh(&self.fxb.cat, &self.fxb.st);
         format!(
-            "report plugins={} folders={} favs={} tabs={} order1={order1} order2={order2} bypass={} copy={copied} dice={dice} replaced={replaced} core_kept={core_kept} post={post} search={} stolen={}",
+            "report plugins={} folders={} favs={} tabs={} order1={order1} order2={order2} bypass={} copy={copied} dice={dice} replaced={replaced} core_kept={core_kept} hidden={hidden} toggled={toggled} post={post} search={} stolen={}",
             self.fxb.cat.plugins.len(),
             self.fxb.cat.folders.len(),
             self.fxb.cat.reaper_favs.len(),

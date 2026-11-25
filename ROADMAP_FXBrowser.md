@@ -119,6 +119,15 @@ FxBrowser) :
 **Reste**
 - ☐ Les effets d'une prise, d'entrée, de monitoring (leur boîte « Add FX »
   reste celle de REAPER).
+- ✅ Le système ne se montre dans aucune liste à nous (règle de Cedric,
+  2026-11-25 : « dans toute liste d'effets que l'on affiche nous-même, on
+  retire toujours ce qui est nécessaire aux systèmes ») : le catalogue, la
+  chaîne du navigateur, les tranches de la Session. `cp_fxlist::is_internal`
+  dit lesquels ; `fxb::shown_fx` rend les effets montrés et leur vraie place,
+  et chaque geste (ouvrir, contourner, supprimer, glisser, insérer à une
+  place) traduit sa rangée. Vérifié dans `reaper-test` pour le navigateur
+  (le bridge caché, contourner la première rangée touche le bon effet) ; la
+  Session n'a pas d'auto-test de ses effets.
 - ✅ La post-insertion (2026-11-25) : menu « After insert (FX
   Constellation) » du navigateur et du dé. Après un ajout, FX Constellation
   suit des paramètres de l'effet (aucun, tous, les continus, N au hasard ;
