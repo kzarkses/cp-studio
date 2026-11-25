@@ -61,6 +61,7 @@ dependencies = [
  "cp_fxc",
  "cp_gfx",
  "cp_sys",
+ "cp_theme",
  "cp_ui",
 ]
 

@@ -76,6 +76,7 @@ fn world() -> World {
             enabled: g != "{B}",
             detached: g == "{C}",
             params,
+            hidden: if g == "{A}" { 2080 } else { 0 },
         });
     }
     t.params.insert(
@@ -277,6 +278,17 @@ fn every_control_is_where_it_is_drawn() {
         if !(0.0..1500.0).contains(&x) || !(0.0..820.0).contains(&y) {
             continue;
         }
+        // Une case a moitie sortie de sa zone qui defile : son centre est
+        // coupe.
+        let clipped = it.clip.is_some_and(|z| {
+            v.items()
+                .iter()
+                .find(|c| c.look == Look::Clip(z))
+                .is_some_and(|c| !c.r.has(x, y))
+        });
+        if clipped {
+            continue;
+        }
         let got = v.hit(x, y);
         // Une pastille posee sur un bouton l'emporte : elle est dessinee
         // par-dessus. L'en-tete d'un effet porte son nom (meme controle).
@@ -454,4 +466,137 @@ fn a_lost_mouse_ends_the_gesture() {
     v.cancel();
     assert!(!v.dragging());
     assert_eq!(v.take_pending(), vec![Act::PadRelease]);
+}
+
+/// La vue habillee du theme COURANT de la machine (lance a la main :
+/// `--ignored`) : `cp_fxc_theme_*.png`.
+#[test]
+#[ignore]
+fn habillee_du_vrai_theme() {
+    let res = std::path::PathBuf::from(std::env::var("APPDATA").unwrap()).join("REAPER");
+    let ini = std::fs::read_to_string(res.join("reaper.ini")).unwrap_or_default();
+    let get = |k: &str| {
+        ini.lines()
+            .find_map(|l| l.strip_prefix(&format!("{k}=")))
+            .map(|s| s.trim().to_string())
+    };
+    let theme = cp_theme::ThemeFiles::open(std::path::Path::new(&get("lastthemefn5").unwrap()))
+        .expect("theme");
+    let w = world();
+    let p = plan(&w.t, &chain(), &Ctx::default());
+    let d = data(&w, &p);
+    let mut b = Bench::new(1600, 860);
+    b.th = Theme::reaper(1.0, &|k| theme.color(k));
+    let mut v = View::new();
+    v.sel_slot = 1;
+    b.shot(&mut v, &d, "theme_params");
+    v.tab = 1;
+    b.shot(&mut v, &d, "theme_soundgen");
+    v.tab = 2;
+    v.kb_open = true;
+    b.shot(&mut v, &d, "theme_seq");
+    v.tab = 0;
+    v.kb_open = false;
+    let mut narrow = Bench::new(1100, 760);
+    narrow.th = Theme::reaper(1.0, &|k| theme.color(k));
+    narrow.shot(&mut v, &d, "theme_narrow");
+}
+
+#[test]
+fn a_moving_pad_repaints_only_the_pad() {
+    let mut w = world();
+    let p = plan(&w.t, &chain(), &Ctx::default());
+    let th = Theme::dark(1.0);
+    let mut v = View::new();
+    {
+        let d = data(&w, &p);
+        v.layout(&d, &th, 1500.0, 820.0);
+        v.layout(&d, &th, 1500.0, 820.0);
+    }
+    // Rien n'a change : rien a repeindre.
+    assert_eq!(v.damage(), Some(vec![]));
+    let pad = rect(&v, &Ctl::Pad);
+    w.t.pad.x = 0.2;
+    w.t.pad.y = 0.8;
+    let d = data(&w, &p);
+    v.layout(&d, &th, 1500.0, 820.0);
+    let dmg = v.damage().expect("une partie seulement");
+    let area: f32 = dmg.iter().map(|r| r.w * r.h).sum();
+    assert!(!dmg.is_empty());
+    // Le pad, sa carte et ses pastilles X / Y : bien moins que la fenetre.
+    assert!(area < 0.2 * 1500.0 * 820.0, "{area} {dmg:?}");
+    assert!(dmg.iter().any(|r| r.x <= pad.x && r.right() >= pad.right()));
+}
+
+#[test]
+fn a_full_frame_costs_little() {
+    let w = world();
+    let p = plan(&w.t, &chain(), &Ctx::default());
+    let d = data(&w, &p);
+    let mut b = Bench::new(1600, 860);
+    let mut v = View::new();
+    // Une premiere image (les glyphes et les icones se mettent en cache).
+    b.shot(&mut v, &d, "perf");
+    let t0 = std::time::Instant::now();
+    let n = 20;
+    for _ in 0..n {
+        v.layout(&d, &b.th, 1600.0, 860.0);
+        let mut cv = Canvas::new(&mut b.s, &mut b.k);
+        v.draw(&mut cv, &mut b.t, &mut b.icons, &b.th);
+    }
+    let ms = t0.elapsed().as_secs_f64() * 1000.0 / n as f64;
+    eprintln!("image complete : {ms:.2} ms");
+    // En test (non optimise), large : la vraie mesure est dans REAPER.
+    assert!(ms < 200.0, "{ms} ms");
+}
+
+#[test]
+#[ignore]
+fn where_the_frame_time_goes() {
+    let w = world();
+    let p = plan(&w.t, &chain(), &Ctx::default());
+    let d = data(&w, &p);
+    let mut b = Bench::new(1600, 860);
+    let mut v = View::new();
+    b.shot(&mut v, &d, "perf");
+    let n = 30;
+    let t0 = std::time::Instant::now();
+    for _ in 0..n {
+        v.layout(&d, &b.th, 1600.0, 860.0);
+    }
+    let lay = t0.elapsed().as_secs_f64() * 1000.0 / n as f64;
+    let t0 = std::time::Instant::now();
+    for _ in 0..n {
+        let mut cv = Canvas::new(&mut b.s, &mut b.k);
+        v.draw(&mut cv, &mut b.t, &mut b.icons, &b.th);
+    }
+    let full = t0.elapsed().as_secs_f64() * 1000.0 / n as f64;
+    let pad = rect(&v, &Ctl::Pad);
+    let t0 = std::time::Instant::now();
+    for _ in 0..n {
+        let mut cv = Canvas::new(&mut b.s, &mut b.k);
+        cv.push_clip(pad.x - 6.0, pad.y - 6.0, pad.w + 12.0, pad.h + 12.0);
+        v.draw(&mut cv, &mut b.t, &mut b.icons, &b.th);
+    }
+    let part = t0.elapsed().as_secs_f64() * 1000.0 / n as f64;
+    eprintln!(
+        "mise en page {lay:.2} ms, dessin complet {full:.2} ms, dessin du pad seul {part:.2} ms, {} elements",
+        v.items().len()
+    );
+}
+
+#[test]
+#[ignore]
+fn what_costs_in_a_frame() {
+    let w = world();
+    let p = plan(&w.t, &chain(), &Ctx::default());
+    let d = data(&w, &p);
+    let mut b = Bench::new(1600, 860);
+    let mut v = View::new();
+    b.shot(&mut v, &d, "perf");
+    let mut cv = Canvas::new(&mut b.s, &mut b.k);
+    let prof = v.draw_profile(&mut cv, &mut b.t, &mut b.icons, &b.th);
+    for (k, t, n) in prof {
+        eprintln!("{k:>10} {t:7.2} ms  x{n}");
+    }
 }

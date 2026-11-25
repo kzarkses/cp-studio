@@ -557,6 +557,16 @@ impl App {
                 match band_of(s) {
                     Some(Band::Env(1)) => self.fxc.view.tab = 1,
                     Some(Band::Seq(_)) => self.fxc.view.tab = 2,
+                    // Un LFO choisi : sa banque est posee s'il n'y en a pas
+                    // (aucune etape technique avant de s'en servir).
+                    Some(Band::Lfo(_)) if self.fxc.bank.is_none() => {
+                        self.fxc_ensure_bank();
+                        self.fxc_refresh_js(FxKind::Bank);
+                    }
+                    Some(Band::Global(_)) if self.fxc.gbank.is_none() => {
+                        self.fxc_ensure_global_send();
+                        self.fxc_refresh_gbank();
+                    }
                     _ => {}
                 }
             }
@@ -668,6 +678,13 @@ impl App {
             Ctl::KbFold => {
                 self.fxc.view.kb_open = !self.fxc.view.kb_open;
                 self.fxc.prefs_dirty = true;
+            }
+            Ctl::ShapePick(k) => {
+                self.fxc_slot_write(SlotW::Raw(SlotField::Shape, k.min(7) as f64));
+            }
+            Ctl::HideMenu => {
+                let (x, y) = self.fxc.view.mouse;
+                self.fxc_hide_menu(x, y);
             }
             // Les choix a plusieurs valeurs s'ouvrent en menu au clic.
             c @ (Ctl::WalkSync
@@ -1844,6 +1861,52 @@ impl App {
         if let Some(ph) = rr.phase {
             self.fxc_slot_write_at(slot, SlotW::Raw(SlotField::Phase, ph));
         }
+    }
+
+    /// Les mots qui cachent des parametres : montrer les caches, modifier
+    /// la liste.
+    fn fxc_hide_menu(&mut self, x: f32, y: f32) {
+        let hidden: usize = self.fxc.rows.iter().map(|f| f.hidden).sum();
+        let e = vec![
+            MenuEntry::off(format!(
+                "Hidden by name: {}",
+                self.fxc.hide_words.join(", ")
+            )),
+            MenuEntry::Sep,
+            MenuEntry::check(1, "Show the hidden params", self.fxc.show_hidden),
+            MenuEntry::item(2, "Edit the hidden words…"),
+            MenuEntry::item(3, "Back to the default words"),
+        ];
+        let _ = hidden;
+        match self.fxc_popup(x, y, &e) {
+            1 => {
+                self.fxc.show_hidden = !self.fxc.show_hidden;
+                self.fxc.view.show_hidden = self.fxc.show_hidden;
+                self.fxc_keep(
+                    "fxc_show_hidden",
+                    if self.fxc.show_hidden { "1" } else { "0" },
+                );
+            }
+            2 => {
+                let cur = self.fxc.hide_words.join(",");
+                let Some(s) = self.r.user_inputs(
+                    "FX Constellation",
+                    1,
+                    "Hidden words (comma separated),separator=|,extrawidth=320",
+                    &cur,
+                ) else {
+                    return;
+                };
+                self.fxc.hide_words = crate::fxc::hide_words(&s);
+                self.fxc_keep("fxc_hide", &self.fxc.hide_words.join(","));
+            }
+            3 => {
+                self.fxc.hide_words = crate::fxc::hide_words(crate::fxc::HIDE_DEFAULT);
+                self.fxc_keep("fxc_hide", crate::fxc::HIDE_DEFAULT);
+            }
+            _ => return,
+        }
+        self.fxc_scan_chain();
     }
 
     fn fxc_slot_menu(&mut self, c: Ctl, x: f32, y: f32) {

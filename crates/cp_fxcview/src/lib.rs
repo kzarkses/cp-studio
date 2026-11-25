@@ -18,6 +18,7 @@
 //! ```
 
 mod build;
+mod damage;
 mod draw;
 pub mod panels;
 #[cfg(test)]
@@ -95,6 +96,8 @@ pub struct FxRow {
     pub enabled: bool,
     pub detached: bool,
     pub params: Vec<ParamRow>,
+    /// Les parametres que les mots caches retirent de la liste.
+    pub hidden: usize,
 }
 
 /// Un slot d'une banque de sources.
@@ -372,6 +375,14 @@ pub enum Ctl {
     KbFold,
     Key(u8),
     Seam(u8),
+    /// Le champ de recherche des parametres.
+    Search,
+    /// Les mots qui cachent des parametres : montrer, modifier.
+    HideMenu,
+    /// La barre de defilement d'une zone.
+    ScrollBar(u8),
+    /// Une forme de slot choisie d'un clic (0..7, `bank::SHAPES`).
+    ShapePick(u8),
 }
 
 /// Les reglages du pad qu'un bouton tourne.
@@ -427,6 +438,8 @@ pub enum Act {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum KeyUse {
     Eat,
+    /// Du texte (la recherche) : la fenetre le recoit en WM_CHAR.
+    Text,
     NotMine,
 }
 
@@ -505,6 +518,14 @@ enum Drag {
         moved: bool,
     },
     Key(u8),
+    /// Le curseur d'une barre de defilement : (zone, y de depart, defilement
+    /// de depart, contenu par pixel de piste).
+    Scroll {
+        z: u8,
+        y0: f32,
+        s0: f32,
+        k: f32,
+    },
 }
 
 /// L'etat propre de la vue (rien de ce qu'elle montre du modele).
@@ -529,6 +550,11 @@ pub struct View {
     pub scroll: [f32; 5],
     pub show_values: bool,
     pub kb_open: bool,
+    /// La recherche des parametres, et si elle a le clavier.
+    pub search: cp_ui::TextField,
+    pub search_focus: bool,
+    /// Les parametres caches par leur nom sont montres.
+    pub show_hidden: bool,
     /// Les effets replies (GUID).
     pub folded: std::collections::BTreeSet<String>,
     /// Ce que la souris survole.
@@ -546,6 +572,17 @@ pub struct View {
     /// Les actions en plus de celle que rend un evenement (les pas sautes
     /// d'une peinture, la fin d'un geste interrompu) : le module les vide.
     pending: Vec<Act>,
+    /// L'image d'avant (pour ne repeindre que ce qui change).
+    pub(crate) prev: Vec<Item>,
+    pub(crate) prev_hover: Ctl,
+    drawn_hover: Ctl,
+    pub(crate) prev_overlay: bool,
+    drawn_overlay: bool,
+    pub(crate) prev_dock_hot: Option<usize>,
+    drawn_dock_hot: Option<usize>,
+    /// La prochaine image est repeinte en entier (taille, theme).
+    full: bool,
+    pub(crate) full_now: bool,
 }
 
 impl Default for View {
@@ -570,6 +607,9 @@ impl View {
             scroll: [0.0; 5],
             show_values: true,
             kb_open: false,
+            search: cp_ui::TextField::default(),
+            search_focus: false,
+            show_hidden: false,
             folded: Default::default(),
             hover: Ctl::None,
             mouse: (-1.0, -1.0),
@@ -580,7 +620,23 @@ impl View {
             zone_preview: None,
             content_h: [0.0; 5],
             pending: Vec::new(),
+            prev: Vec::new(),
+            prev_hover: Ctl::None,
+            drawn_hover: Ctl::None,
+            prev_overlay: false,
+            drawn_overlay: false,
+            prev_dock_hot: None,
+            drawn_dock_hot: None,
+            full: true,
+            full_now: true,
         }
+    }
+
+    /// La prochaine image se repeint en entier (la taille, le theme ont
+    /// change).
+    pub fn mark_full(&mut self) {
+        self.full = true;
+        self.dirty = true;
     }
 
     /// Les actions en attente (a jouer apres celle de l'evenement).
@@ -653,14 +709,22 @@ impl View {
 
     /// Construit les elements de l'image (et les garde pour la souris).
     pub fn layout(&mut self, d: &Data, th: &Theme, w: f32, h: f32) {
+        if (th.scale - self.scale).abs() > 1e-3 || (w, h) != self.size {
+            self.full = true;
+        }
         self.scale = th.scale;
         self.size = (w, h);
         let (items, content) = build::build(self, d, th, w, h);
-        self.items = items;
+        self.prev = std::mem::replace(&mut self.items, items);
         self.content_h = content;
         for z in 0..5 {
             self.clamp_scroll(z);
         }
+        self.prev_hover = std::mem::replace(&mut self.drawn_hover, self.hover.clone());
+        let ov = self.overlay();
+        self.prev_overlay = std::mem::replace(&mut self.drawn_overlay, ov);
+        self.prev_dock_hot = std::mem::replace(&mut self.drawn_dock_hot, self.dock.hot);
+        self.full_now = std::mem::take(&mut self.full);
     }
 
     pub fn items(&self) -> &[Item] {
@@ -729,7 +793,21 @@ impl View {
             .unwrap_or_default()
     }
 
-    pub fn key_use(&self, vk_code: u32, _m: Mods) -> KeyUse {
+    pub fn key_use(&self, vk_code: u32, m: Mods) -> KeyUse {
+        if self.search_focus {
+            return match vk_code {
+                vk::ESCAPE | vk::RETURN | vk::TAB => KeyUse::Eat,
+                _ if m.ctrl || m.alt || m.win => {
+                    if matches!(vk_code, vk::LEFT | vk::RIGHT | vk::BACK | vk::DELETE | 0x41) {
+                        KeyUse::Eat
+                    } else {
+                        KeyUse::NotMine
+                    }
+                }
+                vk::LEFT | vk::RIGHT | vk::HOME | vk::END | vk::BACK | vk::DELETE => KeyUse::Eat,
+                _ => KeyUse::Text,
+            };
+        }
         if vk_code == vk::ESCAPE && (self.map || self.carry.is_some()) {
             KeyUse::Eat
         } else {
@@ -737,8 +815,38 @@ impl View {
         }
     }
 
-    /// Echap : la pastille tiree, puis le mode Map.
-    pub fn key(&mut self, vk_code: u32) -> Option<Act> {
+    /// Un caractere tape : la recherche, si elle a le clavier.
+    pub fn char(&mut self, c: char) -> Option<Act> {
+        if !self.search_focus || c.is_control() {
+            return None;
+        }
+        if self.search.char(c) == cp_ui::textfield::Edit::Changed {
+            self.scroll[0] = 0.0;
+        }
+        self.mark();
+        Some(Act::Changed)
+    }
+
+    /// Echap : la recherche, la pastille tiree, puis le mode Map.
+    pub fn key(&mut self, vk_code: u32, m: Mods) -> Option<Act> {
+        if self.search_focus {
+            match vk_code {
+                vk::ESCAPE => {
+                    if self.search.text.is_empty() {
+                        self.search_focus = false;
+                    }
+                    self.search.clear();
+                }
+                vk::RETURN | vk::TAB => self.search_focus = false,
+                k => {
+                    if self.search.key(k, m) == cp_ui::textfield::Edit::Changed {
+                        self.scroll[0] = 0.0;
+                    }
+                }
+            }
+            self.mark();
+            return Some(Act::Changed);
+        }
         if vk_code != vk::ESCAPE {
             return None;
         }
@@ -795,8 +903,8 @@ impl View {
             }
             Ev::Up { x, y, b, mods } => self.up(x, y, b, mods),
             Ev::Wheel { x, y, dy, mods, .. } => self.wheel(x, y, dy, mods),
-            Ev::Key { vk, .. } => self.key(vk),
-            Ev::Char(_) => None,
+            Ev::Key { vk, mods, .. } => self.key(vk, mods),
+            Ev::Char(c) => self.char(c),
         }
     }
 
@@ -809,6 +917,10 @@ impl View {
             self.cancel();
         }
         let c = self.hit(x, y);
+        if self.search_focus && c != Ctl::Search {
+            self.search_focus = false;
+            self.mark();
+        }
         if c == Ctl::DockHandle {
             if b == Button::Right {
                 return Some(Act::ViewMenu(x, y));
@@ -868,6 +980,39 @@ impl View {
                     w0,
                 });
                 None
+            }
+            (Ctl::Search, _) => {
+                self.search_focus = true;
+                if dbl {
+                    self.search.select_all();
+                } else {
+                    let t = self.search.text.clone();
+                    self.search.set(&t);
+                }
+                self.mark();
+                Some(Act::Changed)
+            }
+            (Ctl::ScrollBar(z), Some(Look::Scroll { pos, len })) => {
+                let r = self.rect_of(&c)?;
+                let z = *z;
+                let view_h = self.zone_h(z as usize).max(1.0);
+                let content = self.content_h[z as usize];
+                let room = (r.h - len).max(1.0);
+                let k = (content - view_h).max(0.0) / room;
+                // Hors du curseur : il saute la ou l'on clique.
+                if y < r.y + pos || y > r.y + pos + len {
+                    let t = ((y - r.y - len / 2.0) / room).clamp(0.0, 1.0);
+                    self.scroll[z as usize] = t * (content - view_h).max(0.0);
+                    self.clamp_scroll(z as usize);
+                }
+                self.drag = Some(Drag::Scroll {
+                    z,
+                    y0: y,
+                    s0: self.scroll[z as usize],
+                    k,
+                });
+                self.mark();
+                Some(Act::Changed)
             }
             (Ctl::Pad, _) => {
                 let r = self.rect_of(&Ctl::Pad)?;
@@ -1182,6 +1327,12 @@ impl View {
                 Some(Act::Changed)
             }
             Drag::Press { .. } => None,
+            Drag::Scroll { z, y0, s0, k } => {
+                self.scroll[z as usize] = s0 + (y - y0) * k;
+                self.clamp_scroll(z as usize);
+                self.mark();
+                Some(Act::Changed)
+            }
         }
     }
 

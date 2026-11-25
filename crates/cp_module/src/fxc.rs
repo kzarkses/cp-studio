@@ -37,7 +37,7 @@ pub(crate) const PROJ: &str = "CPS_FXC";
 pub(crate) struct CWin {
     pub hwnd: Hwnd,
     pub place: Place,
-    frame: crate::frame::Frame,
+    pub(crate) frame: crate::frame::Frame,
     pub(crate) theme: Theme,
     theme_key: Vec<Option<(u8, u8, u8)>>,
     tracking: bool,
@@ -116,6 +116,24 @@ pub(crate) struct CPart {
     pub(crate) unsaved: std::collections::BTreeMap<String, String>,
     /// Nous rendons la souris nous-memes (pas une perte).
     pub(crate) releasing: bool,
+    /// Les mots qui cachent un parametre (« MIDI »…) : un parametre dont le
+    /// nom en contient un n'est pas montre, sauf s'il est suivi.
+    pub(crate) hide_words: Vec<String>,
+    /// Montrer aussi les parametres caches.
+    pub(crate) show_hidden: bool,
+    /// L'image d'avant (le pas du pad lisse se mesure).
+    pub(crate) last_frame: Option<std::time::Instant>,
+}
+
+/// Les mots caches par defaut : ceux de l'ancienne version.
+pub(crate) const HIDE_DEFAULT: &str = "MIDI,CC,midi,Program,Bank,Channel,Dry,delta,bypass,mix,LFO,SLOT,Mute,Input,Output,InOut,wet,param";
+
+/// Les mots d'une liste separee par des virgules.
+pub(crate) fn hide_words(s: &str) -> Vec<String> {
+    s.split(',')
+        .map(|w| w.trim().to_string())
+        .filter(|w| !w.is_empty())
+        .collect()
 }
 
 impl CPart {
@@ -130,6 +148,7 @@ impl CPart {
         if let Some(s) = r.ext_get(SECTION, "fxc_view") {
             crate::fxc_act::decode_view(&s, &mut view);
         }
+        view.show_hidden = r.ext_get(SECTION, "fxc_show_hidden").as_deref() == Some("1");
         let seed = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(7, |d| d.as_nanos() as u64);
@@ -177,6 +196,13 @@ impl CPart {
             unlinkable: Default::default(),
             unsaved: Default::default(),
             releasing: false,
+            hide_words: hide_words(
+                &r.ext_get(SECTION, "fxc_hide")
+                    .or_else(|| r.ext_get("CP_FXConstellation", "filter_keywords"))
+                    .unwrap_or_else(|| HIDE_DEFAULT.to_string()),
+            ),
+            show_hidden: r.ext_get(SECTION, "fxc_show_hidden").as_deref() == Some("1"),
+            last_frame: None,
         }
     }
 }
@@ -651,23 +677,46 @@ impl App {
                 return;
             };
             w.theme = th;
-            self.fxc.view.mark();
+            self.fxc.view.mark_full();
         }
         let Some(w) = self.fxc.win.as_mut() else {
             return;
         };
         if w.frame.resize(cw, ch) || force {
-            self.fxc.view.mark();
+            self.fxc.view.mark_full();
         }
         if !self.fxc.view.take_dirty() {
             w.frame.show(w.hwnd, &[], &[]);
             return;
         }
         self.fxc_layout(cw as f32, ch as f32);
+        // Seuls les elements qui ont change se repeignent (le pad qui bouge
+        // ne coute que le pad).
+        let damage: Vec<IRect> = match self.fxc.view.damage() {
+            None => vec![IRect::new(0, 0, cw, ch)],
+            Some(rs) => rs
+                .iter()
+                .map(|r| {
+                    let (x0, y0) = (r.x.floor() as i32, r.y.floor() as i32);
+                    let (x1, y1) = ((r.x + r.w).ceil() as i32, (r.y + r.h).ceil() as i32);
+                    IRect::new(x0, y0, x1 - x0, y1 - y0)
+                })
+                .collect(),
+        };
+        self.fxc_count(
+            if damage.len() == 1 && damage[0] == IRect::new(0, 0, cw, ch) {
+                "frame_full"
+            } else {
+                "frame_part"
+            },
+        );
         let Some(w) = self.fxc.win.as_mut() else {
             return;
         };
-        let damage = vec![IRect::new(0, 0, cw, ch)];
+        if damage.is_empty() {
+            w.frame.show(w.hwnd, &[], &[]);
+            return;
+        }
         let view = &self.fxc.view;
         let (text, icons, th) = (&mut self.text, &mut self.icons, &w.theme);
         w.frame.paint(&damage, &mut self.scratch, |cv| {
@@ -765,6 +814,9 @@ impl App {
         }
         self.fxc_sync_tick(down);
         self.fxc_capture_tick();
+        if self.fxc_animating() {
+            self.fxc_want_frames(true);
+        }
         if self.fxc.ticks % 10 == 0 {
             let key: Vec<_> = LOOK.iter().map(|k| self.r.theme_color(k)).collect();
             if let Some(w) = &self.fxc.win {
@@ -775,7 +827,7 @@ impl App {
                         w.theme = th;
                         w.theme_key = key;
                     }
-                    self.fxc.view.mark();
+                    self.fxc.view.mark_full();
                 }
             }
         }
@@ -792,12 +844,13 @@ impl App {
         let md = mods();
         match m.msg {
             WM_CP_FRAME => {
+                let anim = self.fxc_animate();
                 if self.fxc.view.dragging() {
                     self.fxc.view.mark();
                 }
                 self.fxc_render(false);
                 let idle = self.fxc.win.as_ref().is_none_or(|w| w.frame.idle());
-                if !self.fxc.view.dragging() && idle {
+                if !self.fxc.view.dragging() && idle && !anim {
                     self.fxc_want_frames(false);
                 }
                 Some(0)
@@ -818,10 +871,21 @@ impl App {
                             });
                             1
                         }
+                        KeyUse::Text => -1,
                         KeyUse::NotMine => 0,
                     },
+                    // La recherche a le clavier : le caractere va a la
+                    // fenetre (WM_CHAR).
+                    msg::CHAR | msg::SYSCHAR => {
+                        if self.fxc.view.search_focus {
+                            -1
+                        } else {
+                            0
+                        }
+                    }
                     msg::KEYUP | msg::SYSKEYUP => match usage {
                         KeyUse::Eat => 1,
+                        KeyUse::Text => -1,
                         KeyUse::NotMine => 0,
                     },
                     _ => 0,
@@ -834,6 +898,12 @@ impl App {
                     mods: md,
                     text: None,
                 });
+                Some(0)
+            }
+            msg::CHAR => {
+                if let Some(c) = char::from_u32(m.wp as u32) {
+                    self.fxc_feed(Ev::Char(c));
+                }
                 Some(0)
             }
             msg::SIZE => {

@@ -192,6 +192,10 @@ impl App {
             }
             let names = &self.fxc.names[&key];
             let tail = f.nparams.saturating_sub(3);
+            let words = &self.fxc.hide_words;
+            let show_hidden = self.fxc.show_hidden;
+            let model = &self.fxc.t;
+            let mut hidden = 0usize;
             let params = names
                 .iter()
                 .enumerate()
@@ -200,6 +204,20 @@ impl App {
                     // vu-metres.
                     !(*k >= tail && matches!(nm.as_str(), "Bypass" | "Wet" | "Delta"))
                         && !nm.to_lowercase().contains("(meter)")
+                })
+                .filter(|(k, (nm, _))| {
+                    // Un mot cache retire le parametre (jamais un suivi).
+                    if show_hidden || !words.iter().any(|w| nm.contains(w.as_str())) {
+                        return true;
+                    }
+                    let kept = model
+                        .params
+                        .get(&pkey(&f.guid, *k))
+                        .is_some_and(|p| p.sel || !p.srcs.is_empty());
+                    if !kept {
+                        hidden += 1;
+                    }
+                    kept
                 })
                 .map(|(k, (nm, steps))| ParamRow {
                     key: pkey(&f.guid, k),
@@ -216,6 +234,7 @@ impl App {
                 enabled: r.xc_fx_enabled(t, i),
                 detached: detached.contains(&f.guid),
                 params,
+                hidden,
             });
         }
         self.fxc.rows = rows;
@@ -485,6 +504,107 @@ impl App {
             _ => {}
         }
         self.fxc.view.mark();
+    }
+
+    /// Le pad bouge-t-il sans la souris (marche, figure, axe mene, pad
+    /// lisse qui rattrape) ?
+    pub(crate) fn fxc_animating(&self) -> bool {
+        let p = &self.fxc.t.pad;
+        (p.nav_on && p.nav != Nav::Manual && !p.granular)
+            || self.fxc.plan.pad_link_x
+            || self.fxc.plan.pad_link_y
+            || self.fxc.pad_target.is_some()
+    }
+
+    /// Une image de l'ecran : ce qui bouge seul (le pad en marche, lu sur le
+    /// bridge ; le pad lisse) avance d'une image, et les boutons qu'il mene
+    /// suivent. Rend vrai tant que ca bouge.
+    pub(crate) fn fxc_animate(&mut self) -> bool {
+        let now = std::time::Instant::now();
+        let dt = self
+            .fxc
+            .last_frame
+            .map_or(1.0 / 60.0, |t| (now - t).as_secs_f64())
+            .clamp(0.001, 0.05);
+        self.fxc.last_frame = Some(now);
+        if !self.fxc_animating() {
+            self.fxc.last_frame = None;
+            return false;
+        }
+        let Some(t) = self.fxc_tk() else {
+            return false;
+        };
+        let mut moved = false;
+        // Le pad lisse rattrape la souris, au pas de l'image.
+        if let Some(tg) = self.fxc.pad_target {
+            let (lx, ly) = (self.fxc.plan.pad_link_x, self.fxc.plan.pad_link_y);
+            let p = &self.fxc.t.pad;
+            if (lx && ly) || p.granular || p.smooth <= 0.0 {
+                self.fxc.pad_target = None;
+            } else {
+                let (x, y) = cp_fxc::pad::smooth_step((p.x, p.y), tg, p, dt);
+                self.fxc_pad_to(x, y);
+                let ex = if lx { 0.0 } else { (x - tg.0).abs() };
+                let ey = if ly { 0.0 } else { (y - tg.1).abs() };
+                if ex + ey < 0.001 {
+                    self.fxc.pad_target = None;
+                }
+                moved = true;
+            }
+        }
+        // La marche, la figure, un axe mene : la position que joue le
+        // bridge (il la calcule dans le fil audio).
+        let p = &self.fxc.t.pad;
+        let runs = p.nav_on && p.nav != Nav::Manual && !p.granular;
+        let (lx, ly) = (self.fxc.plan.pad_link_x, self.fxc.plan.pad_link_y);
+        if (runs || lx || ly) && !self.fxc.view.gesture_on(&cp_fxcview::Ctl::Pad) {
+            if let Some(b) = self.fxc.chain.find(FxKind::Bridge) {
+                let x = self.r.xc_get_raw(t, b, bridge::X_OUT).0.clamp(0.0, 1.0);
+                let y = self.r.xc_get_raw(t, b, bridge::Y_OUT).0.clamp(0.0, 1.0);
+                let pad = &mut self.fxc.t.pad;
+                if (x - pad.x).abs() > 1e-4 || (y - pad.y).abs() > 1e-4 {
+                    if runs || lx {
+                        pad.x = x;
+                    }
+                    if runs || ly {
+                        pad.y = y;
+                    }
+                    self.fxc.src.insert(-1, x);
+                    self.fxc.src.insert(-2, y);
+                    moved = true;
+                }
+            }
+        }
+        if moved {
+            self.fxc_relive();
+            self.fxc.view.mark();
+        }
+        true
+    }
+
+    /// Les valeurs jouees des parametres a nous, recalculees depuis le
+    /// modele (sans relire l'effet) : le pad vient de bouger.
+    fn fxc_relive(&mut self) {
+        let dests: std::collections::HashSet<(usize, usize)> = self
+            .fxc
+            .plan
+            .links
+            .iter()
+            .map(|l| (l.fx, l.param))
+            .collect();
+        let mut rows = std::mem::take(&mut self.fxc.rows);
+        for row in rows.iter_mut() {
+            let Some(fx) = self.fxc.chain.index_of(&row.guid) else {
+                continue;
+            };
+            for p in row.params.iter_mut() {
+                let linked = dests.contains(&(fx, p.index));
+                if linked && self.fxc.t.params.get(&p.key).is_some_and(|s| s.sel) {
+                    p.live = self.fxc_live(&p.key, p.live, true);
+                }
+            }
+        }
+        self.fxc.rows = rows;
     }
 
     /// La banque globale relue seule.
@@ -1290,7 +1410,8 @@ impl App {
         }
         let full = self.fxc.ticks % 15 == 0;
         // Le pad lisse rattrape la souris.
-        if let Some(tg) = self.fxc.pad_target {
+        let frames = self.fxc.win.as_ref().is_some_and(|w| w.frame.frames_on);
+        if let Some(tg) = self.fxc.pad_target.filter(|_| !frames) {
             let (lx, ly) = (self.fxc.plan.pad_link_x, self.fxc.plan.pad_link_y);
             let p = &self.fxc.t.pad;
             if (lx && ly) || p.granular || p.smooth <= 0.0 {

@@ -1,4 +1,9 @@
 //! Les elements d'une image : ou est chaque controle, et de quoi il a l'air.
+//!
+//! La grammaire (2026-11-25, la maquette validee par Cedric) : des cartes
+//! posees sur le fond, une marge et une bordure fine ; des icones plutot que
+//! des mots, l'explication dans l'infobulle ; des choix segmentes ; le pad
+//! sur une grille fixe.
 
 use cp_fxc::links::mod_window;
 use cp_fxc::model::{FIGURES, Nav, PState, WALK_SYNCS};
@@ -34,12 +39,21 @@ pub enum F {
 /// Les fonds.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Shade {
+    /// Les barres du haut et du bas.
     Bar,
+    /// Le fond de la fenetre.
     Zone,
+    /// Une carte posee sur le fond : coins ronds, bordure fine.
     Card,
+    /// Un creux (un champ, un affichage).
     Sunk,
+    /// L'en-tete d'une carte d'effet.
     Head,
-    /// Une teinte donnee (une rangee menee par la source survolee).
+    /// Une case dans une carte (un parametre).
+    Well,
+    /// La ou l'on depose un en-tete d'effet (tirets).
+    Drop,
+    /// Une teinte donnee (une case suivie, menee par la source survolee).
     Tint(Color),
 }
 
@@ -74,6 +88,7 @@ pub enum Look {
     /// Une part d'un choix segmente.
     Seg {
         label: String,
+        icon: Option<Icon>,
         sel: bool,
         first: bool,
         last: bool,
@@ -99,6 +114,8 @@ pub enum Look {
         /// Pulse dans cette couleur (la source survolee la mene).
         hl: Option<Color>,
         size: f32,
+        /// Un parametre que FX Constellation ne suit pas : estompe.
+        dim: bool,
     },
     Fader {
         v: f64,
@@ -157,6 +174,45 @@ pub enum Look {
         dots: Vec<(Color, bool)>,
         label: String,
     },
+    /// Un interrupteur a icone (une forme, un axe de ROLL).
+    IconChip {
+        icon: Icon,
+        on: bool,
+        enabled: bool,
+        /// La couleur allumee (sinon l'accent).
+        color: Option<Color>,
+    },
+    /// Un axe du pad : sa valeur, ce qui le mene.
+    Pill {
+        color: Color,
+        label: String,
+        driven: bool,
+    },
+    /// Le curseur d'une barre de defilement (debut, longueur dans la piste).
+    Scroll {
+        pos: f32,
+        len: f32,
+    },
+    /// Le champ de recherche (le texte vit dans la vue).
+    Search {
+        focus: bool,
+    },
+    /// Un petit compte dans une pastille.
+    Badge {
+        text: String,
+        color: Color,
+    },
+    /// Une icone posee (decor).
+    Glyph {
+        icon: Icon,
+        color: Color,
+    },
+    /// La forme d'un LFO en grand, et ou il en est.
+    Wave {
+        pts: Vec<(f32, f32)>,
+        color: Color,
+        phase: Option<(f32, f32)>,
+    },
 }
 
 /// Ce que le pad dessine.
@@ -172,6 +228,8 @@ pub struct PadLook {
     pub drive_x: Option<Color>,
     pub drive_y: Option<Color>,
     pub figure: Option<Vec<(f64, f64)>>,
+    /// Le pad bouge seul (marche, figure) : son sillage se dessine.
+    pub runs: bool,
 }
 
 /// Un element de l'image.
@@ -211,6 +269,18 @@ impl B<'_> {
     pub fn panel(&mut self, r: R, sh: Shade) {
         self.push(r, Ctl::None, Look::Panel(sh), "");
     }
+    /// Une carte dont la hauteur se saura apres : son indice, pour
+    /// [`B::close`].
+    pub fn open_card(&mut self, x: f32, y: f32, w: f32) -> usize {
+        self.panel(R::new(x, y, w, 0.0), Shade::Card);
+        self.items.len() - 1
+    }
+    /// La carte ouverte s'arrete a `bottom`.
+    pub fn close(&mut self, i: usize, bottom: f32) {
+        if let Some(it) = self.items.get_mut(i) {
+            it.r.h = (bottom - self.dy - it.r.y).max(0.0);
+        }
+    }
     pub fn text(&mut self, r: R, s: &str, font: F, color: Color, align: Align) {
         self.push(
             r,
@@ -237,6 +307,10 @@ impl B<'_> {
             },
             tip,
         );
+    }
+    /// Un bouton d'icone seule.
+    pub fn icon_btn(&mut self, r: R, ctl: Ctl, icon: Icon, on: bool, tip: &str) {
+        self.button(r, ctl, "", Some(icon), on, tip);
     }
     #[allow(clippy::too_many_arguments)]
     pub fn button_ex(
@@ -277,6 +351,22 @@ impl B<'_> {
             tip,
         );
     }
+    pub fn icon_chip(&mut self, r: R, ctl: Ctl, icon: Icon, on: bool, tip: &str) {
+        self.push(
+            r,
+            ctl,
+            Look::IconChip {
+                icon,
+                on,
+                enabled: true,
+                color: None,
+            },
+            tip,
+        );
+    }
+    pub fn glyph(&mut self, r: R, icon: Icon, color: Color) {
+        self.push(r, Ctl::None, Look::Glyph { icon, color }, "");
+    }
     /// Un choix segmente : une part par etiquette.
     pub fn seg(
         &mut self,
@@ -286,11 +376,23 @@ impl B<'_> {
         ctl: impl Fn(usize) -> Ctl,
         tips: &[&str],
     ) {
-        let n = labels.len().max(1) as f32;
+        let parts: Vec<(Option<Icon>, &str)> = labels.iter().map(|l| (None, *l)).collect();
+        self.seg_ic(r, &parts, sel, ctl, tips);
+    }
+    /// Un choix segmente a icones (et etiquettes, vides si l'icone suffit).
+    pub fn seg_ic(
+        &mut self,
+        r: R,
+        parts: &[(Option<Icon>, &str)],
+        sel: usize,
+        ctl: impl Fn(usize) -> Ctl,
+        tips: &[&str],
+    ) {
+        let n = parts.len().max(1) as f32;
         let pw = (r.w / n).floor();
-        for (i, l) in labels.iter().enumerate() {
+        for (i, (ic, l)) in parts.iter().enumerate() {
             let x = r.x + pw * i as f32;
-            let w = if i + 1 == labels.len() {
+            let w = if i + 1 == parts.len() {
                 r.right() - x
             } else {
                 pw
@@ -300,9 +402,10 @@ impl B<'_> {
                 ctl(i),
                 Look::Seg {
                     label: l.to_string(),
+                    icon: *ic,
                     sel: i == sel,
                     first: i == 0,
-                    last: i + 1 == labels.len(),
+                    last: i + 1 == parts.len(),
                 },
                 tips.get(i).copied().unwrap_or(""),
             );
@@ -334,9 +437,15 @@ impl B<'_> {
                 value: value.to_string(),
                 hl: None,
                 size: r.w.min(r.h),
+                dim: false,
             },
             tip,
         );
+    }
+    /// Une etiquette de section (petites capitales estompees).
+    pub fn label(&mut self, r: R, s: &str) {
+        let c = self.th.text_dim;
+        self.text(r, s, F::Small, c, Align::Left);
     }
 }
 
@@ -360,6 +469,14 @@ pub(crate) fn src_color(th: &Theme, slot: i32) -> Color {
     col(color(slot, accent8(th)))
 }
 
+/// La marge des cartes, l'ecart entre elles.
+fn pad_of(b: &B) -> f32 {
+    b.s(10.0)
+}
+fn gap_of(b: &B) -> f32 {
+    b.s(8.0)
+}
+
 pub(crate) fn build(v: &View, d: &Data, th: &Theme, w: f32, h: f32) -> (Vec<Item>, [f32; 5]) {
     let mut b = B {
         items: Vec::with_capacity(512),
@@ -370,28 +487,28 @@ pub(crate) fn build(v: &View, d: &Data, th: &Theme, w: f32, h: f32) -> (Vec<Item
     let mut content = [0.0f32; 5];
     b.panel(R::new(0.0, 0.0, w, h), Shade::Zone);
     // Etroite, la barre de commande passe sur deux rangees.
-    let row_h = b.s(32.0);
+    let row_h = b.s(40.0);
     let two = w < b.s(1240.0);
     let bar_h = if two { 2.0 * row_h } else { row_h };
-    let info_h = b.s(24.0);
+    let info_h = b.s(28.0);
     command_bar(&mut b, v, d, w, row_h, two);
     info_bar(&mut b, v, d, w, h - info_h, info_h);
     let Some(_) = d.track else {
         let r = R::new(0.0, bar_h, w, h - bar_h - info_h);
         b.text(
             R::new(r.x, r.cy() - b.s(14.0), r.w, b.s(20.0)),
-            "No track selected.",
+            "No track selected",
             F::Bold,
-            th.text,
+            th.text_dim,
             Align::Center,
         );
         return (b.items, content);
     };
-    let gap = b.s(6.0);
+    let gap = gap_of(&b);
     let body = R::new(0.0, bar_h, w, (h - bar_h - info_h).max(0.0));
     let lw = b.s(v.left_w).min((w * 0.4).max(b.s(160.0)));
     let rw = if v.rack_fold {
-        b.s(18.0)
+        b.s(28.0)
     } else {
         b.s(v.right_w).min((w * 0.4).max(b.s(160.0)))
     };
@@ -422,7 +539,36 @@ pub(crate) fn build(v: &View, d: &Data, th: &Theme, w: f32, h: f32) -> (Vec<Item
     content[0] = center_zone(&mut b, v, d, center, &mut content);
     content[1] = rack(&mut b, v, d, right);
     dress_internal(&mut b.items, v, d, th);
+    scroll_bars(&mut b, v, &content);
     (b.items, content)
+}
+
+/// Une barre de defilement par zone qui deborde (posee par-dessus).
+fn scroll_bars(b: &mut B, v: &View, content: &[f32; 5]) {
+    let clips: Vec<(u8, R)> = b
+        .items
+        .iter()
+        .filter_map(|i| match i.look {
+            Look::Clip(z) => Some((z, i.r)),
+            _ => None,
+        })
+        .collect();
+    let bw = b.s(6.0);
+    for (z, r) in clips {
+        let c = content[z as usize];
+        if c <= r.h + 1.0 || r.h < b.s(30.0) {
+            continue;
+        }
+        let len = (r.h * r.h / c).clamp(b.s(24.0).min(r.h), r.h);
+        let max = (c - r.h).max(1.0);
+        let pos = (r.h - len) * (v.scroll[z as usize] / max).clamp(0.0, 1.0);
+        b.push(
+            R::new(r.right() - bw - b.s(1.0), r.y, bw, r.h),
+            Ctl::ScrollBar(z),
+            Look::Scroll { pos, len },
+            "",
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -435,54 +581,70 @@ fn command_bar(b: &mut B, v: &View, d: &Data, w: f32, bh: f32, two: bool) {
         R::new(0.0, 0.0, w, if two { 2.0 * bh } else { bh }),
         Shade::Bar,
     );
-    let s = th.scale;
-    let ch = bh - 2.0 * b.s(5.0);
-    let mut y = b.s(5.0);
-    let mut x = b.s(8.0);
+    let ch = b.s(28.0);
+    let sq = ch;
+    let mut y = (bh - ch) / 2.0;
+    let mut x = b.s(10.0);
     let narrow = w < b.s(1000.0);
-    let title = if narrow { "" } else { "FX Constellation" };
-    b.text(
-        R::new(x, 0.0, tw(th, title), bh),
-        title,
-        F::Bold,
-        th.text,
-        Align::Left,
-    );
-    x += tw(th, title);
-    let tn = d.track.map_or("· no track".to_string(), |t| {
+    if !narrow {
+        let t = "FX Constellation";
+        b.text(
+            R::new(x, 0.0, tw(th, t), bh),
+            t,
+            F::Bold,
+            th.text,
+            Align::Left,
+        );
+        x += tw(th, t) + b.s(4.0);
+    }
+    // La piste suivie, et le verrou.
+    let name = d.track.map_or("—".to_string(), |t| {
         if t.is_empty() {
-            "· —".into()
+            "—".into()
         } else {
-            format!("· {t}")
+            t.to_string()
         }
     });
-    let tnw = tw(th, &tn).min(b.s(180.0));
-    b.text(
-        R::new(x, 0.0, tnw, bh),
-        &tn,
-        F::Normal,
-        th.text_dim,
-        Align::Left,
+    let fw = (tw(th, &name) + sq).clamp(b.s(90.0), b.s(220.0));
+    b.push(
+        R::new(x, y, fw, ch),
+        Ctl::None,
+        Look::Field {
+            text: name.clone(),
+            modified: false,
+            muted: d.track.is_none(),
+        },
+        "",
     );
-    x += tnw + b.s(8.0);
+    b.icon_btn(
+        R::new(
+            x + fw - sq + b.s(2.0),
+            y + b.s(2.0),
+            sq - b.s(4.0),
+            ch - b.s(4.0),
+        ),
+        Ctl::Lock,
+        if d.locked { Icon::Lock } else { Icon::LockOpen },
+        d.locked,
+        "Lock: stay on this track whatever REAPER selects",
+    );
+    x += fw + b.s(12.0);
     // Le preset.
-    let sq = ch;
-    b.button(
+    b.icon_btn(
         R::new(x, y, sq, ch),
         Ctl::PresetPrev,
-        "",
-        Some(Icon::ChevronLeft),
+        Icon::ChevronLeft,
         false,
         "Previous preset",
     );
-    x += sq;
-    let pw = b.s(150.0);
+    x += sq + b.s(2.0);
+    let pw = b.s(170.0);
     b.push(
         R::new(x, y, pw, ch),
         Ctl::PresetField,
         Look::Field {
             text: if d.preset.is_empty() {
-                "no preset".into()
+                "No preset".into()
             } else {
                 d.preset.to_string()
             },
@@ -499,36 +661,35 @@ fn command_bar(b: &mut B, v: &View, d: &Data, w: f32, bh: f32, two: bool) {
             )
         },
     );
-    x += pw;
-    b.button(
+    x += pw + b.s(2.0);
+    b.icon_btn(
         R::new(x, y, sq, ch),
         Ctl::PresetNext,
-        "",
-        Some(Icon::ChevronRight),
+        Icon::ChevronRight,
         false,
         "Next preset",
     );
     x += sq + b.s(2.0);
-    b.button(
+    b.icon_btn(
         R::new(x, y, sq, ch),
         Ctl::PresetSave,
-        "",
-        Some(Icon::Save),
+        Icon::Save,
         false,
         "Save the preset",
     );
-    x += sq + b.s(10.0);
-    // Le snapshot.
-    b.button(
+    x += sq + b.s(12.0);
+    // Les snapshots du preset.
+    b.glyph(R::new(x, y, b.s(18.0), ch), Icon::Camera, th.text_dim);
+    x += b.s(22.0);
+    b.icon_btn(
         R::new(x, y, sq, ch),
         Ctl::SnapPrev,
-        "",
-        Some(Icon::ChevronLeft),
+        Icon::ChevronLeft,
         false,
         "Previous snapshot",
     );
-    x += sq;
-    let sw = b.s(112.0);
+    x += sq + b.s(2.0);
+    let sw = b.s(120.0);
     b.push(
         R::new(x, y, sw, ch),
         Ctl::SnapField,
@@ -539,12 +700,11 @@ fn command_bar(b: &mut B, v: &View, d: &Data, w: f32, bh: f32, two: bool) {
         },
         "Snapshots: the mapping and the pad, inside the preset",
     );
-    x += sw;
-    b.button(
+    x += sw + b.s(2.0);
+    b.icon_btn(
         R::new(x, y, sq, ch),
         Ctl::SnapNext,
-        "",
-        Some(Icon::ChevronRight),
+        Icon::ChevronRight,
         false,
         "Next snapshot",
     );
@@ -559,27 +719,45 @@ fn command_bar(b: &mut B, v: &View, d: &Data, w: f32, bh: f32, two: bool) {
         Tone::Normal,
         "Capture a new snapshot",
     );
-    x += sq + b.s(10.0);
-    let lw = b.s(64.0);
-    b.button_ex(
-        R::new(x, y, lw, ch),
-        Ctl::Lock,
-        if d.locked { "Locked" } else { "Lock" },
-        Some(if d.locked { Icon::Lock } else { Icon::LockOpen }),
-        d.locked,
-        true,
-        Tone::Normal,
-        "Lock: stay on this track whatever REAPER selects",
+    x += sq + b.s(12.0);
+    if let Some(m) = d.morph {
+        let mw = b.s(110.0);
+        b.push(
+            R::new(x, y + b.s(8.0), mw, ch - b.s(16.0)),
+            Ctl::Morph,
+            Look::Fader {
+                v: m,
+                label: String::new(),
+                enabled: true,
+            },
+            "Morph between the A and B captures",
+        );
+    }
+    // A droite : les modes du pad, la capture, les reglages, l'aide.
+    if two {
+        y += bh;
+    }
+    let mut rx = w - b.s(10.0);
+    rx -= sq;
+    b.icon_btn(R::new(rx, y, sq, ch), Ctl::Help, Icon::Help, false, "Help");
+    rx -= sq + b.s(2.0);
+    b.icon_btn(
+        R::new(rx, y, sq, ch),
+        Ctl::Settings,
+        Icon::Settings,
+        false,
+        "Settings",
     );
-    x += lw + b.s(4.0);
-    let cw = b.s(78.0);
+    rx -= b.s(12.0);
+    let cw = if d.capture > 0 { b.s(46.0) } else { sq };
+    rx -= cw;
     b.button_ex(
-        R::new(x, y, cw, ch),
+        R::new(rx, y, cw, ch),
         Ctl::Capture,
         &if d.capture > 0 {
-            format!("Capture {}", d.capture)
+            d.capture.to_string()
         } else {
-            "Capture".to_string()
+            String::new()
         },
         Some(Icon::Circle),
         false,
@@ -591,28 +769,16 @@ fn command_bar(b: &mut B, v: &View, d: &Data, w: f32, bh: f32, two: bool) {
         },
         "Capture to envelopes: the armed pad axes and macros are written while REAPER plays",
     );
-    x += cw + b.s(10.0);
-    if two {
-        x = b.s(8.0);
-        y += bh;
-    }
-    let gw = b.s(140.0);
-    let gran = d.t.pad.granular;
-    b.seg(
-        R::new(x, y, gw, ch),
-        &["Single", "Granular"],
-        gran as usize,
-        |i| Ctl::Granular(i == 1),
+    rx -= b.s(12.0);
+    let segw = b.s(36.0);
+    rx -= 3.0 * segw;
+    b.seg_ic(
+        R::new(rx, y, 3.0 * segw, ch),
         &[
-            "Single: the pad moves each param from its base",
-            "Granular: the pad blends random grain points",
+            (Some(Icon::Hand), ""),
+            (Some(Icon::Footprints), ""),
+            (Some(Icon::Spline), ""),
         ],
-    );
-    x += gw + b.s(8.0);
-    let nw = b.s(190.0);
-    b.seg(
-        R::new(x, y, nw, ch),
-        &["Manual", "Walk", "Figures"],
         d.t.pad.nav as usize,
         |i| Ctl::Nav(i as u8),
         &[
@@ -621,209 +787,98 @@ fn command_bar(b: &mut B, v: &View, d: &Data, w: f32, bh: f32, two: bool) {
             "Figures: the pad draws a figure (click again to restart it)",
         ],
     );
-    x += nw + b.s(8.0);
-    if let Some(m) = d.morph {
-        let mw = b.s(110.0);
-        b.push(
-            R::new(x, y, mw, ch),
-            Ctl::Morph,
-            Look::Fader {
-                v: m,
-                label: "A → B".into(),
-                enabled: true,
-            },
-            "Morph between the A and B captures",
-        );
-    }
-    // A droite : l'aide et les reglages.
-    let rx = w - b.s(8.0) - 2.0 * sq - b.s(2.0);
-    b.button(
-        R::new(rx, y, sq, ch),
-        Ctl::Settings,
-        "",
-        Some(Icon::Settings),
-        false,
-        "Settings",
+    rx -= b.s(8.0) + 2.0 * segw;
+    b.seg_ic(
+        R::new(rx, y, 2.0 * segw, ch),
+        &[(Some(Icon::Crosshair), ""), (Some(Icon::Grid), "")],
+        d.t.pad.granular as usize,
+        |i| Ctl::Granular(i == 1),
+        &[
+            "Single: the pad moves each param from its base",
+            "Granular: the pad blends random grain points",
+        ],
     );
-    b.button(
-        R::new(rx + sq + b.s(2.0), y, sq, ch),
-        Ctl::Help,
-        "",
-        Some(Icon::Help),
-        false,
-        "Help",
-    );
-    let _ = (v, s);
+    let _ = v;
 }
 
 // ---------------------------------------------------------------------------
-// La barre d'etat
+// La barre du bas
 // ---------------------------------------------------------------------------
 
 fn info_bar(b: &mut B, v: &View, d: &Data, w: f32, y: f32, ih: f32) {
     let th = b.th;
     b.panel(R::new(0.0, y, w, ih), Shade::Bar);
     let (rw0, _) = v.dock.reserve(w, y + ih, th.scale);
-    let x0 = b.s(8.0) + rw0;
-    let msg = d.msg.map(|s| s.to_string()).unwrap_or_else(|| {
-        format!(
-            "{} tracked · {} links · {} modulated",
-            d.t.tracked_count(),
-            d.links,
-            d.modulated
-        )
-    });
-    let col_msg = if d.msg.is_some() {
-        th.accent
+    let mut x = b.s(10.0) + rw0;
+    let isz = b.s(14.0);
+    if let Some(m) = d.msg {
+        b.text(
+            R::new(x, y, (w * 0.5).max(b.s(200.0)), ih),
+            m,
+            F::Small,
+            th.accent,
+            Align::Left,
+        );
     } else {
-        th.text_dim
-    };
-    b.text(
-        R::new(x0, y, b.s(320.0), ih),
-        &msg,
-        F::Small,
-        col_msg,
-        Align::Left,
-    );
-    let mut x = w - b.s(8.0);
-    let ch = ih - b.s(6.0);
-    let cy = y + b.s(3.0);
-    // Les axes du pad : pastille de reception, cadran, et sa pastille de
-    // source.
-    for axis in [1u8, 0u8] {
-        let slot = if axis == 0 {
-            d.t.pad.src_x
-        } else {
-            d.t.pad.src_y
-        };
-        let name = if axis == 0 { "X" } else { "Y" };
-        let pw = b.s(70.0);
-        x -= pw;
-        let (label, c) = if slot != 0 {
-            (format!("{name} {}", short_label(slot)), src_color(th, slot))
-        } else {
-            (format!("{name} free"), th.text_dim)
-        };
-        b.push(
-            R::new(x, cy, pw, ch),
-            Ctl::Pill(axis),
-            Look::Chip {
-                label,
-                on: slot != 0,
-                standby: false,
-                amber: false,
-                enabled: true,
-            },
-            &if slot != 0 {
-                format!(
-                    "Pad {name} is driven by {}\nClick: free it",
-                    long_label(slot)
-                )
-            } else {
-                format!("Drop a source here to drive pad {name}")
-            },
-        );
-        let _ = c;
-        x -= b.s(4.0);
-        let ks = ih - b.s(2.0);
-        x -= ks;
-        let pv = if axis == 0 { d.t.pad.x } else { d.t.pad.y };
-        b.push(
-            R::new(x, y + b.s(1.0), ks, ks),
-            Ctl::AxisKnob(axis),
-            Look::Knob {
-                v: pv,
-                depth: 0.0,
-                bipolar: false,
-                enabled: slot == 0,
-                rings: Vec::new(),
-                live: None,
-                label: String::new(),
-                value: String::new(),
-                hl: None,
-                size: ks,
-            },
-            &format!("Pad {name}: {pv:.2}\nDrag its dot onto a knob to modulate it"),
-        );
-        let ds = b.s(9.0);
-        b.push(
-            R::new(x + ks - ds * 0.6, y + ih - ds - b.s(1.0), ds, ds),
-            Ctl::AxisDot(axis),
-            Look::Dot {
-                color: src_color(th, if axis == 0 { -1 } else { -2 }),
-                hollow: false,
-            },
-            &format!("Pad {name}: drag onto a knob to modulate it"),
-        );
-        x -= b.s(10.0);
+        for (ic, n) in [
+            (Icon::ListChecks, d.t.tracked_count()),
+            (Icon::Link, d.links),
+            (Icon::Activity, d.modulated),
+        ] {
+            b.glyph(R::new(x, y, isz, ih), ic, th.text_dim);
+            x += isz + b.s(5.0);
+            let t = n.to_string();
+            b.text(
+                R::new(x, y, tw(th, &t), ih),
+                &t,
+                F::Small,
+                th.text_dim,
+                Align::Left,
+            );
+            x += tw(th, &t) + b.s(6.0);
+        }
     }
-    let pl = "PAD ←";
-    let plw = tw(th, pl);
-    x -= plw;
-    b.text(
-        R::new(x, y, plw, ih),
-        pl,
-        F::Small,
-        th.text_faint,
-        Align::Right,
+    let bs = ih - b.s(4.0);
+    let mut rx = w - b.s(8.0) - bs;
+    b.icon_btn(
+        R::new(rx, y + b.s(2.0), bs, bs),
+        Ctl::StopEngines,
+        Icon::Stop,
+        false,
+        "Stop Walk and Figures on every track (links stay)",
     );
-    x -= b.s(10.0);
-    let eng = if d.t.pad.granular {
-        "engine: script (granular)"
-    } else if d.bridge {
-        "engine: native links"
-    } else {
-        "engine: no bridge"
-    };
-    let ew = tw(th, eng);
-    x -= ew;
-    b.text(
-        R::new(x, y, ew, ih),
-        eng,
-        F::Small,
-        if d.bridge && !d.t.pad.granular {
-            th.accent
-        } else {
-            th.text_faint
-        },
-        Align::Right,
+    rx -= bs + b.s(2.0);
+    b.icon_btn(
+        R::new(rx, y + b.s(2.0), bs, bs),
+        Ctl::ReleaseLinks,
+        Icon::Unlink,
+        false,
+        "Release every FX Constellation link of this track (values stay)",
     );
-    for (ctl, l, tip) in [
-        (
-            Ctl::StopEngines,
-            "Stop all engines",
-            "Stop Walk and Figures on every track (links stay)",
-        ),
-        (
-            Ctl::ReleaseLinks,
-            "Release all links",
-            "Release every FX Constellation link of this track (values stay)",
-        ),
-    ] {
-        let bw = tw(th, l);
-        x -= bw + b.s(6.0);
-        b.button(R::new(x, cy, bw, ch), ctl, l, None, false, tip);
-    }
 }
 
 // ---------------------------------------------------------------------------
-// La zone de gauche : pad, pied, navigation, ROLL, macros
+// La colonne de gauche : le pad, son mouvement, ROLL, les macros
 // ---------------------------------------------------------------------------
 
 fn left_zone(b: &mut B, v: &View, d: &Data, r: R) -> f32 {
     let th = b.th;
-    b.panel(r, Shade::Zone);
     b.push(r, Ctl::None, Look::Clip(2), "");
     b.clip = Some(2);
     b.dy = v.scroll[2];
-    let pad_in = b.s(2.0);
-    let x = r.x + pad_in;
-    let w = r.w - 2.0 * pad_in;
+    let cp = pad_of(b);
+    let gap = gap_of(b);
+    let x = r.x;
+    let w = r.w;
+    let iw = w - 2.0 * cp;
+    let ix = x + cp;
     let mut y = r.y;
     let p = &d.t.pad;
-    // Le pad : un carre.
-    let side = w.min((r.h * 0.5).max(b.s(80.0))).max(b.s(80.0));
-    let pr = R::new(x + (w - side) / 2.0, y, side, side);
+    // Le pad : un carre, et ses deux axes.
+    let side = iw.min((r.h * 0.52).max(b.s(120.0))).max(b.s(80.0));
+    let card = b.open_card(x, y, w);
+    y += cp;
+    let pr = R::new(ix + (iw - side) / 2.0, y, side, side);
     let grains = if p.granular {
         d.t.grains.iter().map(|g| (g.x, g.y)).collect()
     } else {
@@ -850,57 +905,98 @@ fn left_zone(b: &mut B, v: &View, d: &Data, r: R) -> f32 {
             drive_x: d.plan.pad_link_x.then(|| src_color(th, p.src_x)),
             drive_y: d.plan.pad_link_y.then(|| src_color(th, p.src_y)),
             figure,
+            runs: d.engine_runs,
         }),
         "Drag: move the pad · right-drag: draw a zone · right-click: clear it",
     );
-    y += side + b.s(4.0);
-    // Le pied.
-    let rh = b.s(20.0);
-    let foot = format!("{:.2}, {:.2}", p.x, p.y);
-    b.text(
-        R::new(x, y, b.s(80.0), rh),
-        &foot,
-        F::Small,
-        th.text_dim,
-        Align::Left,
-    );
-    let anc = format!("anchor {:.2}, {:.2}", p.ax, p.ay);
-    b.text(
-        R::new(x + b.s(78.0), y, b.s(110.0), rh),
-        &anc,
-        F::Small,
-        th.text_faint,
-        Align::Left,
-    );
-    let rbw = b.s(48.0);
-    b.button(
-        R::new(x + w - rbw, y, rbw, rh),
+    y += side + b.s(8.0);
+    let rh = b.s(26.0);
+    let mut px = ix;
+    for axis in [0u8, 1u8] {
+        let slot = if axis == 0 { p.src_x } else { p.src_y };
+        let name = if axis == 0 { "X" } else { "Y" };
+        let pv = if axis == 0 { p.x } else { p.y };
+        let pw = b.s(92.0);
+        let label = if slot != 0 {
+            format!("{name}  {}", short_label(slot))
+        } else {
+            format!("{name}  {pv:.2}")
+        };
+        b.push(
+            R::new(px, y, pw, rh),
+            Ctl::Pill(axis),
+            Look::Pill {
+                color: src_color(
+                    th,
+                    if slot != 0 {
+                        slot
+                    } else if axis == 0 {
+                        -1
+                    } else {
+                        -2
+                    },
+                ),
+                label,
+                driven: slot != 0,
+            },
+            &if slot != 0 {
+                format!(
+                    "Pad {name} is driven by {}\nClick: free it",
+                    long_label(slot)
+                )
+            } else {
+                format!("Pad {name}: {pv:.2}\nDrop a source here to drive it")
+            },
+        );
+        let ds = b.s(12.0);
+        b.push(
+            R::new(px + b.s(7.0), y + (rh - ds) / 2.0, ds, ds),
+            Ctl::AxisDot(axis),
+            Look::Dot {
+                color: src_color(th, if axis == 0 { -1 } else { -2 }),
+                hollow: false,
+            },
+            &format!("Pad {name}: drag onto a knob to modulate it"),
+        );
+        px += pw + b.s(6.0);
+    }
+    let sq = rh;
+    b.icon_btn(
+        R::new(ix + iw - sq, y, sq, sq),
         Ctl::PadReset,
-        "Reset",
-        None,
+        Icon::Locate,
         false,
         "Pad and anchor back to the center",
     );
     if p.has_zone() {
-        b.button(
-            R::new(x + w - rbw - b.s(52.0), y, b.s(48.0), rh),
+        b.icon_btn(
+            R::new(ix + iw - 2.0 * sq - b.s(2.0), y, sq, sq),
             Ctl::ZoneClear,
-            "Zone",
-            Some(Icon::X),
-            false,
-            "Clear the zone. Right-drag on the pad draws a new one, a plain right-click clears it.",
+            Icon::Scan,
+            true,
+            "Clear the zone (right-drag on the pad draws a new one)",
         );
     }
-    y += rh + b.s(6.0);
-    b.push(R::new(x, y, w, 1.0), Ctl::None, Look::Sep, "");
-    y += b.s(6.0);
-    // La navigation.
-    let kh = b.s(52.0);
-    let kw = (w / 4.0).floor();
+    y += rh + cp;
+    b.close(card, y);
+    y += gap;
+    // Le mouvement du pad.
+    let card = b.open_card(x, y, w);
+    y += cp;
+    let hh = b.s(24.0);
+    let (nic, nname) = match p.nav {
+        Nav::Manual => (Icon::Hand, "MANUAL"),
+        Nav::Walk => (Icon::Footprints, "WALK"),
+        Nav::Figures => (Icon::Spline, "FIGURES"),
+    };
+    b.glyph(R::new(ix, y, b.s(16.0), hh), nic, th.accent);
+    b.label(R::new(ix + b.s(22.0), y, b.s(90.0), hh), nname);
+    let kh = b.s(58.0);
+    let kw = (iw / 4.0).floor();
     let knob =
         |b: &mut B, i: usize, y: f32, f: PadF, v: f64, label: &str, val: String, tip: &str| {
             b.knob(
-                R::new(x + kw * i as f32, y, kw, kh),
+                R::new(ix + kw * i as f32, y, kw, kh),
                 Ctl::PadField(f),
                 v,
                 label,
@@ -912,6 +1008,7 @@ fn left_zone(b: &mut B, v: &View, d: &Data, r: R) -> f32 {
         };
     match p.nav {
         Nav::Manual => {
+            y += hh + b.s(4.0);
             knob(
                 b,
                 0,
@@ -935,23 +1032,23 @@ fn left_zone(b: &mut B, v: &View, d: &Data, r: R) -> f32 {
             y += kh;
         }
         Nav::Walk => {
+            let sync_w = b.s(64.0);
             b.chip(
-                R::new(x, y, b.s(56.0), rh),
-                Ctl::WalkJump,
-                "Jump",
-                p.walk_jump,
-                true,
-                "Jump: teleport to each new point",
-            );
-            b.chip(
-                R::new(x + b.s(60.0), y, b.s(80.0), rh),
+                R::new(ix + iw - sync_w, y + b.s(1.0), sync_w, hh - b.s(2.0)),
                 Ctl::WalkSync,
                 WALK_SYNCS[p.walk_sync as usize % 6],
                 p.walk_sync > 0,
                 true,
                 "Walk timing: free (Hz) or synced to the tempo",
             );
-            y += rh + b.s(4.0);
+            b.icon_chip(
+                R::new(ix + iw - sync_w - b.s(4.0) - hh, y, hh, hh),
+                Ctl::WalkJump,
+                Icon::Zap,
+                p.walk_jump,
+                "Jump: teleport to each new point",
+            );
+            y += hh + b.s(4.0);
             if p.walk_sync == 0 {
                 knob(
                     b,
@@ -977,10 +1074,11 @@ fn left_zone(b: &mut B, v: &View, d: &Data, r: R) -> f32 {
             }
         }
         Nav::Figures => {
-            let cell = b.s(28.0);
+            y += hh + b.s(4.0);
+            let cell = b.s(26.0);
             for (i, name) in FIGURES.iter().enumerate() {
                 b.chip(
-                    R::new(x + (cell + b.s(3.0)) * i as f32, y, cell, cell),
+                    R::new(ix + (cell + b.s(4.0)) * i as f32, y, cell, cell),
                     Ctl::Figure(i as u8),
                     &name[..1],
                     p.fig_mode == i as u8,
@@ -988,7 +1086,7 @@ fn left_zone(b: &mut B, v: &View, d: &Data, r: R) -> f32 {
                     name,
                 );
             }
-            y += cell + b.s(4.0);
+            y += cell + b.s(6.0);
             knob(
                 b,
                 0,
@@ -1012,103 +1110,110 @@ fn left_zone(b: &mut B, v: &View, d: &Data, r: R) -> f32 {
             y += kh;
         }
     }
-    y += b.s(4.0);
-    b.text(
-        R::new(x, y, b.s(48.0), rh),
-        "Range",
-        F::Small,
+    let rrh = b.s(22.0);
+    b.glyph(
+        R::new(ix, y, b.s(14.0), rrh),
+        Icon::MoveHorizontal,
         th.text_dim,
-        Align::Left,
     );
     b.push(
-        R::new(x + b.s(50.0), y + b.s(4.0), w - b.s(50.0), rh - b.s(8.0)),
+        R::new(
+            ix + b.s(24.0),
+            y + b.s(7.0),
+            iw - b.s(28.0),
+            rrh - b.s(14.0),
+        ),
         Ctl::GRange,
         Look::Range {
             lo: p.gmin,
             hi: p.gmax,
         },
-        "Range: granular values are drawn between these bounds",
+        "Range: how far the values may go",
     );
-    y += rh + b.s(4.0);
+    y += rrh;
     if p.granular {
+        y += b.s(6.0);
         b.chip(
-            R::new(x, y, b.s(60.0), rh),
+            R::new(ix, y, b.s(60.0), rrh + b.s(4.0)),
             Ctl::GrainGrid,
             &format!("{0}x{0}", p.grid),
             true,
             true,
             "Grain grid",
         );
-        b.button(
-            R::new(x + b.s(64.0), y, w - b.s(64.0), rh),
+        b.icon_btn(
+            R::new(ix + b.s(64.0), y, rrh + b.s(4.0), rrh + b.s(4.0)),
             Ctl::GrainRoll,
-            "Randomize grains",
-            Some(Icon::Dices),
+            Icon::Dices,
             false,
             "New values for every grain",
         );
-        y += rh + b.s(4.0);
+        y += rrh + b.s(4.0);
     }
-    b.push(R::new(x, y, w, 1.0), Ctl::None, Look::Sep, "");
-    y += b.s(6.0);
+    y += cp;
+    b.close(card, y);
+    y += gap;
     // ROLL.
-    let rollh = b.s(30.0);
+    let card = b.open_card(x, y, w);
+    y += cp;
+    let rollh = b.s(34.0);
     b.button_ex(
-        R::new(x, y, w, rollh),
+        R::new(ix, y, iw, rollh),
         Ctl::Roll,
         "ROLL",
         Some(Icon::Dices),
         true,
         true,
         Tone::Accent,
-        "Roll every armed axis",
+        &format!(
+            "Roll every armed axis ({} of 8 armed)",
+            d.roll.armed_count()
+        ),
     );
-    y += rollh + b.s(4.0);
-    let cw = ((w - 7.0 * b.s(2.0)) / 8.0).floor();
+    y += rollh + b.s(6.0);
+    let ag = b.s(5.0);
+    let aw = ((iw - 3.0 * ag) / 4.0).floor();
+    let ah = b.s(26.0);
     for (i, a) in AXES.iter().enumerate() {
-        b.chip(
-            R::new(x + (cw + b.s(2.0)) * i as f32, y, cw, rh),
+        let ic = match i {
+            0 => Icon::ListChecks,
+            1 => Icon::Gauge,
+            2 => Icon::MoveHorizontal,
+            3 => Icon::Move,
+            4 => Icon::FlipVertical,
+            5 => Icon::Power,
+            6 => Icon::ArrowDownUp,
+            _ => Icon::Activity,
+        };
+        b.icon_chip(
+            R::new(
+                ix + (aw + ag) * (i % 4) as f32,
+                y + (ah + ag) * (i / 4) as f32,
+                aw,
+                ah,
+            ),
             Ctl::RollAxis(i as u8),
-            a.chip(),
+            ic,
             d.roll.armed[i],
-            true,
             &format!("{} — click to arm, right-click to roll it now", a.tip()),
         );
     }
-    y += rh + b.s(2.0);
-    b.text(
-        R::new(x, y, w, b.s(16.0)),
-        &format!("{} of 8 axes armed", d.roll.armed_count()),
-        F::Small,
-        th.text_faint,
-        Align::Left,
-    );
-    y += b.s(18.0);
-    b.push(R::new(x, y, w, 1.0), Ctl::None, Look::Sep, "");
-    y += b.s(6.0);
+    y += 2.0 * ah + ag + cp;
+    b.close(card, y);
+    y += gap;
     // Les macros.
-    b.text(
-        R::new(x, y, w, b.s(16.0)),
-        "MACROS",
-        F::Small,
-        th.text_dim,
-        Align::Left,
-    );
-    y += b.s(18.0);
-    let mw = (w / 4.0).floor();
-    let mh = b.s(56.0);
+    let card = b.open_card(x, y, w);
+    y += cp;
+    let mw = (iw / 4.0).floor();
+    let mh = b.s(60.0);
     for n in 1..=8u8 {
         let i = (n - 1) as usize;
-        let mx = x + mw * (i % 4) as f32;
+        let mx = ix + mw * (i % 4) as f32;
         let my = y + mh * (i / 4) as f32;
         let slot = 210 + n as i32;
-        let key = format!("m:{n}");
-        let mut rings = Vec::new();
-        let _ = key;
         let c = src_color(th, slot);
         let hl =
             (v.hover == Ctl::TileDot(slot) || v.carry.is_some_and(|c| c.0 == slot)).then_some(c);
-        rings.clear();
         b.push(
             R::new(mx, my, mw, mh - b.s(4.0)),
             Ctl::Macro(n),
@@ -1117,12 +1222,13 @@ fn left_zone(b: &mut B, v: &View, d: &Data, r: R) -> f32 {
                 depth: 0.0,
                 bipolar: false,
                 enabled: d.bridge,
-                rings,
+                rings: Vec::new(),
                 live: None,
                 label: d.t.macro_name(n as usize),
                 value: format!("{:.0} %", d.macros[i] * 100.0),
                 hl,
-                size: mh - b.s(18.0),
+                size: b.s(32.0),
+                dim: false,
             },
             &format!(
                 "{}  {:.0} %\nRight-click: rename · drag the dot onto a knob to modulate it",
@@ -1132,7 +1238,7 @@ fn left_zone(b: &mut B, v: &View, d: &Data, r: R) -> f32 {
         );
         let ds = b.s(9.0);
         b.push(
-            R::new(mx + mw - ds - b.s(6.0), my + b.s(2.0), ds, ds),
+            R::new(mx + mw - ds - b.s(8.0), my + b.s(1.0), ds, ds),
             Ctl::MacroDot(n),
             Look::Dot {
                 color: c,
@@ -1141,17 +1247,8 @@ fn left_zone(b: &mut B, v: &View, d: &Data, r: R) -> f32 {
             "Drag onto a knob to modulate it",
         );
     }
-    y += 2.0 * mh;
-    if !d.bridge {
-        b.text(
-            R::new(x, y, w, b.s(16.0)),
-            "the macros live on the bridge",
-            F::Small,
-            th.text_faint,
-            Align::Left,
-        );
-        y += b.s(18.0);
-    }
+    y += 2.0 * mh + cp - b.s(4.0);
+    b.close(card, y);
     b.clip = None;
     b.dy = 0.0;
     y - r.y
@@ -1163,35 +1260,93 @@ fn left_zone(b: &mut B, v: &View, d: &Data, r: R) -> f32 {
 
 fn center_zone(b: &mut B, v: &View, d: &Data, r: R, content: &mut [f32; 5]) -> f32 {
     let th = b.th;
-    let tab_h = b.s(26.0);
-    let tabs = ["Parameters", "Sound Gen", "Seq"];
-    let mut x = r.x;
-    for (i, t) in tabs.iter().enumerate() {
-        let tw0 = tw(th, t) + b.s(8.0);
-        b.push(
-            R::new(x, r.y, tw0, tab_h),
-            Ctl::Tab(i as u8),
-            Look::Seg {
-                label: t.to_string(),
-                sel: v.tab == i as u8,
-                first: i == 0,
-                last: i == 2,
-            },
-            "",
+    let tab_h = b.s(30.0);
+    let tabs_w = b.s(330.0).min(r.w);
+    b.seg_ic(
+        R::new(r.x, r.y, tabs_w, tab_h),
+        &[
+            (Some(Icon::SlidersVertical), "Params"),
+            (Some(Icon::AudioLines), "Sound Gen"),
+            (Some(Icon::Grid), "Seq"),
+        ],
+        v.tab as usize,
+        |i| Ctl::Tab(i as u8),
+        &[
+            "The tracked params of the chain",
+            "The Sound Generator of this track",
+            "The sequencer of this track",
+        ],
+    );
+    if v.tab == 0 {
+        // A droite : chercher, cacher, les valeurs, replier, tout retirer.
+        let sq = tab_h;
+        let mut x = r.right() - sq;
+        b.icon_btn(
+            R::new(x, r.y, sq, sq),
+            Ctl::UntrackAll,
+            Icon::ListX,
+            false,
+            "Untrack every param",
         );
-        x += tw0;
+        x -= sq + b.s(2.0);
+        b.icon_btn(
+            R::new(x, r.y, sq, sq),
+            Ctl::CollapseAll,
+            Icon::Fold,
+            false,
+            "Fold or unfold every FX",
+        );
+        x -= sq + b.s(2.0);
+        b.icon_btn(
+            R::new(x, r.y, sq, sq),
+            Ctl::Values,
+            Icon::Eye,
+            v.show_values,
+            "Show the values",
+        );
+        x -= b.s(10.0);
+        let hidden: usize = d.fx.iter().map(|f| f.hidden).sum();
+        let hw = if hidden > 0 { b.s(64.0) } else { sq };
+        x -= hw;
+        b.button(
+            R::new(x, r.y, hw, sq),
+            Ctl::HideMenu,
+            &if hidden > 0 {
+                hidden.to_string()
+            } else {
+                String::new()
+            },
+            Some(Icon::Funnel),
+            v.show_hidden,
+            &format!(
+                "{hidden} params hidden by their name (MIDI, CC…)\nClick: show them, edit the words"
+            ),
+        );
+        x -= b.s(6.0);
+        let sw = b.s(210.0).min((x - r.x - tabs_w - b.s(10.0)).max(0.0));
+        if sw > b.s(60.0) {
+            b.push(
+                R::new(x - sw, r.y, sw, sq),
+                Ctl::Search,
+                Look::Search {
+                    focus: v.search_focus,
+                },
+                "Filter the params by name (Esc clears)",
+            );
+        }
     }
     // Le clavier, en bas.
-    let kb_bar = b.s(22.0);
-    let kb_keys = if v.kb_open { b.s(56.0) } else { 0.0 };
+    let kb_bar = b.s(30.0);
+    let kb_keys = if v.kb_open { b.s(64.0) } else { 0.0 };
     let kb = R::new(r.x, r.bottom() - kb_bar - kb_keys, r.w, kb_bar + kb_keys);
     keyboard(b, v, d, kb);
     let body = R::new(
         r.x,
-        r.y + tab_h + b.s(4.0),
+        r.y + tab_h + b.s(8.0),
         r.w,
-        (kb.y - r.y - tab_h - b.s(8.0)).max(0.0),
+        (kb.y - r.y - tab_h - b.s(16.0)).max(0.0),
     );
+    let _ = th;
     match v.tab {
         1 => {
             content[3] = crate::panels::sound_gen(b, v, d, body);
@@ -1208,24 +1363,33 @@ fn center_zone(b: &mut B, v: &View, d: &Data, r: R, content: &mut [f32; 5]) -> f
 fn keyboard(b: &mut B, v: &View, d: &Data, r: R) {
     let th = b.th;
     b.panel(r, Shade::Card);
-    let bh = b.s(22.0);
-    b.button(
-        R::new(r.x, r.y, b.s(110.0), bh),
+    let bh = b.s(30.0);
+    b.push(
+        R::new(r.x + b.s(4.0), r.y + b.s(3.0), b.s(54.0), bh - b.s(6.0)),
         Ctl::KbFold,
-        "KEYBOARD",
-        Some(if v.kb_open {
+        Look::Button {
+            label: String::new(),
+            icon: Some(Icon::Piano),
+            on: v.kb_open,
+            enabled: true,
+            tone: Tone::Normal,
+        },
+        "Play the Sound Gen with the mouse",
+    );
+    b.glyph(
+        R::new(r.x + b.s(40.0), r.y, b.s(12.0), bh),
+        if v.kb_open {
             Icon::ChevronDown
         } else {
-            Icon::ChevronRight
-        }),
-        v.kb_open,
-        "Play the Sound Gen with the mouse",
+            Icon::ChevronUp
+        },
+        th.text_dim,
     );
     if let Some(n) = d.kb_note {
         b.text(
-            R::new(r.x + b.s(116.0), r.y, b.s(120.0), bh),
+            R::new(r.x + b.s(66.0), r.y, b.s(120.0), bh),
             &note_name(n),
-            F::Small,
+            F::Bold,
             th.accent,
             Align::Left,
         );
@@ -1234,13 +1398,19 @@ fn keyboard(b: &mut B, v: &View, d: &Data, r: R) {
         return;
     }
     // Trois octaves depuis C3, et le do du haut.
-    let ky = r.y + bh;
-    let kh = r.h - bh;
+    let inner = R::new(
+        r.x + b.s(6.0),
+        r.y + bh,
+        r.w - b.s(12.0),
+        r.h - bh - b.s(6.0),
+    );
+    let ky = inner.y;
+    let kh = inner.h;
     let whites: Vec<u8> = (48u8..=84).filter(|n| !is_black(*n)).collect();
-    let ww = (r.w / whites.len() as f32).floor();
+    let ww = (inner.w / whites.len() as f32).floor();
     for (i, n) in whites.iter().enumerate() {
         b.push(
-            R::new(r.x + ww * i as f32, ky, ww - 1.0, kh),
+            R::new(inner.x + ww * i as f32, ky, ww - 1.0, kh),
             Ctl::Key(*n),
             Look::Key {
                 black: false,
@@ -1254,7 +1424,7 @@ fn keyboard(b: &mut B, v: &View, d: &Data, r: R) {
             continue;
         }
         let below = whites.iter().position(|w| *w == n - 1).unwrap_or(0);
-        let bx = r.x + ww * (below + 1) as f32 - ww * 0.3;
+        let bx = inner.x + ww * (below + 1) as f32 - ww * 0.3;
         b.push(
             R::new(bx, ky, ww * 0.6, kh * 0.6),
             Ctl::Key(n),
@@ -1267,57 +1437,32 @@ fn keyboard(b: &mut B, v: &View, d: &Data, r: R) {
     }
 }
 
-fn is_black(n: u8) -> bool {
-    matches!(n % 12, 1 | 3 | 6 | 8 | 10)
-}
-
-/// Le nom d'une note (60 = C4).
-pub fn note_name(n: u8) -> String {
-    const N: [&str; 12] = [
-        "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B",
-    ];
-    format!("{}{}", N[(n % 12) as usize], (n / 12) as i32 - 1)
-}
-
 fn params_tab(b: &mut B, v: &View, d: &Data, r: R) -> f32 {
     let th = b.th;
-    let bh = b.s(22.0);
-    // La barre d'outils.
-    let mut x = r.x;
-    for (ctl, l, on, tip) in [
-        (
-            Ctl::CollapseAll,
-            "Collapse",
-            false,
-            "Fold or unfold every FX",
-        ),
-        (Ctl::UntrackAll, "Untrack all", false, "Untrack every param"),
-        (Ctl::Values, "Values", v.show_values, "Show the values"),
-    ] {
-        let w0 = tw(th, l);
-        b.button(R::new(x, r.y, w0, bh), ctl, l, None, on, tip);
-        x += w0 + b.s(4.0);
-    }
-    let list = R::new(
-        r.x,
-        r.y + bh + b.s(4.0),
-        r.w,
-        (r.h - bh - b.s(4.0)).max(0.0),
-    );
-    b.panel(list, Shade::Zone);
+    let list = r;
     b.push(list, Ctl::None, Look::Clip(0), "");
     b.clip = Some(0);
     b.dy = v.scroll[0];
-    let gap = b.s(8.0);
-    let lw = ((list.w - gap) * 0.62).floor();
+    let gap = gap_of(b);
+    // DETACHED vide : une colonne etroite ; sinon un tiers.
+    let any_detached = d.fx.iter().any(|f| f.detached);
+    let dw = if any_detached {
+        ((list.w - gap) * 0.34)
+            .max(b.s(230.0))
+            .min((list.w - gap) * 0.45)
+            .floor()
+    } else {
+        b.s(170.0).min(list.w * 0.3)
+    };
+    // La place de la barre de defilement, a droite de chaque colonne.
+    let sb = b.s(10.0);
+    let lw = list.w - gap - dw - sb;
     let pools = [
         (false, R::new(list.x, list.y, lw, list.h)),
-        (
-            true,
-            R::new(list.x + lw + gap, list.y, list.w - lw - gap, list.h),
-        ),
+        (true, R::new(list.x + lw + gap, list.y, dw, list.h)),
     ];
     let mut tallest = 0.0f32;
+    let bh = b.s(24.0);
     for (detached, pr) in pools {
         // La colonne entiere recoit un en-tete tire (les effets, poses
         // ensuite, l'emportent pour la souris).
@@ -1348,21 +1493,28 @@ fn params_tab(b: &mut B, v: &View, d: &Data, r: R) -> f32 {
             )
         };
         b.push(
-            R::new(pr.x, y, pr.w - bh, bh),
+            R::new(pr.x + b.s(2.0), y, b.s(80.0), bh),
             Ctl::None,
             Look::Text {
-                s: format!("{label}  {n} FX"),
-                font: F::Bold,
-                color: if detached { th.text_dim } else { th.text },
+                s: label.into(),
+                font: F::Small,
+                color: th.text_dim,
                 align: Align::Left,
             },
             tip,
         );
-        b.button(
+        let nt = n.to_string();
+        b.text(
+            R::new(pr.x + b.s(2.0) + tw(th, label), y, b.s(40.0), bh),
+            &nt,
+            F::Small,
+            th.text_faint,
+            Align::Left,
+        );
+        b.icon_btn(
             R::new(pr.right() - bh, y, bh, bh),
             Ctl::AddFx(detached),
-            "",
-            Some(Icon::Plus),
+            Icon::Plus,
             false,
             if detached {
                 "Add an FX out of ROLL"
@@ -1370,24 +1522,22 @@ fn params_tab(b: &mut B, v: &View, d: &Data, r: R) -> f32 {
                 "Add an FX to ROLL"
             },
         );
-        y += bh + b.s(4.0);
+        y += bh + b.s(6.0);
         if n == 0 {
-            b.text(
-                R::new(pr.x, y, pr.w, bh),
-                if detached {
-                    "Drag an FX header here"
-                } else {
-                    "No FX in the roll"
-                },
-                F::Small,
+            let dh = (pr.h - (y - pr.y) - b.s(4.0))
+                .max(b.s(80.0))
+                .min(b.s(240.0));
+            b.panel(R::new(pr.x, y, pr.w, dh), Shade::Drop);
+            b.glyph(
+                R::new(pr.x, y, pr.w, dh),
+                if detached { Icon::Download } else { Icon::Plus },
                 th.text_faint,
-                Align::Left,
             );
-            y += bh;
+            y += dh;
         }
         for f in d.fx.iter().filter(|f| f.detached == detached) {
             y = fx_group(b, v, d, f, R::new(pr.x, y, pr.w, 0.0), list);
-            y += b.s(6.0);
+            y += gap;
         }
         tallest = tallest.max(y - pr.y);
     }
@@ -1396,30 +1546,89 @@ fn params_tab(b: &mut B, v: &View, d: &Data, r: R) -> f32 {
     tallest
 }
 
+/// Les parametres montres d'un effet : le filtre « seulement les suivis »
+/// et la recherche.
+fn shown_rows<'a>(v: &View, d: &Data, f: &'a crate::FxRow) -> Vec<&'a crate::ParamRow> {
+    let only = d.t.fx_tracked_only.get(&f.guid).copied().unwrap_or(false);
+    let q = v.search.text.trim().to_lowercase();
+    f.params
+        .iter()
+        .filter(|p| !only || d.t.params.get(&p.key).is_some_and(|s| s.sel))
+        .filter(|p| q.is_empty() || p.name.to_lowercase().contains(&q))
+        .collect()
+}
+
 fn fx_group(b: &mut B, v: &View, d: &Data, f: &crate::FxRow, r: R, list: R) -> f32 {
     let th = b.th;
-    let hh = b.s(22.0);
-    let mut y = r.y;
+    let hh = b.s(36.0);
+    let cp = b.s(8.0);
     let folded = v.folded.contains(&f.guid);
+    let rows = shown_rows(v, d, f);
+    let cols = if r.w >= b.s(2.0 * 250.0) { 2 } else { 1 };
+    let cg = b.s(6.0);
+    let cell_h = b.s(50.0);
+    let n_rows = rows.len().div_ceil(cols);
+    let body_h = if folded {
+        0.0
+    } else if rows.is_empty() {
+        cp + b.s(22.0) + cp
+    } else {
+        cp + (cell_h + cg) * n_rows as f32 - cg + cp
+    };
+    let mut y = r.y;
+    b.panel(R::new(r.x, y, r.w, hh + body_h), Shade::Card);
     b.push(
         R::new(r.x, y, r.w, hh),
         Ctl::FxHead(f.guid.clone()),
-        Look::Panel(Shade::Head),
-        "",
+        Look::Panel(if folded { Shade::Card } else { Shade::Head }),
+        &format!(
+            "{}\nClick: fold · drag to the other column: in or out of ROLL",
+            f.name
+        ),
     );
     let tracked = f
         .params
         .iter()
         .filter(|p| d.t.params.get(&p.key).is_some_and(|s| s.sel))
         .count();
-    let ic = b.s(20.0);
-    let verbs = 6.0;
-    let name_w = (r.w - verbs * ic - b.s(70.0)).max(b.s(40.0));
+    let mut x = r.x + b.s(8.0);
+    b.glyph(
+        R::new(x, y, b.s(14.0), hh),
+        if folded {
+            Icon::ChevronRight
+        } else {
+            Icon::ChevronDown
+        },
+        th.text_dim,
+    );
+    x += b.s(20.0);
+    let ic = b.s(26.0);
+    let name_min = b.s(90.0);
+    let fits = |n: f32| r.w - (x - r.x) - n * (ic + b.s(2.0)) - b.s(12.0) >= name_min + b.s(60.0);
+    let verbs: &[u8] = if fits(6.0) {
+        &[0, 1, 2, 3, 4, 5]
+    } else if fits(3.0) {
+        &[0, 1, 5]
+    } else {
+        &[5]
+    };
+    let verbs_w = verbs.len() as f32 * (ic + b.s(2.0));
+    let avail = (r.w - (x - r.x) - verbs_w - b.s(12.0)).max(b.s(40.0));
+    let badge = format!("{tracked} / {}", f.params.len());
+    let bw = tw(th, &badge) - b.s(4.0);
+    let hid = if f.hidden > 0 && avail > name_min + bw + b.s(70.0) {
+        b.s(16.0) + tw(th, &f.hidden.to_string())
+    } else {
+        0.0
+    };
+    let name_w = (avail - bw - hid - b.s(12.0))
+        .min(tw(th, &f.name) + b.s(6.0))
+        .max(b.s(30.0));
     b.push(
-        R::new(r.x, y, b.s(18.0) + name_w, hh),
+        R::new(x, y, name_w, hh),
         Ctl::FxHead(f.guid.clone()),
         Look::Text {
-            s: format!("{} {}", if folded { "▶" } else { "▼" }, f.name),
+            s: f.name.clone(),
             font: F::Bold,
             color: if f.enabled { th.text } else { th.text_faint },
             align: Align::Left,
@@ -1429,13 +1638,32 @@ fn fx_group(b: &mut B, v: &View, d: &Data, f: &crate::FxRow, r: R, list: R) -> f
             f.name
         ),
     );
-    b.text(
-        R::new(r.x + b.s(18.0) + name_w, y, b.s(60.0), hh),
-        &format!("{tracked} / {}", f.params.len()),
-        F::Small,
-        th.text_faint,
-        Align::Left,
+    x += name_w + b.s(6.0);
+    b.push(
+        R::new(x, y + (hh - b.s(18.0)) / 2.0, bw, b.s(18.0)),
+        Ctl::None,
+        Look::Badge {
+            text: badge,
+            color: if tracked > 0 {
+                th.accent
+            } else {
+                th.text_faint
+            },
+        },
+        "",
     );
+    x += bw + b.s(8.0);
+    if hid > 0.0 {
+        b.glyph(R::new(x, y, b.s(12.0), hh), Icon::Funnel, th.text_faint);
+        let t = f.hidden.to_string();
+        b.text(
+            R::new(x + b.s(15.0), y, tw(th, &t), hh),
+            &t,
+            F::Small,
+            th.text_faint,
+            Align::Left,
+        );
+    }
     let tips = [
         "Open the plugin window",
         "Bypass this FX",
@@ -1444,15 +1672,16 @@ fn fx_group(b: &mut B, v: &View, d: &Data, f: &crate::FxRow, r: R, list: R) -> f
         "Roll bases on the tracked params",
         "Everything this FX can do",
     ];
-    for k in 0..6u8 {
-        let ix = r.right() - ic * (6 - k) as f32;
+    let nv = verbs.len();
+    for (j, &k) in verbs.iter().enumerate() {
+        let ix = r.right() - b.s(6.0) - (ic + b.s(2.0)) * (nv - j) as f32 + b.s(2.0);
         b.push(
             R::new(ix, y + (hh - ic) / 2.0, ic, ic),
             Ctl::FxVerb(f.guid.clone(), k),
             Look::Button {
                 label: String::new(),
                 icon: Some(crate::verb_icon(k)),
-                on: false,
+                on: k == 1 && f.enabled,
                 enabled: true,
                 tone: if k == 1 && !f.enabled {
                     Tone::Amber
@@ -1463,49 +1692,228 @@ fn fx_group(b: &mut B, v: &View, d: &Data, f: &crate::FxRow, r: R, list: R) -> f
             tips[k as usize],
         );
     }
-    y += hh + b.s(2.0);
+    y += hh;
     if folded {
         return y;
     }
-    let only = d.t.fx_tracked_only.get(&f.guid).copied().unwrap_or(false);
-    let rows: Vec<&crate::ParamRow> = f
-        .params
-        .iter()
-        .filter(|p| !only || d.t.params.get(&p.key).is_some_and(|s| s.sel))
-        .collect();
-    let row_h = b.s(38.0);
-    let two = r.w >= b.s(2.0 * 12.0 * 22.0);
-    let cols = if two { 2 } else { 1 };
-    let cw = ((r.w - b.s(4.0) * (cols - 1) as f32) / cols as f32).floor();
-    let n_rows = rows.len().div_ceil(cols);
+    y += cp;
+    let iw = r.w - 2.0 * cp;
+    let cw = ((iw - cg * (cols - 1) as f32) / cols as f32).floor();
     for (i, p) in rows.iter().enumerate() {
         let row = i / cols;
         let c = i % cols;
         let rr = R::new(
-            r.x + (cw + b.s(4.0)) * c as f32,
-            y + row_h * row as f32,
+            r.x + cp + (cw + cg) * c as f32,
+            y + (cell_h + cg) * row as f32,
             cw,
-            row_h - b.s(2.0),
+            cell_h,
         );
-        // Seules les rangees visibles se posent.
+        // Seules les cases visibles se posent.
         let vis_y = rr.y - b.dy;
         if vis_y + rr.h < list.y || vis_y > list.bottom() {
             continue;
         }
         param_row(b, v, d, p, rr);
     }
-    y += row_h * n_rows as f32;
     if rows.is_empty() {
         b.text(
-            R::new(r.x, y, r.w, b.s(18.0)),
-            "nothing tracked — the … menu shows every param",
+            R::new(r.x + cp, y, iw, b.s(22.0)),
+            if v.search.text.trim().is_empty() {
+                "—"
+            } else {
+                "no match"
+            },
             F::Small,
             th.text_faint,
             Align::Left,
         );
-        y += b.s(18.0);
+        return y + b.s(22.0) + cp;
     }
-    y
+    y + (cell_h + cg) * n_rows as f32 - cg + cp
+}
+
+fn param_row(b: &mut B, v: &View, d: &Data, p: &crate::ParamRow, r: R) {
+    let th = b.th;
+    let ps = d.t.params.get(&p.key).cloned().unwrap_or_default();
+    let standby = d.plan.standby.contains(&p.key);
+    // La teinte : suivie, ou menee par la source survolee.
+    let hover_slot = match &v.hover {
+        Ctl::Tile(s) | Ctl::TileDot(s) => Some(*s),
+        _ => v.carry.map(|c| c.0),
+    };
+    let driven_by_hover = hover_slot.is_some_and(|s| ps.sel && ps.srcs.iter().any(|x| x.slot == s));
+    let shade = if driven_by_hover {
+        Shade::Tint(src_color(th, hover_slot.unwrap_or(0)).fade(0.22))
+    } else if ps.sel {
+        Shade::Tint(th.accent.fade(0.10))
+    } else {
+        Shade::Well
+    };
+    b.panel(r, shade);
+    let k = p.key.clone();
+    let ks = b.s(38.0);
+    let kx = r.x + b.s(6.0);
+    let rings = rings_of(d, th, &ps, standby);
+    let hl = hover_slot
+        .filter(|s| ps.srcs.iter().any(|x| x.slot == *s))
+        .map(|s| src_color(th, s));
+    let base = if ps.sel || !ps.srcs.is_empty() {
+        ps.base
+    } else {
+        p.live
+    };
+    let tip = param_tip(d, p, &ps, standby);
+    b.push(
+        R::new(kx, r.cy() - ks / 2.0, ks, ks),
+        Ctl::Knob(k.clone()),
+        Look::Knob {
+            v: base,
+            depth: knob_depth(v, d, &ps),
+            bipolar: false,
+            enabled: true,
+            rings,
+            live: Some(p.live),
+            label: String::new(),
+            value: String::new(),
+            hl,
+            size: ks,
+            dim: !ps.sel && ps.srcs.is_empty(),
+        },
+        &tip,
+    );
+    // Les axes du pad, a droite : X, Y, inverser.
+    let aw = b.s(22.0);
+    let ah = b.s(20.0);
+    let axes = r.w >= b.s(220.0);
+    let ax0 = if axes {
+        r.right() - b.s(6.0) - 3.0 * aw - 2.0 * b.s(2.0)
+    } else {
+        r.right()
+    };
+    let pad_writes =
+        ps.pad_drives() || (!ps.srcs.is_empty() && !standby && d.plan.bus_of.contains_key(&p.key));
+    for i in (0..3u8).filter(|_| axes) {
+        let on = match i {
+            0 => ps.x,
+            1 => ps.y,
+            _ => ps.inv,
+        };
+        let live = ps.sel || on;
+        let rr = R::new(ax0 + (aw + b.s(2.0)) * i as f32, r.cy() - ah / 2.0, aw, ah);
+        let tip = match i {
+            0 => "X: the pad's X axis moves this param",
+            1 => "Y: the pad's Y axis moves this param",
+            _ => "Invert",
+        };
+        if i == 2 {
+            b.push(
+                rr,
+                Ctl::Chip(k.clone(), i),
+                Look::IconChip {
+                    icon: Icon::FlipVertical,
+                    on,
+                    enabled: live,
+                    color: Some(amber()),
+                },
+                tip,
+            );
+        } else {
+            b.push(
+                rr,
+                Ctl::Chip(k.clone(), i),
+                Look::Chip {
+                    label: if i == 0 { "X".into() } else { "Y".into() },
+                    on: on && ps.sel && pad_writes,
+                    standby: on && ps.sel && !pad_writes,
+                    amber: false,
+                    enabled: live,
+                },
+                tip,
+            );
+        }
+    }
+    // Le nom (un clic : suivi), la valeur, les sources.
+    let nx = kx + ks + b.s(8.0);
+    let nw = (ax0 - nx - b.s(6.0)).max(b.s(20.0));
+    let line = b.s(18.0);
+    let top = r.y + (r.h - 2.0 * line) / 2.0;
+    b.push(
+        R::new(nx, top, nw, line),
+        Ctl::Sel(k.clone()),
+        Look::Text {
+            s: p.name.clone(),
+            font: F::Normal,
+            color: if ps.sel {
+                th.text
+            } else {
+                th.text.mix(th.text_dim, 0.4)
+            },
+            align: Align::Left,
+        },
+        if ps.sel {
+            "Tracked: click to untrack"
+        } else {
+            "Click to track this param"
+        },
+    );
+    let mut x = nx;
+    if v.show_values {
+        let t = match p.steps {
+            2 => {
+                if p.live >= 0.5 {
+                    "On".to_string()
+                } else {
+                    "Off".to_string()
+                }
+            }
+            _ => p.text.clone(),
+        };
+        let vw = (tw(th, &t) - b.s(8.0)).min(nw * 0.6).max(b.s(20.0));
+        b.text(
+            R::new(x, top + line, vw, line),
+            &t,
+            F::Small,
+            if ps.sel {
+                th.accent.mix(th.text, 0.55)
+            } else {
+                th.text_dim
+            },
+            Align::Left,
+        );
+        x += vw + b.s(6.0);
+    }
+    // Les sources : leurs pastilles (un clic : leur menu).
+    let dots: Vec<(Color, bool)> = ps
+        .srcs
+        .iter()
+        .map(|s| (src_color(th, s.slot), s.off))
+        .collect();
+    let label = if ps.srcs.is_empty() {
+        String::new()
+    } else if ps.srcs.len() == 1 {
+        short_label(ps.srcs[0].slot)
+    } else {
+        String::new()
+    };
+    let sw = (nx + nw - x).max(b.s(16.0));
+    b.push(
+        R::new(x, top + line, sw, line),
+        Ctl::Src(k),
+        Look::SrcLabel { dots, label },
+        "Sources: click for the source menu",
+    );
+}
+
+fn is_black(n: u8) -> bool {
+    matches!(n % 12, 1 | 3 | 6 | 8 | 10)
+}
+
+/// Le nom d'une note (60 = C4).
+pub fn note_name(n: u8) -> String {
+    const N: [&str; 12] = [
+        "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B",
+    ];
+    format!("{}{}", N[(n % 12) as usize], (n / 12) as i32 - 1)
 }
 
 /// La profondeur que tire Alt + glisser : la premiere source, ou en mode Map
@@ -1627,160 +2035,6 @@ pub(crate) fn rings_of(d: &Data, th: &Theme, ps: &PState, standby: bool) -> Vec<
     out
 }
 
-fn param_row(b: &mut B, v: &View, d: &Data, p: &crate::ParamRow, r: R) {
-    let th = b.th;
-    let ps = d.t.params.get(&p.key).cloned().unwrap_or_default();
-    let standby = d.plan.standby.contains(&p.key);
-    // La teinte : suivie, ou menee par la source survolee.
-    let hover_slot = match &v.hover {
-        Ctl::Tile(s) | Ctl::TileDot(s) => Some(*s),
-        _ => v.carry.map(|c| c.0),
-    };
-    let driven_by_hover = hover_slot.is_some_and(|s| ps.sel && ps.srcs.iter().any(|x| x.slot == s));
-    let shade = if driven_by_hover {
-        Shade::Tint(src_color(th, hover_slot.unwrap_or(0)).fade(0.26))
-    } else if ps.sel {
-        Shade::Tint(th.accent.fade(0.10))
-    } else {
-        Shade::Card
-    };
-    b.panel(r, shade);
-    let k = p.key.clone();
-    let sel_s = b.s(10.0);
-    b.push(
-        R::new(r.x + b.s(3.0), r.cy() - sel_s / 2.0, sel_s, sel_s),
-        Ctl::Sel(k.clone()),
-        Look::Chip {
-            label: String::new(),
-            on: ps.sel,
-            standby: false,
-            amber: false,
-            enabled: true,
-        },
-        if ps.sel {
-            "Tracked: click to untrack"
-        } else {
-            "Click to track this param"
-        },
-    );
-    let ks = b.s(32.0);
-    let kx = r.x + b.s(16.0);
-    let rings = rings_of(d, th, &ps, standby);
-    let hl = hover_slot
-        .filter(|s| ps.srcs.iter().any(|x| x.slot == *s))
-        .map(|s| src_color(th, s));
-    let base = if ps.sel || !ps.srcs.is_empty() {
-        ps.base
-    } else {
-        p.live
-    };
-    let tip = param_tip(d, p, &ps, standby);
-    b.push(
-        R::new(kx, r.cy() - ks / 2.0, ks, ks),
-        Ctl::Knob(k.clone()),
-        Look::Knob {
-            v: base,
-            depth: knob_depth(v, d, &ps),
-            bipolar: false,
-            enabled: true,
-            rings,
-            live: Some(p.live),
-            label: String::new(),
-            value: String::new(),
-            hl,
-            size: ks,
-        },
-        &tip,
-    );
-    let src_w = b.s(38.0);
-    let chip_w = b.s(20.0);
-    let val_w = if v.show_values { b.s(52.0) } else { 0.0 };
-    let name_x = kx + ks + b.s(6.0);
-    let name_w = (r.right() - src_w - 3.0 * chip_w - val_w - name_x - b.s(4.0)).max(b.s(20.0));
-    b.text(
-        R::new(name_x, r.y, name_w, r.h),
-        &p.name,
-        F::Normal,
-        th.text,
-        Align::Left,
-    );
-    let mut x = name_x + name_w;
-    if v.show_values {
-        let t = match p.steps {
-            2 => {
-                if p.live >= 0.5 {
-                    "ON".to_string()
-                } else {
-                    "OFF".to_string()
-                }
-            }
-            _ => p.text.clone(),
-        };
-        b.text(
-            R::new(x, r.y, val_w, r.h),
-            &t,
-            F::Small,
-            th.text_dim,
-            Align::Right,
-        );
-        x += val_w;
-    }
-    for (i, l) in ["X", "Y", "N"].iter().enumerate() {
-        let on = match i {
-            0 => ps.x,
-            1 => ps.y,
-            _ => ps.inv,
-        };
-        let pad_writes = ps.pad_drives()
-            || (!ps.srcs.is_empty() && !standby && d.plan.bus_of.contains_key(&p.key));
-        let cs = b.s(18.0);
-        b.push(
-            R::new(x + b.s(1.0), r.cy() - cs / 2.0, cs, cs),
-            Ctl::Chip(k.clone(), i as u8),
-            Look::Chip {
-                label: l.to_string(),
-                on: on && (i == 2 || (ps.sel && pad_writes)),
-                standby: on && i < 2 && ps.sel && !pad_writes,
-                amber: i == 2 && on,
-                enabled: true,
-            },
-            match i {
-                0 => "X: the pad's X axis moves this param",
-                1 => "Y: the pad's Y axis moves this param",
-                _ => "Invert",
-            },
-        );
-        x += chip_w;
-    }
-    // La colonne des sources.
-    let (dots, label) = if ps.srcs.is_empty() {
-        let l = match (ps.x, ps.y) {
-            (true, true) => "XY",
-            (true, false) => "X",
-            (false, true) => "Y",
-            _ => "–",
-        };
-        (Vec::new(), l.to_string())
-    } else if ps.srcs.len() == 1 {
-        let s = &ps.srcs[0];
-        (vec![(src_color(th, s.slot), s.off)], short_label(s.slot))
-    } else {
-        (
-            ps.srcs
-                .iter()
-                .map(|s| (src_color(th, s.slot), s.off))
-                .collect(),
-            String::new(),
-        )
-    };
-    b.push(
-        R::new(x + b.s(2.0), r.y, src_w - b.s(2.0), r.h),
-        Ctl::Src(k),
-        Look::SrcLabel { dots, label },
-        "Sources: click for the source menu",
-    );
-}
-
 fn param_tip(d: &Data, p: &crate::ParamRow, ps: &PState, standby: bool) -> String {
     let mut t = p.name.clone();
     if ps.srcs.is_empty() {
@@ -1808,442 +2062,6 @@ fn param_tip(d: &Data, p: &crate::ParamRow, ps: &PState, standby: bool) -> Strin
     }
     t.push_str("\nDrag: base · Alt+drag: depth · Shift: fine\nAlt+click: release the sources · Shift+click: bypass them");
     t
-}
-
-// ---------------------------------------------------------------------------
-// Le rack des sources
-// ---------------------------------------------------------------------------
-
-fn rack(b: &mut B, v: &View, d: &Data, r: R) -> f32 {
-    let th = b.th;
-    if v.rack_fold {
-        b.button(
-            R::new(r.x, r.y, r.w, r.h),
-            Ctl::Fold,
-            "",
-            Some(Icon::ChevronLeft),
-            false,
-            "Show the sources",
-        );
-        return 0.0;
-    }
-    b.panel(r, Shade::Zone);
-    let bh = b.s(22.0);
-    let fw = bh;
-    let mw = b.s(40.0);
-    b.seg(
-        R::new(r.x, r.y, r.w - fw - mw - b.s(4.0), bh),
-        &["Track", "Global", "Links"],
-        v.rack_tab as usize,
-        |i| Ctl::RackTab(i as u8),
-        &[
-            "Sources of this track",
-            "The global bank: a hidden CP MOD track, reaches any track by 14-bit CC",
-            "Every link of this track",
-        ],
-    );
-    b.button(
-        R::new(r.right() - fw - mw - b.s(2.0), r.y, mw, bh),
-        Ctl::Map,
-        "Map",
-        None,
-        v.map,
-        "Map: dragging any knob sets the selected source's depth (Esc leaves)",
-    );
-    b.button(
-        R::new(r.right() - fw, r.y, fw, bh),
-        Ctl::Fold,
-        "",
-        Some(Icon::ChevronRight),
-        false,
-        "Fold the sources",
-    );
-    let body = R::new(
-        r.x,
-        r.y + bh + b.s(4.0),
-        r.w,
-        (r.h - bh - b.s(4.0)).max(0.0),
-    );
-    b.push(body, Ctl::None, Look::Clip(1), "");
-    b.clip = Some(1);
-    b.dy = v.scroll[1];
-    let h = match v.rack_tab {
-        2 => links_tab(b, v, d, body),
-        t => sources_tab(b, v, d, body, t == 1),
-    };
-    b.clip = None;
-    b.dy = 0.0;
-    let _ = th;
-    h
-}
-
-fn sources_tab(b: &mut B, v: &View, d: &Data, r: R, global: bool) -> f32 {
-    let th = b.th;
-    let mut y = r.y;
-    let cols = ((r.w / b.s(118.0)).floor() as usize).clamp(1, 4);
-    let tw0 = ((r.w - b.s(3.0) * (cols - 1) as f32) / cols as f32).floor();
-    let th0 = b.s(26.0);
-    let tile = |b: &mut B,
-                i: usize,
-                y0: f32,
-                slot: i32,
-                title: String,
-                on: bool,
-                shape: Option<(u8, f64)>,
-                phase: Option<f64>,
-                tip: &str| {
-        let x = r.x + (tw0 + b.s(3.0)) * (i % cols) as f32;
-        let yy = y0 + (th0 + b.s(3.0)) * (i / cols) as f32;
-        let c = src_color(b.th, slot);
-        b.push(
-            R::new(x, yy, tw0, th0),
-            Ctl::Tile(slot),
-            Look::Tile {
-                title,
-                color: c,
-                on,
-                count: d.t.dest_count(slot),
-                shape,
-                phase,
-                sel: v.sel_slot == slot,
-                hl: v.hover == Ctl::Tile(slot) || v.hover == Ctl::TileDot(slot),
-            },
-            tip,
-        );
-        if on {
-            let ds = b.s(10.0);
-            b.push(
-                R::new(x + b.s(3.0), yy + (th0 - ds) / 2.0, ds, ds),
-                Ctl::TileDot(slot),
-                Look::Dot {
-                    color: c,
-                    hollow: false,
-                },
-                "Drag onto a knob to modulate it",
-            );
-        }
-    };
-    if !global {
-        // Les sources de la piste : enveloppes, sequenceur, notes.
-        let mut i = 0;
-        let sg_on = d.sg.is_some_and(|j| j.enabled);
-        for n in 1..=4 {
-            tile(
-                b,
-                i,
-                y,
-                200 + n,
-                format!("ENV {n}"),
-                sg_on,
-                None,
-                None,
-                if sg_on {
-                    "A Sound Gen envelope"
-                } else {
-                    "The Sound Gen is off on this track"
-                },
-            );
-            i += 1;
-        }
-        for n in 1..=2 {
-            tile(
-                b,
-                i,
-                y,
-                220 + n,
-                if n == 1 {
-                    "SEQ A".into()
-                } else {
-                    "SEQ B".into()
-                },
-                d.seq.is_some(),
-                None,
-                None,
-                if d.seq.is_some() {
-                    "A sequencer modulation lane"
-                } else {
-                    "No sequencer on this track"
-                },
-            );
-            i += 1;
-        }
-        for (n, name) in ["NOTE", "VEL", "RAND", "OCT"].iter().enumerate() {
-            tile(
-                b,
-                i,
-                y,
-                231 + n as i32,
-                name.to_string(),
-                true,
-                None,
-                None,
-                "A note source: held from one note to the next",
-            );
-            i += 1;
-        }
-        y += (th0 + b.s(3.0)) * i.div_ceil(cols) as f32 + b.s(6.0);
-    }
-    // L'enveloppe choisie (ENV 1..4) : son editeur, ici.
-    if !global {
-        if let (Some(Band::Env(n)), Some(j)) = (band_of(v.sel_slot), d.sg.filter(|j| j.enabled)) {
-            y = crate::panels::env_editor(b, j, n, R::new(r.x, y, r.w, 0.0)) + b.s(6.0);
-        }
-    }
-    let bank = if global { d.gbank } else { d.bank };
-    let base = if global { 100 } else { 0 };
-    match bank {
-        None => {
-            let bh = b.s(24.0);
-            b.button(
-                R::new(r.x, y, r.w, bh),
-                Ctl::AddBank,
-                if global {
-                    "Add the global bank"
-                } else {
-                    "Add the source bank"
-                },
-                Some(Icon::Plus),
-                false,
-                if global {
-                    "Global bank: hidden CP MOD track, modulates ANY track through 14-bit CC"
-                } else {
-                    "The CP_Mod bank: eight modulators on this track"
-                },
-            );
-            y += bh + b.s(6.0);
-        }
-        Some(bk) => {
-            for (i, s) in bk.slots.iter().enumerate().take(8) {
-                let slot = base + i as i32 + 1;
-                let ty = slot_type_name(s.shape);
-                tile(
-                    b,
-                    i,
-                    y,
-                    slot,
-                    format!("{ty} {}", i + 1),
-                    s.on,
-                    Some((s.shape, s.curve)),
-                    s.on.then_some(s.pho),
-                    "Click: edit · drag the dot onto a knob",
-                );
-            }
-            y += (th0 + b.s(3.0)) * 8usize.div_ceil(cols) as f32 + b.s(8.0);
-            // Le slot choisi.
-            let sel = v.sel_slot - base;
-            if (1..=8).contains(&sel) {
-                if let Some(s) = bk.slots.get(sel as usize - 1) {
-                    y = slot_editor(b, v, d, s, bk.ext, R::new(r.x, y, r.w, 0.0), base + sel);
-                }
-            }
-        }
-    }
-    let _ = th;
-    y - r.y
-}
-
-/// Le nom d'un slot d'apres sa forme.
-pub fn slot_type_name(shape: u8) -> &'static str {
-    match shape {
-        0..=4 => "LFO",
-        5 | 6 => "S&H",
-        _ => "STEP",
-    }
-}
-
-fn slot_editor(b: &mut B, v: &View, d: &Data, s: &crate::Slot, ext: bool, r: R, slot: i32) -> f32 {
-    let th = b.th;
-    let bh = b.s(22.0);
-    let mut y = r.y;
-    let gap = b.s(3.0);
-    b.push(R::new(r.x, y, r.w, 1.0), Ctl::None, Look::Sep, "");
-    y += b.s(4.0);
-    b.text(
-        R::new(r.x, y, r.w, bh),
-        &long_label(slot),
-        F::Bold,
-        src_color(th, slot),
-        Align::Left,
-    );
-    y += bh;
-    let w3 = ((r.w - 2.0 * gap) / 3.0).floor();
-    b.chip(
-        R::new(r.x, y, w3, bh),
-        Ctl::SlotOn,
-        if s.on { "● ON" } else { "○ OFF" },
-        s.on,
-        true,
-        "Turn the slot on or off",
-    );
-    b.chip(
-        R::new(r.x + w3 + gap, y, w3, bh),
-        Ctl::SlotType,
-        slot_type_name(s.shape),
-        true,
-        true,
-        "Type: LFO, S&H or STEP",
-    );
-    if s.shape <= 4 {
-        b.chip(
-            R::new(r.x + 2.0 * (w3 + gap), y, w3, bh),
-            Ctl::SlotShape,
-            bank::SHAPES[s.shape as usize],
-            true,
-            true,
-            "Waveform",
-        );
-    }
-    y += bh + gap;
-    let half = ((r.w * 0.5) - gap).floor();
-    b.seg(
-        R::new(r.x, y, half, bh),
-        &["Bipolar", "Unipolar"],
-        s.uni as usize,
-        |i| Ctl::SlotPol(i == 1),
-        &[
-            "Bipolar: swings around the base",
-            "Unipolar: only above the base",
-        ],
-    );
-    let q = ((r.w - half - 2.0 * gap) / 2.0).floor();
-    b.button_ex(
-        R::new(r.x + half + gap, y, q, bh),
-        Ctl::SlotRetrig,
-        "Retrig",
-        None,
-        false,
-        ext,
-        Tone::Normal,
-        "Restart the cycle now",
-    );
-    b.button(
-        R::new(r.x + half + 2.0 * gap + q, y, q, bh),
-        Ctl::SlotRnd,
-        "Rnd",
-        Some(Icon::Dices),
-        false,
-        "Random settings for this slot",
-    );
-    y += bh + gap;
-    b.chip(
-        R::new(r.x, y, half, bh),
-        Ctl::SlotSync,
-        bank::SYNCS[(s.sync as usize).min(10)],
-        s.sync > 0,
-        true,
-        "Free rate or synced to the tempo",
-    );
-    b.chip(
-        R::new(r.x + half + gap, y, r.w - half - gap, bh),
-        Ctl::SlotMode,
-        bank::MODES[(s.mode as usize).min(2)],
-        s.mode > 0,
-        ext,
-        "Loop, one-shot, or loop restarted with the transport",
-    );
-    y += bh + gap;
-    if (5..=6).contains(&s.shape) {
-        let src = if s.sh == 0 {
-            "Noise".to_string()
-        } else {
-            format!("LFO {}", s.sh)
-        };
-        b.chip(
-            R::new(r.x, y, r.w, bh),
-            Ctl::SlotSh,
-            &format!("Sample: {src}"),
-            true,
-            true,
-            "What S&H samples",
-        );
-        y += bh + gap;
-    }
-    if s.shape == 7 {
-        let sh = b.s(56.0);
-        let lb = b.s(8.0);
-        b.push(
-            R::new(r.x, y, r.w, lb),
-            Ctl::StepLen,
-            Look::Fader {
-                v: (s.len as f64 - 1.0) / 15.0,
-                label: String::new(),
-                enabled: true,
-            },
-            &format!("Length: {} steps", s.len),
-        );
-        y += lb + b.s(2.0);
-        b.push(
-            R::new(r.x, y, r.w, sh),
-            Ctl::Steps,
-            Look::Steps {
-                n: 16,
-                vals: s.steps.iter().map(|&v| v as f64 / 63.0).collect(),
-                len: s.len,
-                play: s.on.then(|| ((s.pho * s.len.max(1) as f64) as u8).min(15)),
-                origin: 0.0,
-                color: src_color(th, slot),
-                bools: false,
-            },
-            "Paint the steps",
-        );
-        y += sh + gap;
-        b.button(
-            R::new(r.x, y, b.s(90.0), bh),
-            Ctl::StepRnd,
-            "Randomize",
-            Some(Icon::Dices),
-            false,
-            "New values for the steps that play",
-        );
-        y += bh + gap;
-    }
-    // Les quatre boutons.
-    let kw = (r.w / 4.0).floor();
-    let kh = b.s(54.0);
-    let rate_label = if s.sync > 0 {
-        bank::SYNCS[(s.sync as usize).min(10)].to_string()
-    } else {
-        format!("{:.2} Hz", s.rate_hz)
-    };
-    let knobs: [(u8, f64, &str, String, bool, bool); 4] = [
-        (0, s.rate_n, "RATE", rate_label, s.sync == 0, false),
-        (1, s.phase, "PHASE", format!("{:.2}", s.phase), true, false),
-        (
-            2,
-            (s.curve + 1.0) / 2.0,
-            if s.shape == 4 { "WIDTH" } else { "CURVE" },
-            format!("{:+.2}", s.curve),
-            ext,
-            true,
-        ),
-        (
-            3,
-            s.slew_n,
-            "SLEW",
-            if s.slew_s < 0.001 {
-                "Off".into()
-            } else {
-                format!("{:.0} ms", s.slew_s * 1000.0)
-            },
-            ext,
-            false,
-        ),
-    ];
-    for (i, (k, val, label, txt, en, bip)) in knobs.into_iter().enumerate() {
-        b.knob(
-            R::new(r.x + kw * i as f32, y, kw, kh),
-            Ctl::SlotKnob(k),
-            val,
-            label,
-            &txt,
-            en,
-            bip,
-            "Drop a source here to modulate it",
-        );
-    }
-    y += kh + gap;
-    let _ = (v, d);
-    y
 }
 
 fn links_tab(b: &mut B, _v: &View, d: &Data, r: R) -> f32 {
@@ -2370,4 +2188,561 @@ fn links_tab(b: &mut B, _v: &View, d: &Data, r: R) -> f32 {
         y += lh;
     }
     y - r.y
+}
+
+// ---------------------------------------------------------------------------
+// Le rack des sources
+// ---------------------------------------------------------------------------
+
+fn rack(b: &mut B, v: &View, d: &Data, r: R) -> f32 {
+    let th = b.th;
+    if v.rack_fold {
+        b.button(
+            R::new(r.x, r.y, r.w, r.h),
+            Ctl::Fold,
+            "",
+            Some(Icon::ChevronLeft),
+            false,
+            "Show the sources",
+        );
+        return 0.0;
+    }
+    let bh = b.s(30.0);
+    let sq = bh;
+    b.seg_ic(
+        R::new(r.x, r.y, r.w - 2.0 * sq - b.s(10.0), bh),
+        &[
+            (Some(Icon::List), "Track"),
+            (Some(Icon::Globe), "Global"),
+            (Some(Icon::Link), "Links"),
+        ],
+        v.rack_tab as usize,
+        |i| Ctl::RackTab(i as u8),
+        &[
+            "Sources of this track",
+            "The global bank: a hidden CP MOD track, reaches any track by 14-bit CC",
+            "Every link of this track",
+        ],
+    );
+    b.icon_btn(
+        R::new(r.right() - 2.0 * sq - b.s(2.0), r.y, sq, sq),
+        Ctl::Map,
+        Icon::Magnet,
+        v.map,
+        "Map: dragging any knob sets the selected source's depth (Esc leaves)",
+    );
+    b.icon_btn(
+        R::new(r.right() - sq, r.y, sq, sq),
+        Ctl::Fold,
+        Icon::ChevronRight,
+        false,
+        "Fold the sources",
+    );
+    let body = R::new(
+        r.x,
+        r.y + bh + b.s(8.0),
+        r.w,
+        (r.h - bh - b.s(8.0)).max(0.0),
+    );
+    b.push(body, Ctl::None, Look::Clip(1), "");
+    b.clip = Some(1);
+    b.dy = v.scroll[1];
+    let h = match v.rack_tab {
+        2 => {
+            let card = b.open_card(body.x, body.y, body.w);
+            let cp = pad_of(b);
+            let end = links_tab(
+                b,
+                v,
+                d,
+                R::new(body.x + cp, body.y + cp, body.w - 2.0 * cp, 0.0),
+            );
+            let bottom = body.y + cp + end + cp;
+            b.close(card, bottom);
+            bottom - body.y
+        }
+        t => sources_tab(b, v, d, body, t == 1),
+    };
+    b.clip = None;
+    b.dy = 0.0;
+    let _ = th;
+    h
+}
+
+/// Un slot eteint, quand sa banque n'est pas encore posee (les tuiles sont
+/// la quand meme : le premier usage pose la banque).
+fn idle_slot() -> crate::Slot {
+    crate::Slot {
+        rate_hz: 1.0,
+        rate_n: 0.3,
+        len: 16,
+        ..Default::default()
+    }
+}
+
+fn sources_tab(b: &mut B, v: &View, d: &Data, r: R, global: bool) -> f32 {
+    let th = b.th;
+    let cp = pad_of(b);
+    let gap = gap_of(b);
+    let mut y = r.y;
+    let iw = r.w - 2.0 * cp;
+    let ix = r.x + cp;
+    let tg = b.s(5.0);
+    let cols = (((iw + tg) / (b.s(70.0) + tg)).floor() as usize).clamp(2, 4);
+    let tw0 = ((iw - tg * (cols - 1) as f32) / cols as f32).floor();
+    let th0 = b.s(46.0);
+    let tile = |b: &mut B,
+                i: usize,
+                y0: f32,
+                slot: i32,
+                title: String,
+                on: bool,
+                shape: Option<(u8, f64)>,
+                phase: Option<f64>,
+                tip: &str| {
+        let x = ix + (tw0 + tg) * (i % cols) as f32;
+        let yy = y0 + (th0 + tg) * (i / cols) as f32;
+        let c = src_color(b.th, slot);
+        b.push(
+            R::new(x, yy, tw0, th0),
+            Ctl::Tile(slot),
+            Look::Tile {
+                title,
+                color: c,
+                on,
+                count: d.t.dest_count(slot),
+                shape,
+                phase,
+                sel: v.sel_slot == slot,
+                hl: v.hover == Ctl::Tile(slot) || v.hover == Ctl::TileDot(slot),
+            },
+            tip,
+        );
+        let ds = b.s(10.0);
+        b.push(
+            R::new(x + b.s(6.0), yy + b.s(7.0), ds, ds),
+            Ctl::TileDot(slot),
+            Look::Dot {
+                color: c,
+                hollow: !on,
+            },
+            "Drag onto a knob to modulate it",
+        );
+    };
+    let card = b.open_card(r.x, y, r.w);
+    y += cp;
+    let mut i = 0;
+    if !global {
+        // Les sources de la piste : enveloppes, sequenceur, notes.
+        let sg_on = d.sg.is_some_and(|j| j.enabled);
+        for n in 1..=4 {
+            tile(
+                b,
+                i,
+                y,
+                200 + n,
+                format!("ENV {n}"),
+                sg_on,
+                None,
+                None,
+                if sg_on {
+                    "A Sound Gen envelope · drag the dot onto a knob"
+                } else {
+                    "The Sound Gen is off on this track"
+                },
+            );
+            i += 1;
+        }
+        for n in 1..=2 {
+            tile(
+                b,
+                i,
+                y,
+                220 + n,
+                if n == 1 {
+                    "SEQ A".into()
+                } else {
+                    "SEQ B".into()
+                },
+                d.seq.is_some(),
+                None,
+                None,
+                if d.seq.is_some() {
+                    "A sequencer modulation lane · drag the dot onto a knob"
+                } else {
+                    "No sequencer on this track"
+                },
+            );
+            i += 1;
+        }
+        for (n, name) in ["NOTE", "VEL", "RAND", "OCT"].iter().enumerate() {
+            tile(
+                b,
+                i,
+                y,
+                231 + n as i32,
+                name.to_string(),
+                true,
+                None,
+                None,
+                "A note source: held from one note to the next",
+            );
+            i += 1;
+        }
+        // Les LFO commencent une rangee.
+        i = i.div_ceil(cols) * cols;
+    }
+    let bank = if global { d.gbank } else { d.bank };
+    let base = if global { 100 } else { 0 };
+    let idle = idle_slot();
+    for k in 0..8usize {
+        let s = bank.and_then(|bk| bk.slots.get(k)).unwrap_or(&idle);
+        let slot = base + k as i32 + 1;
+        let ty = slot_type_name(s.shape);
+        tile(
+            b,
+            i,
+            y,
+            slot,
+            format!("{ty} {}", k + 1),
+            s.on,
+            Some((s.shape, s.curve)),
+            s.on.then_some(s.pho),
+            if s.on {
+                "Click: edit · drag the dot onto a knob"
+            } else {
+                "Off · click: edit · drag the dot onto a knob to start it"
+            },
+        );
+        i += 1;
+    }
+    y += (th0 + tg) * i.div_ceil(cols) as f32 - tg + cp;
+    b.close(card, y);
+    y += gap;
+    // L'enveloppe choisie (ENV 1..4) : son editeur.
+    if !global {
+        if let (Some(Band::Env(n)), Some(j)) = (band_of(v.sel_slot), d.sg.filter(|j| j.enabled)) {
+            let card = b.open_card(r.x, y, r.w);
+            y = crate::panels::env_editor(b, j, n, R::new(ix, y + cp, iw, 0.0)) + cp;
+            b.close(card, y);
+            y += gap;
+        }
+    }
+    // Le slot choisi.
+    let sel = v.sel_slot - base;
+    if (1..=8).contains(&sel) {
+        let s = bank
+            .and_then(|bk| bk.slots.get(sel as usize - 1))
+            .unwrap_or(&idle);
+        let ext = bank.is_none_or(|bk| bk.ext);
+        let card = b.open_card(r.x, y, r.w);
+        y = slot_editor(b, v, d, s, ext, R::new(ix, y + cp, iw, 0.0), base + sel) + cp;
+        b.close(card, y);
+        y += gap;
+    }
+    let _ = th;
+    y - r.y
+}
+
+/// Le nom d'un slot d'apres sa forme.
+pub fn slot_type_name(shape: u8) -> &'static str {
+    match shape {
+        0..=4 => "LFO",
+        5 | 6 => "S&H",
+        _ => "STEP",
+    }
+}
+
+/// L'icone d'une forme de slot.
+pub fn shape_icon(k: u8) -> Icon {
+    match k {
+        0 => Icon::ShapeSine,
+        1 => Icon::ShapeTriangle,
+        2 => Icon::ShapeSawUp,
+        3 => Icon::ShapeSawDown,
+        4 => Icon::ShapeSquare,
+        5 => Icon::ShapeRandom,
+        6 => Icon::ShapeHold,
+        _ => Icon::ShapeSteps,
+    }
+}
+
+fn slot_editor(b: &mut B, v: &View, d: &Data, s: &crate::Slot, ext: bool, r: R, slot: i32) -> f32 {
+    let th = b.th;
+    let bh = b.s(26.0);
+    let gap = b.s(6.0);
+    let c = src_color(th, slot);
+    let mut y = r.y;
+    // L'en-tete : la couleur, le nom, l'interrupteur.
+    let ds = b.s(9.0);
+    b.push(
+        R::new(r.x, y + (bh - ds) / 2.0, ds, ds),
+        Ctl::None,
+        Look::Dot {
+            color: c,
+            hollow: !s.on,
+        },
+        "",
+    );
+    b.text(
+        R::new(r.x + b.s(16.0), y, r.w - bh - b.s(20.0), bh),
+        &long_label(slot),
+        F::Bold,
+        th.text,
+        Align::Left,
+    );
+    b.icon_chip(
+        R::new(r.right() - bh, y, bh, bh),
+        Ctl::SlotOn,
+        Icon::Power,
+        s.on,
+        "Turn the slot on or off",
+    );
+    y += bh + gap;
+    // La forme en grand, et ou elle en est.
+    let wh = b.s(64.0);
+    let n = 96;
+    let pts: Vec<(f32, f32)> = (0..=n)
+        .map(|i| {
+            let t = i as f64 / n as f64;
+            (
+                t as f32,
+                crate::draw::shape_value(s.shape, s.curve, t * 2.0) as f32,
+            )
+        })
+        .collect();
+    let phase = s.on.then(|| {
+        let t = s.pho.fract();
+        (
+            (t * 0.5) as f32,
+            crate::draw::shape_value(s.shape, s.curve, t) as f32,
+        )
+    });
+    b.push(
+        R::new(r.x, y, r.w, wh),
+        Ctl::None,
+        Look::Wave {
+            pts,
+            color: c,
+            phase,
+        },
+        "",
+    );
+    y += wh + gap;
+    // Les formes.
+    let sg = b.s(4.0);
+    let sw = ((r.w - 7.0 * sg) / 8.0).floor();
+    for k in 0..8u8 {
+        b.push(
+            R::new(r.x + (sw + sg) * k as f32, y, sw, bh),
+            Ctl::ShapePick(k),
+            Look::IconChip {
+                icon: shape_icon(k),
+                on: s.shape == k,
+                enabled: true,
+                color: Some(c),
+            },
+            bank::SHAPES[k as usize],
+        );
+    }
+    y += bh + gap;
+    // Polarite, tempo, cycle, relance, hasard.
+    let pw = b.s(60.0);
+    b.seg(
+        R::new(r.x, y, pw, bh),
+        &["±", "+"],
+        s.uni as usize,
+        |i| Ctl::SlotPol(i == 1),
+        &[
+            "Bipolar: swings around the base",
+            "Unipolar: only above the base",
+        ],
+    );
+    let mut x = r.x + pw + gap;
+    let syw = b.s(70.0);
+    b.push(
+        R::new(x, y, syw, bh),
+        Ctl::SlotSync,
+        Look::Button {
+            label: bank::SYNCS[(s.sync as usize).min(10)].to_string(),
+            icon: Some(if s.sync > 0 { Icon::Music } else { Icon::Clock }),
+            on: s.sync > 0,
+            enabled: true,
+            tone: Tone::Normal,
+        },
+        "Free rate or synced to the tempo",
+    );
+    x += syw + gap;
+    b.push(
+        R::new(x, y, bh, bh),
+        Ctl::SlotMode,
+        Look::Button {
+            label: String::new(),
+            icon: Some(match s.mode {
+                1 => Icon::ArrowRightToLine,
+                2 => Icon::Refresh,
+                _ => Icon::Repeat,
+            }),
+            on: s.mode > 0,
+            enabled: ext,
+            tone: Tone::Normal,
+        },
+        &format!(
+            "{} · click: loop, one-shot, or loop restarted with the transport",
+            bank::MODES[(s.mode as usize).min(2)]
+        ),
+    );
+    let rx = r.right() - bh;
+    b.icon_btn(
+        R::new(rx, y, bh, bh),
+        Ctl::SlotRnd,
+        Icon::Dices,
+        false,
+        "Random settings for this slot",
+    );
+    b.button_ex(
+        R::new(rx - bh - b.s(2.0), y, bh, bh),
+        Ctl::SlotRetrig,
+        "",
+        Some(Icon::Refresh),
+        false,
+        ext,
+        Tone::Normal,
+        "Restart the cycle now",
+    );
+    y += bh + gap;
+    if (5..=6).contains(&s.shape) {
+        let src = if s.sh == 0 {
+            "Noise".to_string()
+        } else {
+            format!("LFO {}", s.sh)
+        };
+        b.chip(
+            R::new(r.x, y, r.w, bh),
+            Ctl::SlotSh,
+            &format!("Sample: {src}"),
+            true,
+            true,
+            "What S&H samples",
+        );
+        y += bh + gap;
+    }
+    if s.shape == 7 {
+        let sh = b.s(56.0);
+        let lb = b.s(8.0);
+        b.push(
+            R::new(r.x, y, r.w, lb),
+            Ctl::StepLen,
+            Look::Fader {
+                v: (s.len as f64 - 1.0) / 15.0,
+                label: String::new(),
+                enabled: true,
+            },
+            &format!("Length: {} steps", s.len),
+        );
+        y += lb + b.s(2.0);
+        b.push(
+            R::new(r.x, y, r.w, sh),
+            Ctl::Steps,
+            Look::Steps {
+                n: 16,
+                vals: s.steps.iter().map(|&v| v as f64 / 63.0).collect(),
+                len: s.len,
+                play: s.on.then(|| ((s.pho * s.len.max(1) as f64) as u8).min(15)),
+                origin: 0.0,
+                color: c,
+                bools: false,
+            },
+            "Paint the steps",
+        );
+        y += sh + gap;
+        b.icon_btn(
+            R::new(r.x, y, bh, bh),
+            Ctl::StepRnd,
+            Icon::Dices,
+            false,
+            "New values for the steps that play",
+        );
+        y += bh + gap;
+    }
+    // Les quatre boutons.
+    let kw = (r.w / 4.0).floor();
+    let kh = b.s(58.0);
+    let rate_label = if s.sync > 0 {
+        bank::SYNCS[(s.sync as usize).min(10)].to_string()
+    } else {
+        format!("{:.2} Hz", s.rate_hz)
+    };
+    let knobs: [(u8, f64, &str, String, bool, bool); 4] = [
+        (0, s.rate_n, "RATE", rate_label, s.sync == 0, false),
+        (1, s.phase, "PHASE", format!("{:.2}", s.phase), true, false),
+        (
+            2,
+            (s.curve + 1.0) / 2.0,
+            if s.shape == 4 { "WIDTH" } else { "CURVE" },
+            format!("{:+.2}", s.curve),
+            ext,
+            true,
+        ),
+        (
+            3,
+            s.slew_n,
+            "SLEW",
+            if s.slew_s < 0.001 {
+                "Off".into()
+            } else {
+                format!("{:.0} ms", s.slew_s * 1000.0)
+            },
+            ext,
+            false,
+        ),
+    ];
+    for (i, (k, val, label, txt, en, bip)) in knobs.into_iter().enumerate() {
+        b.knob(
+            R::new(r.x + kw * i as f32, y, kw, kh),
+            Ctl::SlotKnob(k),
+            val,
+            label,
+            &txt,
+            en,
+            bip,
+            "Drop a source here to modulate it",
+        );
+    }
+    y += kh + gap;
+    // Ce que ce slot mene, et de combien.
+    let names: std::collections::BTreeMap<&str, &str> =
+        d.fx.iter()
+            .flat_map(|f| f.params.iter().map(|p| (p.key.as_str(), p.name.as_str())))
+            .collect();
+    let lh = b.s(24.0);
+    for (k, ps) in d.t.params.iter().filter(|(_, p)| p.sel) {
+        let Some(i) = ps.index_of(slot) else {
+            continue;
+        };
+        let name = names.get(k.as_str()).copied().unwrap_or("?");
+        b.glyph(R::new(r.x, y, b.s(14.0), lh), Icon::Link, c);
+        let fw = (r.w * 0.42).floor();
+        b.text(
+            R::new(r.x + b.s(20.0), y, r.w - fw - b.s(26.0), lh),
+            name,
+            F::Small,
+            th.text,
+            Align::Left,
+        );
+        let dep = ps.span(i, 1.0);
+        b.push(
+            R::new(r.right() - fw, y + b.s(6.0), fw, lh - b.s(12.0)),
+            Ctl::LinkDepth(k.clone(), i),
+            Look::Fader {
+                v: (dep + 1.0) / 2.0,
+                label: format!("{:+.0} %", dep * 100.0),
+                enabled: true,
+            },
+            "Depth (double-click: zero)",
+        );
+        y += lh;
+    }
+    let _ = v;
+    y
 }
