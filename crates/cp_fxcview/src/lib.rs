@@ -580,6 +580,8 @@ pub struct View {
     drawn_overlay: bool,
     pub(crate) prev_dock_hot: Option<usize>,
     drawn_dock_hot: Option<usize>,
+    /// Les dernieres positions du pad qui bouge seul (son sillage).
+    pub(crate) trail: std::collections::VecDeque<(f64, f64)>,
     /// La prochaine image est repeinte en entier (taille, theme).
     full: bool,
     pub(crate) full_now: bool,
@@ -629,6 +631,7 @@ impl View {
             drawn_dock_hot: None,
             full: true,
             full_now: true,
+            trail: Default::default(),
         }
     }
 
@@ -714,6 +717,22 @@ impl View {
         }
         self.scale = th.scale;
         self.size = (w, h);
+        // Le sillage du pad en marche : ses dernieres positions.
+        if d.engine_runs {
+            let p = (d.t.pad.x, d.t.pad.y);
+            let far = self
+                .trail
+                .back()
+                .is_none_or(|q| (q.0 - p.0).abs() + (q.1 - p.1).abs() > 0.004);
+            if far {
+                self.trail.push_back(p);
+                while self.trail.len() > 28 {
+                    self.trail.pop_front();
+                }
+            }
+        } else {
+            self.trail.clear();
+        }
         let (items, content) = build::build(self, d, th, w, h);
         self.prev = std::mem::replace(&mut self.items, items);
         self.content_h = content;

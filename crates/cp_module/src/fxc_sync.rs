@@ -584,7 +584,7 @@ impl App {
 
     /// Les valeurs jouees des parametres a nous, recalculees depuis le
     /// modele (sans relire l'effet) : le pad vient de bouger.
-    fn fxc_relive(&mut self) {
+    pub(crate) fn fxc_relive(&mut self) {
         let dests: std::collections::HashSet<(usize, usize)> = self
             .fxc
             .plan

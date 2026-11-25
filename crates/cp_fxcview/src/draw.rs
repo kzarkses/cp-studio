@@ -825,7 +825,8 @@ impl View {
                     .min(if label.is_empty() {
                         r.h
                     } else {
-                        r.h - th.s(22.0)
+                        // Le nom et la valeur tiennent dans le rectangle.
+                        r.h - th.s(25.0)
                     })
                     .max(th.s(12.0));
                 let cx = r.cx();
@@ -1462,6 +1463,19 @@ impl View {
             cv.stroke_path(&path, 1.25 * s, th.accent.fade(0.35));
         }
         rline(cv, r.x, r.y, r.w, r.h, rr, 1.0, p.sunk_line);
+        // Le sillage : de plus en plus net jusqu'au point.
+        let n = pl.trail.len();
+        for (i, w) in pl.trail.windows(2).enumerate() {
+            let a = (i + 1) as f32 / n.max(1) as f32;
+            cv.line(
+                px(w[0].0),
+                py(w[0].1),
+                px(w[1].0),
+                py(w[1].1),
+                (1.0 + 1.5 * a) * s,
+                th.accent.fade(0.08 + 0.5 * a),
+            );
+        }
         let (dx, dy) = (px(pl.x), py(pl.y));
         // Les reperes sur les bords (la ou il est), a la couleur de ce qui
         // mene l'axe.

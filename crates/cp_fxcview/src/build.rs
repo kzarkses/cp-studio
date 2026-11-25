@@ -230,6 +230,8 @@ pub struct PadLook {
     pub figure: Option<Vec<(f64, f64)>>,
     /// Le pad bouge seul (marche, figure) : son sillage se dessine.
     pub runs: bool,
+    /// Les dernieres positions (de la plus ancienne a la plus recente).
+    pub trail: Vec<(f64, f64)>,
 }
 
 /// Un element de l'image.
@@ -906,6 +908,7 @@ fn left_zone(b: &mut B, v: &View, d: &Data, r: R) -> f32 {
             drive_y: d.plan.pad_link_y.then(|| src_color(th, p.src_y)),
             figure,
             runs: d.engine_runs,
+            trail: v.trail.iter().copied().collect(),
         }),
         "Drag: move the pad · right-drag: draw a zone · right-click: clear it",
     );

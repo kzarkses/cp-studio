@@ -310,6 +310,11 @@ impl App {
             if !ly {
                 self.r.xc_set_raw(t, b, bridge::Y_POS, self.fxc.t.pad.y);
             }
+            // Les boutons que le pad mene suivent au meme geste (pas au
+            // battement suivant).
+            self.fxc.src.insert(-1, self.fxc.t.pad.x);
+            self.fxc.src.insert(-2, self.fxc.t.pad.y);
+            self.fxc_relive();
         } else if self.fxc.t.tracked_count() > 0 {
             self.fxc_ensure_bridge();
             self.fxc.links_dirty = true;

@@ -140,7 +140,7 @@ fn knobs(
 ) -> f32 {
     let n = list.len().max(1) as f32;
     let kw = (w / n.max(4.0)).floor();
-    let kh = b.s(54.0);
+    let kh = b.s(60.0);
     for (i, (p, label, val, en, bip)) in list.iter().enumerate() {
         b.knob(
             R::new(x + kw * i as f32, y, kw, kh),
@@ -245,7 +245,7 @@ pub(crate) fn sound_gen(b: &mut B, v: &View, d: &Data, r: R) -> f32 {
         1
     };
     let cw = ((r.w - gap * (cols - 1) as f32) / cols as f32).floor();
-    let card_h = b.s(176.0);
+    let card_h = b.s(190.0);
     type Card = Box<dyn Fn(&mut B, R)>;
     let mut cards: Vec<Card> = Vec::new();
     for (i, o) in OSC.iter().enumerate() {
@@ -1022,7 +1022,7 @@ pub(crate) fn sequencer(b: &mut B, v: &View, d: &Data, r: R) -> f32 {
     y += bh + b.s(6.0);
     // Les reglages globaux.
     let kw = b.s(56.0);
-    let kh = b.s(54.0);
+    let kh = b.s(60.0);
     b.knob(
         R::new(r.x, y, kw, kh),
         Ctl::Js(SEQ, 4),
