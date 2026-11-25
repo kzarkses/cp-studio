@@ -769,3 +769,118 @@ impl Reaper {
         !self.get_func(c"gmem_read").is_null() && !self.get_func(c"gmem_attach").is_null()
     }
 }
+
+/// Une enveloppe d'automation, tenue par son pointeur (verifie a chaque
+/// appel).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Env(usize);
+
+impl Reaper {
+    fn xe(&self, e: Env) -> Option<P> {
+        type Valid = unsafe extern "C" fn(P, P, *const c_char) -> bool;
+        let v: Valid = self.xf(c"ValidatePtr2")?;
+        let p = e.0 as P;
+        if p.is_null() {
+            return None;
+        }
+        // SAFETY: projet nul = courant ; ValidatePtr2 accepte tout pointeur.
+        unsafe { v(null_mut(), p, c"TrackEnvelope*".as_ptr()) }.then_some(p)
+    }
+
+    /// L'enveloppe d'un parametre d'effet (`create` : la creer si besoin).
+    pub fn xc_fx_envelope(&self, t: Tk, fx: usize, k: usize, create: bool) -> Option<Env> {
+        type F = unsafe extern "C" fn(P, i32, i32, bool) -> P;
+        let p = self.xp(t)?;
+        let f: F = self.xf(c"GetFXEnvelope")?;
+        // SAFETY: piste vivante.
+        let e = unsafe { f(p, fx as i32, k as i32, create) };
+        (!e.is_null()).then_some(Env(e as usize))
+    }
+
+    /// Un point (forme lineaire), sans trier : [`Reaper::xc_env_sort`] apres.
+    pub fn xc_env_insert(&self, e: Env, time: f64, value: f64) -> bool {
+        type F = unsafe extern "C" fn(P, f64, f64, i32, f64, bool, *mut bool) -> bool;
+        let (Some(p), Some(f)) = (self.xe(e), self.xf::<F>(c"InsertEnvelopePoint")) else {
+            return false;
+        };
+        let mut no_sort = true;
+        // SAFETY: enveloppe vivante ; le drapeau est a nous.
+        unsafe { f(p, time, value, 0, 0.0, false, &mut no_sort) }
+    }
+
+    /// Efface les points de `a` a `b` (secondes).
+    pub fn xc_env_delete_range(&self, e: Env, a: f64, b: f64) {
+        type F = unsafe extern "C" fn(P, f64, f64) -> bool;
+        if let (Some(p), Some(f)) = (self.xe(e), self.xf::<F>(c"DeleteEnvelopePointRange")) {
+            // SAFETY: enveloppe vivante.
+            unsafe { f(p, a, b) };
+        }
+    }
+
+    pub fn xc_env_sort(&self, e: Env) {
+        type F = unsafe extern "C" fn(P) -> bool;
+        if let (Some(p), Some(f)) = (self.xe(e), self.xf::<F>(c"Envelope_SortPoints")) {
+            // SAFETY: enveloppe vivante.
+            unsafe { f(p) };
+        }
+    }
+
+    /// L'etat du transport (`GetPlayState` : 1 lecture, 2 pause, 4 enreg.).
+    pub fn xc_play_state(&self) -> i32 {
+        type F = unsafe extern "C" fn() -> i32;
+        match self.xf::<F>(c"GetPlayState") {
+            // SAFETY: sans argument.
+            Some(f) => unsafe { f() },
+            None => 0,
+        }
+    }
+
+    /// Ce qu'on entend (`GetPlayPosition`, en secondes).
+    pub fn xc_play_position(&self) -> f64 {
+        type F = unsafe extern "C" fn() -> f64;
+        match self.xf::<F>(c"GetPlayPosition") {
+            // SAFETY: sans argument.
+            Some(f) => unsafe { f() },
+            None => 0.0,
+        }
+    }
+}
+
+impl Reaper {
+    /// Le nombre de points d'une enveloppe.
+    pub fn xc_env_count(&self, e: Env) -> i32 {
+        type F = unsafe extern "C" fn(P) -> i32;
+        match (self.xe(e), self.xf::<F>(c"CountEnvelopePoints")) {
+            // SAFETY: enveloppe vivante.
+            (Some(p), Some(f)) => unsafe { f(p) },
+            _ => 0,
+        }
+    }
+
+    /// Un point d'annulation, l'etat ENTIER du projet tel qu'il est
+    /// (`Undo_OnStateChange2` ne garde que les items).
+    pub fn xc_undo_point(&self, name: &str) {
+        type F = unsafe extern "C" fn(*const c_char, i32, i32);
+        if let (Some(f), Ok(n)) = (self.xf::<F>(c"Undo_OnStateChangeEx"), CString::new(name)) {
+            // SAFETY: chaine vivante ; -1 = tous les etats, -1 = pas une piste.
+            unsafe { f(n.as_ptr(), -1, -1) };
+        }
+    }
+}
+
+impl Reaper {
+    /// Ce que « Annuler » annulerait (vide : rien).
+    pub fn xc_undo_label(&self) -> String {
+        type F = unsafe extern "C" fn(P) -> *const c_char;
+        let Some(f) = self.xf::<F>(c"Undo_CanUndo2") else {
+            return String::new();
+        };
+        // SAFETY: projet nul = courant ; la chaine est a REAPER, copiee ici.
+        let p = unsafe { f(null_mut()) };
+        if p.is_null() {
+            return String::new();
+        }
+        // SAFETY: chaine terminee par zero.
+        unsafe { CStr::from_ptr(p) }.to_string_lossy().into_owned()
+    }
+}

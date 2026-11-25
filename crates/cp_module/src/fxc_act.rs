@@ -386,6 +386,10 @@ impl App {
             Ctl::Lock => {
                 self.fxc.locked = !self.fxc.locked;
             }
+            Ctl::Capture => {
+                let (x, y) = self.fxc.view.mouse;
+                self.fxc_capture_menu(x, y);
+            }
             Ctl::Granular(on) => {
                 self.fxc.t.pad.granular = on;
                 if on && self.fxc.t.grains.is_empty() {
@@ -805,12 +809,20 @@ impl App {
             if slot == 0 {
                 return;
             }
+            let read = self.fxc_read_norm(&k);
             let ps = self.fxc.t.param_mut(&k);
             let i = match ps.index_of(slot) {
                 Some(i) => i,
                 None => {
                     if d.abs() < 0.005 {
                         return;
+                    }
+                    if !ps.sel && ps.srcs.is_empty() {
+                        // Un parametre pas encore suivi part de sa valeur,
+                        // sans le pad.
+                        ps.base = read;
+                        ps.x = false;
+                        ps.y = false;
                     }
                     if ps.add_source(slot).is_err() {
                         return;
@@ -901,7 +913,11 @@ impl App {
             Ctl::Knob(k) | Ctl::Src(k) | Ctl::Sel(k) => {
                 if slot < 0 {
                     // Un axe du pad : le parametre suit le pad sur cet axe.
+                    let read = self.fxc_read_norm(&k);
                     let ps = self.fxc.t.param_mut(&k);
+                    if !ps.sel && ps.srcs.is_empty() {
+                        ps.base = read;
+                    }
                     let pad_only = ps.sel && ps.srcs.is_empty();
                     ps.srcs.clear();
                     ps.sel = true;
@@ -1105,10 +1121,14 @@ impl App {
             (231..=234).map(|n| (n, long_label(n))).collect(),
         ));
         let id = self.fxc_popup(x, y, &e);
+        let read = self.fxc_read_norm(key);
         let ps = self.fxc.t.param_mut(key);
         match id {
             0 => return,
             10..=12 => {
+                if !ps.sel && ps.srcs.is_empty() {
+                    ps.base = read;
+                }
                 ps.srcs.clear();
                 ps.sel = true;
                 ps.x = id != 11;
@@ -1611,6 +1631,7 @@ impl App {
         let keys = rows
             .iter()
             .flat_map(|r| r.params.iter().map(|p| p.key.clone()))
+            .filter(|k| !self.fxc.unlinkable.contains(k))
             .collect();
         let fx = rows.iter().map(|r| r.guid.clone()).collect();
         (keys, fx)
@@ -1679,8 +1700,13 @@ impl App {
         self.fxc_count("roll");
         self.fxc_scan_chain();
         self.fxc_changed();
-        // Les liens dans le meme pas d'annulation.
+        // Les liens, la chaine qu'ils demandent (un bus pose ou retire) et
+        // l'etat dans le meme pas d'annulation.
         self.fxc_apply();
+        if self.fxc_restructure() {
+            self.fxc_apply();
+        }
+        self.fxc_save_now();
         self.r.xc_undo_end("FX Constellation: ROLL");
     }
 
@@ -1688,8 +1714,17 @@ impl App {
     fn fxc_shuffle(&mut self, fxs: &[String]) {
         let Some(t) = self.fxc_t() else { return };
         let r = self.r;
+        // Seulement les effets encore sur la piste (la liste a pu vieillir).
+        let fxs: Vec<String> = fxs
+            .iter()
+            .filter(|g| r.xc_fx_index(t, g).is_some())
+            .cloned()
+            .collect();
         let mut slots: Vec<usize> = fxs.iter().filter_map(|g| r.xc_fx_index(t, g)).collect();
         slots.sort();
+        if slots.len() != fxs.len() {
+            return;
+        }
         let perm = roll::order(fxs.len(), &mut self.fxc.rng);
         let order: Vec<&String> = perm.iter().map(|&i| &fxs[i]).collect();
         let snap = self.fxc_snapshot_for_move(t);
@@ -2507,11 +2542,13 @@ impl App {
         let mute = r.xc_track_value(t, "B_MUTE");
         r.xc_set_track_value(t, "B_MUTE", 1.0);
         // Les effets de l'utilisateur partent (les internes restent).
+        let snap = self.fxc_snapshot_links(t);
         for i in (0..r.xc_fx_count(t)).rev() {
             if fx_kind_at(&r, t, i) == FxKind::User {
                 r.xc_fx_delete(t, i);
             }
         }
+        self.fxc_repair_links(t, &snap);
         let mut missing = Vec::new();
         let mut model: BTreeMap<String, PState> = BTreeMap::new();
         let mut detached = Vec::new();
@@ -2620,6 +2657,10 @@ impl App {
         self.fxc_scan_chain();
         self.fxc_count("preset_load");
         self.fxc_apply();
+        if self.fxc_restructure() {
+            self.fxc_apply();
+        }
+        self.fxc_save_now();
         r.xc_undo_end(&format!("Load FX Constellation preset: {name}"));
         if missing.is_empty() {
             self.fxc_say(format!("Preset '{name}'"));
@@ -2632,6 +2673,29 @@ impl App {
         self.fxc_changed();
     }
 
+    /// Le nom d'un effet de l'utilisateur dans un snapshot : son nom, et
+    /// « #2 », « #3 »... pour les instances suivantes du meme effet.
+    fn fxc_fx_labels(&self) -> Vec<Option<String>> {
+        let mut seen: BTreeMap<String, usize> = BTreeMap::new();
+        self.fxc
+            .chain
+            .fx
+            .iter()
+            .map(|f| {
+                if f.kind != Some(FxKind::User) {
+                    return None;
+                }
+                let n = seen.entry(f.name.clone()).or_insert(0);
+                *n += 1;
+                Some(if *n == 1 {
+                    f.name.clone()
+                } else {
+                    format!("{}#{}", f.name, n)
+                })
+            })
+            .collect()
+    }
+
     fn fxc_capture_snapshot(&mut self, name: &str) {
         let Some(t) = self.fxc_t() else { return };
         let mut s = Snapshot {
@@ -2640,11 +2704,12 @@ impl App {
             macro_names: self.fxc.t.macro_names.clone(),
             ..Snapshot::default()
         };
+        let labels = self.fxc_fx_labels();
         for (i, f) in self.fxc.chain.fx.iter().enumerate() {
-            if f.kind != Some(FxKind::User) {
+            let Some(label) = labels.get(i).cloned().flatten() else {
                 continue;
-            }
-            s.fx.push((f.name.clone(), !self.r.xc_fx_enabled(t, i)));
+            };
+            s.fx.push((label.clone(), !self.r.xc_fx_enabled(t, i)));
             let names = self.fxc.names.get(&(f.guid.clone(), f.nparams));
             for k in 0..f.nparams {
                 if let Some(ps) = self.fxc.t.params.get(&pkey(&f.guid, k)) {
@@ -2652,7 +2717,7 @@ impl App {
                         let nm = names
                             .and_then(|n| n.get(k))
                             .map_or(String::new(), |n| n.0.clone());
-                        s.params.insert(format!("{}||{nm}", f.name), ps.clone());
+                        s.params.insert(format!("{label}||{nm}"), ps.clone());
                     }
                 }
             }
@@ -2693,15 +2758,19 @@ impl App {
         let Some(t) = self.fxc_t() else { return };
         let r = self.r;
         let known: Vec<String> = s.fx.iter().map(|f| f.0.clone()).collect();
+        let labels = self.fxc_fx_labels();
         let mut missing = Vec::new();
         for (n, by) in &s.fx {
-            match self.fxc.chain.fx.iter().position(|f| &f.name == n) {
+            match labels.iter().position(|l| l.as_deref() == Some(n.as_str())) {
                 Some(i) => r.xc_fx_set_enabled(t, i, !by),
                 None => missing.push(n.clone()),
             }
         }
-        for f in self.fxc.chain.fx.clone() {
-            if f.kind != Some(FxKind::User) || !known.contains(&f.name) {
+        for (fi, f) in self.fxc.chain.fx.clone().iter().enumerate() {
+            let Some(label) = labels.get(fi).cloned().flatten() else {
+                continue;
+            };
+            if !known.contains(&label) {
                 continue;
             }
             let names = self.fxc.names.get(&(f.guid.clone(), f.nparams)).cloned();
@@ -2711,7 +2780,7 @@ impl App {
                     .and_then(|n| n.get(k))
                     .map_or(String::new(), |n| n.0.clone());
                 let key = pkey(&f.guid, k);
-                match s.params.get(&format!("{}||{nm}", f.name)) {
+                match s.params.get(&format!("{label}||{nm}")) {
                     Some(ps) => {
                         self.fxc.t.params.insert(key.clone(), ps.clone());
                         if ps.srcs.is_empty() && !ps.sel {
@@ -3025,12 +3094,16 @@ impl App {
             .filter(|x| x.detached)
             .map(|x| x.guid.clone())
             .collect();
+        let snap = self.fxc_snapshot_links(t);
         for i in (0..r.xc_fx_count(t)).rev() {
             let g = r.xc_fx_guid(t, i).unwrap_or_default();
             if fx_kind_at(&r, t, i) == FxKind::User && !detached.contains(&g) {
                 r.xc_fx_delete(t, i);
             }
         }
+        self.fxc_repair_links(t, &snap);
+        // La chaine a change : relue avant toute place.
+        self.fxc_scan_chain();
         if let Some(fx) = self.fxc.chain.find(FxKind::Bank) {
             for i in 1..=8 {
                 r.xc_set_raw(t, fx, bank::on(i), (i == 1) as u8 as f64);
@@ -3058,6 +3131,11 @@ impl App {
         self.fxc_count("init");
         self.fxc_changed();
         self.fxc_apply();
+        if self.fxc_restructure() {
+            self.fxc_apply();
+        }
+        // L'etat dans le meme pas d'annulation.
+        self.fxc_save_now();
         r.xc_undo_end("FX Constellation: Init");
     }
 

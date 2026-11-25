@@ -1799,11 +1799,26 @@ impl SelfTest {
                     ),
                     ("self_refused", "1", "une macro ne se mene pas elle-meme"),
                     (
+                        "base_pull",
+                        "1",
+                        "une base changee hors de FX Constellation est reprise, pas ecrasee",
+                    ),
+                    (
                         "order_links",
                         "1",
                         "ROLL de l'ordre : chaque lien suit son effet a sa nouvelle place",
                     ),
                     ("order_fx", "1", "ROLL de l'ordre : aucun effet perdu"),
+                    (
+                        "undo",
+                        "1",
+                        "une annulation de ROLL ramene le modele (il vit dans la piste)",
+                    ),
+                    (
+                        "init",
+                        "1",
+                        "Init relache chaque lien a nous, celui de la macro aussi",
+                    ),
                     (
                         "dmod",
                         "1",
@@ -1825,6 +1840,40 @@ impl SelfTest {
                     self.say(field(&st, k) == want, format!("FX Constellation : {what}"));
                 }
                 self.keys_step = 1;
+                self.ui_at = Some(Instant::now());
+                false
+            }
+            // La capture : armer Pad X, jouer, bouger le pad, arreter.
+            1 => {
+                if t < 0.3 {
+                    return false;
+                }
+                act("cap_start");
+                self.keys_step = 2;
+                self.ui_at = Some(Instant::now());
+                false
+            }
+            2 => {
+                if t < 0.6 {
+                    return false;
+                }
+                act("cap_move");
+                self.keys_step = 3;
+                self.ui_at = Some(Instant::now());
+                false
+            }
+            3 => {
+                if t < 0.6 {
+                    return false;
+                }
+                act("cap_check");
+                let st = out();
+                let pts = field(&st, "points").parse::<i32>().unwrap_or(0);
+                self.say(
+                    pts >= 2,
+                    format!("FX Constellation : la capture ecrit le pad en enveloppe ({st})"),
+                );
+                self.keys_step = 4;
                 self.ui_at = Some(Instant::now());
                 false
             }

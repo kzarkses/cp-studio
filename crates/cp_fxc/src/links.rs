@@ -231,9 +231,11 @@ fn pad_source(x: bool, y: bool, ax: f64, ay: f64) -> Option<(usize, f64)> {
 pub fn plan(t: &Track, chain: &Chain, ctx: &Ctx) -> Plan {
     let mut p = Plan::default();
     let g = t.pad.gesture_range;
+    // Un bridge d'avant sert tel qu'il est : ses sorties du pad existent
+    // depuis sa deuxieme version (6 curseurs) ; les macros en demandent 22.
     let bridge_fx = chain
         .find(FxKind::Bridge)
-        .filter(|&i| chain.np(i) >= bridge::COUNT);
+        .filter(|&i| chain.np(i) > bridge::XY_MIX);
     let mix_fx = chain.find(FxKind::Mix);
     let mix_ok = mix_fx.filter(|&i| chain.np(i) >= mix::COUNT);
     let want_pad = !t.pad.granular && bridge_fx.is_some();
@@ -471,9 +473,11 @@ pub fn plan(t: &Track, chain: &Chain, ctx: &Ctx) -> Plan {
             };
             let tgt = match n.tgt {
                 Tgt::Input(c) => c as f64,
-                Tgt::Node(t) => {
-                    voice_of(t).map_or(0.0, |vt| (mix::BUSES * mix::INPUTS + vt) as f64)
-                }
+                Tgt::Node(t) => match voice_of(t) {
+                    Some(vt) if vt <= mix::VOICES => (mix::BUSES * mix::INPUTS + vt) as f64,
+                    // Sa cible n'a pas eu de voie : celle-ci ne module rien.
+                    _ => 0.0,
+                },
             };
             p.links.push(Link {
                 fx: mfx,
@@ -636,9 +640,11 @@ pub fn mod_window(base: f64, depth: f64, center: f64) -> (f64, f64) {
 /// l'utilisateur (jamais touche). `src_kind` est le genre de l'effet
 /// source ; `msg2` le second octet d'un lien MIDI.
 pub fn owned(src_kind: Option<FxKind>, midi_msg2: Option<i32>) -> bool {
+    // Un lien MIDI est a nous s'il lit la paire 14 bits d'un CC 16..23 (ce
+    // que la banque globale emet) ; un bouton materiel en CC 7 bits reste a
+    // l'utilisateur.
     if let Some(m) = midi_msg2 {
-        let cc = if m >= 128 { m - 128 } else { m };
-        return (16..=23).contains(&cc);
+        return (128 + 16..=128 + 23).contains(&m);
     }
     matches!(
         src_kind,

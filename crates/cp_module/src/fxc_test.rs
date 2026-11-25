@@ -24,6 +24,31 @@ impl App {
             "run" => self.fxc_selftest_run(),
             "state" => format!("state {}", self.fxc_state_line()),
             "clean" => self.fxc_selftest_clean(),
+            "cap_start" => {
+                self.fxc.capture.armed = vec![crate::fxc_capture::Cap::PadX];
+                self.fxc_ensure_bridge();
+                self.fxc_pad_to(0.2, 0.5);
+                // 1007 : lecture.
+                r.main_on_command(1007);
+                "cap started".to_string()
+            }
+            "cap_move" => {
+                self.fxc_pad_to(0.8, 0.5);
+                "cap moved".to_string()
+            }
+            "cap_check" => {
+                // 1016 : arret.
+                r.main_on_command(1016);
+                self.fxc_capture_tick();
+                let n = match (self.fxc.tk, self.fxc.chain.find(FxKind::Bridge)) {
+                    (Some(t), Some(b)) => r
+                        .xc_fx_envelope(t, b, bridge::X_POS, false)
+                        .map_or(0, |e| r.xc_env_count(e)),
+                    _ => -1,
+                };
+                self.fxc.capture.armed.clear();
+                format!("cap points={n} written={}", self.fxc.capture.points)
+            }
             s => format!("unknown step {s}"),
         };
         r.ext_set(SECTION, "selftest_fxc", &out, false);
@@ -130,6 +155,23 @@ impl App {
             });
         out.push(format!("pad_link={}", pad_ok as u8));
         ok &= pad_ok;
+        // 1b. Une base changee hors de FX Constellation (la fenetre de
+        //     l'effet, un autre script) : le modele la reprend, il ne
+        //     l'ecrase pas.
+        let eq = self.fxc.chain.index_of(&eq_guid).unwrap_or(99);
+        r.xc_set_cfg(t, eq, "param.0.mod.baseline", "0.770000000");
+        self.fxc_apply();
+        let model_base = self.fxc.t.params.get(&k0).map_or(-1.0, |p| p.base);
+        let link_base = r
+            .xc_cfg(t, eq, "param.0.mod.baseline")
+            .and_then(|v| v.parse::<f64>().ok())
+            .unwrap_or(-1.0);
+        let pull_ok = (model_base - 0.77).abs() < 1e-6 && (link_base - 0.77).abs() < 1e-6;
+        out.push(format!(
+            "base_pull={} ({model_base:.3}/{link_base:.3})",
+            pull_ok as u8
+        ));
+        ok &= pull_ok;
         // 2. Le pad bouge : le bridge recoit sa position.
         self.fxc_act(Act::PadPress(0.9, 0.2));
         self.fxc_act(Act::PadRelease);
@@ -215,8 +257,42 @@ impl App {
             macro_ok as u8, self_refused as u8
         ));
         ok &= macro_ok && self_refused;
-        // 5. ROLL : rien ne casse, les parametres suivis restent bornes.
+        // 5. ROLL : rien ne casse, les parametres suivis restent bornes ; et
+        //    une annulation ramene le modele d'avant (il vit dans la piste).
+        self.fxc_save_now();
+        let before_s = self.fxc_stored(t).unwrap_or_default();
+        r.xc_undo_point("CPC test: before ROLL");
+        let mut before_roll: Vec<String> = self.fxc.t.tracked().map(|(k, _)| k.clone()).collect();
+        before_roll.sort();
         self.fxc.roll.armed = [true, true, true, true, true, false, false, false];
+        self.fxc_roll(None);
+        self.fxc_sync_tick(false);
+        let mut after_roll: Vec<String> = self.fxc.t.tracked().map(|(k, _)| k.clone()).collect();
+        after_roll.sort();
+        let after_s = self.fxc_stored(t).unwrap_or_default();
+        let label0 = r.xc_undo_label().replace(' ', "_");
+        // 40029 : annuler.
+        r.main_on_command(40029);
+        let label1 = r.xc_undo_label().replace(' ', "_");
+        let undone_s = self.fxc_stored(t).unwrap_or_default();
+        out.push(format!(
+            "undo_state={} roll_saved={} undo_before={label0} undo_after={label1}",
+            (undone_s == before_s) as u8,
+            (after_s != before_s) as u8,
+        ));
+        self.fxc_reload_if_changed();
+        self.fxc_scan_chain();
+        self.fxc_sync_tick(false);
+        let mut undone: Vec<String> = self.fxc.t.tracked().map(|(k, _)| k.clone()).collect();
+        undone.sort();
+        let undo_ok = undone == before_roll;
+        out.push(format!(
+            "undo={} (roll changed it: {})",
+            undo_ok as u8,
+            (after_roll != before_roll) as u8
+        ));
+        ok &= undo_ok;
+        // Puis ROLL pour de bon.
         self.fxc_roll(None);
         self.fxc_sync_tick(false);
         let (eqg, cg) = (eq_guid.clone(), comp_guid.clone());
@@ -235,17 +311,47 @@ impl App {
         for _ in 0..3 {
             self.fxc_roll(None);
             self.fxc_sync_tick(false);
+            // Une seconde passe (ce que le battement suivant ferait).
+            self.fxc.links_dirty = true;
+            self.fxc_sync_tick(false);
             let eq_at = r.xc_fx_index(t, &eq_guid).map_or(-1, |i| i as i64);
             let comp_at = r.xc_fx_index(t, &comp_guid).map_or(-1, |i| i as i64);
             orders.push(format!("{eq_at}/{comp_at}"));
         }
-        let links_ok = self.fxc.plan.links.iter().all(|l| {
-            let want = match l.src {
-                cp_fxc::links::LSrc::Fx { fx, param } => Some((fx as i64, param as i64)),
-                cp_fxc::links::LSrc::Midi { .. } => self.fxc_test_link(t, l.fx, l.param),
-            };
-            self.fxc_test_link(t, l.fx, l.param) == want
-        });
+        let bad: Vec<String> = self
+            .fxc
+            .plan
+            .links
+            .iter()
+            .filter_map(|l| {
+                let want = match l.src {
+                    cp_fxc::links::LSrc::Fx { fx, param } => Some((fx as i64, param as i64)),
+                    cp_fxc::links::LSrc::Midi { .. } => self.fxc_test_link(t, l.fx, l.param),
+                };
+                let got = self.fxc_test_link(t, l.fx, l.param);
+                (got != want).then(|| {
+                    format!(
+                        "{}.{}[{}|{}|n={}]:{want:?}/{got:?}",
+                        l.fx,
+                        l.param,
+                        r.xc_fx_name(t, l.fx),
+                        r.xc_param_name(t, l.fx, l.param),
+                        r.xc_param_count(t, l.fx)
+                    )
+                })
+            })
+            .collect();
+        let links_ok = bad.is_empty();
+        if !links_ok {
+            out.push(format!(
+                "order_bad={} chain={}",
+                bad.join(";").replace(' ', ""),
+                (0..r.xc_fx_count(t))
+                    .map(|i| format!("{:?}", cp_fxc::slots::fx_kind(&r.xc_fx_name(t, i))))
+                    .collect::<Vec<_>>()
+                    .join(",")
+            ));
+        }
         let both = r.xc_fx_index(t, &eq_guid).is_some() && r.xc_fx_index(t, &comp_guid).is_some();
         out.push(format!(
             "order={} order_links={} order_fx={}",
@@ -318,11 +424,29 @@ impl App {
             seq_gone as u8
         ));
         ok &= seq_at == Some(0) && seq_gone;
+        // 8b. Init : la chaine de ROLL part, chaque lien a nous est relache
+        //     (celui de la macro aussi, que le modele oublie).
+        let bfx = self.fxc.chain.find(FxKind::Bridge);
+        let macro_before = bfx.and_then(|b| self.fxc_test_link(t, b, bridge::MACRO_IN));
+        self.fxc_init();
+        self.fxc_sync_tick(false);
+        let bfx = self.fxc.chain.find(FxKind::Bridge);
+        let macro_after = bfx.and_then(|b| self.fxc_test_link(t, b, bridge::MACRO_IN));
+        let users = (0..r.xc_fx_count(t))
+            .filter(|&i| cp_fxc::slots::fx_kind(&r.xc_fx_name(t, i)) == FxKind::User)
+            .count();
+        let init_ok = macro_before.is_some() && macro_after.is_none() && users == 0;
+        out.push(format!(
+            "init={} (macro link {}→{}, user fx {users})",
+            init_ok as u8,
+            macro_before.is_some() as u8,
+            macro_after.is_some() as u8
+        ));
+        ok &= init_ok;
         // 9. L'etat se relit : la piste revisitee garde son modele.
+        self.fxc_changed();
         self.fxc_save_now();
-        let stored = r
-            .xc_proj_ext(crate::fxc::PROJ, &self.fxc.guid)
-            .and_then(|s| cp_fxc::store::decode(&s));
+        let stored = self.fxc_stored(t).and_then(|s| cp_fxc::store::decode(&s));
         let state_ok = stored.is_some_and(|s| s.tracked_count() == self.fxc.t.tracked_count());
         out.push(format!("state={}", state_ok as u8));
         ok &= state_ok;

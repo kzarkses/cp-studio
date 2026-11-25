@@ -315,6 +315,18 @@ fn a_driven_pad_axis_stays_in_its_zone() {
 }
 
 #[test]
+fn only_the_14_bit_pair_of_the_global_bank_is_ours() {
+    use crate::links::owned;
+    assert!(owned(None, Some(128 + 16)));
+    assert!(owned(None, Some(128 + 23)));
+    // Un bouton materiel en CC 16, 7 bits : a l'utilisateur.
+    assert!(!owned(None, Some(16)));
+    assert!(!owned(None, Some(128 + 24)));
+    assert!(owned(Some(FxKind::Bridge), None));
+    assert!(!owned(Some(FxKind::User), None));
+}
+
+#[test]
 fn a_setting_of_an_internal_fx_is_a_destination() {
     // Une macro (l'entree du bridge) et un reglage de la banque, menes par
     // une source ; x_pos du bridge n'est jamais une destination de ce genre.
@@ -541,7 +553,22 @@ fn a_track_adopts_its_links() {
     two.add_source(212).unwrap();
     two.srcs[1].depth = 0.4;
     two.srcs[1].pol = Some(Pol::Bi);
+    // Un lien sur un lien, lui-meme module.
+    let mut dm = Src::new(5, 0.3);
+    dm.dmods.push(Src::new(6, -0.2));
+    two.srcs[0].dmods.push(dm);
     t.params.insert(pkey("{A}", 9), two);
+    // Un reglage interne : la vitesse du slot 1, menee par la macro 1.
+    let mut rate = PState {
+        sel: true,
+        base: 0.3,
+        range: 0.5,
+        x: false,
+        y: false,
+        ..PState::default()
+    };
+    rate.add_source(211).unwrap();
+    t.params.insert(pkey("{L}", bank::rate(1)), rate);
     let p = plan(&t, &c, &Ctx::default());
     let reads = as_read(&p);
     let raws = p.raws.clone();
@@ -553,9 +580,19 @@ fn a_track_adopts_its_links() {
     };
     let mut back = Track::default();
     let n = adopt(&mut back, &c, &reads, &raw, &[false; 8], &[false; 8]);
-    assert_eq!(n, 3);
+    assert_eq!(n, 4);
     assert_eq!((back.pad.ax, back.pad.ay), (0.3, 0.6));
-    for k in [pkey("{A}", 1), pkey("{A}", 2), pkey("{A}", 9)] {
+    // Les voies de profondeur reviennent a leur place.
+    let d0 = &back.params[&pkey("{A}", 9)].srcs[0].dmods;
+    assert_eq!(d0.len(), 1);
+    assert_eq!((d0[0].slot, d0[0].dmods[0].slot), (5, 6));
+    assert!((d0[0].depth - 0.3).abs() < 1e-9 && (d0[0].dmods[0].depth + 0.2).abs() < 1e-9);
+    for k in [
+        pkey("{A}", 1),
+        pkey("{A}", 2),
+        pkey("{A}", 9),
+        pkey("{L}", bank::rate(1)),
+    ] {
         let (a, b) = (&t.params[&k], &back.params[&k]);
         assert_eq!((a.sel, a.x, a.y, a.inv), (b.sel, b.x, b.y, b.inv), "{k}");
         assert!((a.base - b.base).abs() < 1e-9 && (a.range - b.range).abs() < 1e-9);

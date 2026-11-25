@@ -96,6 +96,19 @@ pub(crate) struct CPart {
     pub(crate) stats: BTreeMap<&'static str, u32>,
     /// Le point que le pad lisse rattrape.
     pub(crate) pad_target: Option<(f64, f64)>,
+    /// Les liens que nous avons ecrits (par cle), pour les relacher meme
+    /// quand le modele les a oublies.
+    pub(crate) linked: std::collections::BTreeSet<String>,
+    /// La base que chaque lien avait a notre derniere ecriture (une base
+    /// changee hors de FX Constellation se reprend).
+    pub(crate) seen_base: BTreeMap<String, f64>,
+    /// L'etat ecrit en dernier dans la piste (une annulation le change).
+    pub(crate) last_saved: String,
+    /// La capture en enveloppes.
+    pub(crate) capture: crate::fxc_capture::Capture,
+    /// Les parametres sur lesquels REAPER refuse un lien (des reglages
+    /// discrets de certains effets) : ni suivis, ni tires par ROLL.
+    pub(crate) unlinkable: std::collections::BTreeSet<String>,
 }
 
 impl CPart {
@@ -149,6 +162,11 @@ impl CPart {
             prefs_dirty: false,
             stats: BTreeMap::new(),
             pad_target: None,
+            linked: Default::default(),
+            seen_base: BTreeMap::new(),
+            last_saved: String::new(),
+            capture: Default::default(),
+            unlinkable: Default::default(),
         }
     }
 }
@@ -182,14 +200,64 @@ impl App {
     // La piste suivie et ce qu'on garde
     // -----------------------------------------------------------------------
 
-    /// Ecrit l'etat de la piste montree dans le projet.
+    /// Ecrit l'etat de la piste montree dans la piste (`P_EXT:CPS_FXC`) :
+    /// l'annulation de REAPER le ramene avec le reste. Un etat trop long
+    /// (48 Ko) va dans le projet, sans annulation.
     pub(crate) fn fxc_save_now(&mut self) {
         self.fxc.dirty_at = None;
-        if self.fxc.guid.is_empty() || self.fxc.tk.is_none() {
+        let Some(t) = self.fxc.tk.filter(|&t| self.r.xc_guid(t).is_some()) else {
+            return;
+        };
+        if self.fxc.guid.is_empty() {
             return;
         }
         let s = cp_fxc::store::encode(&self.fxc.t);
-        self.r.xc_set_proj_ext(PROJ, &self.fxc.guid, &s);
+        if s == self.fxc.last_saved {
+            return;
+        }
+        if s.len() < 48_000 {
+            self.r.xc_set_track_ext(t, PROJ, &s);
+            if self.r.xc_proj_ext(PROJ, &self.fxc.guid).is_some() {
+                self.r.xc_set_proj_ext(PROJ, &self.fxc.guid, "");
+            }
+        } else {
+            self.r.xc_set_track_ext(t, PROJ, "");
+            self.r.xc_set_proj_ext(PROJ, &self.fxc.guid, &s);
+        }
+        self.fxc.last_saved = s;
+    }
+
+    /// L'etat garde de la piste : la piste d'abord, puis le projet.
+    pub(crate) fn fxc_stored(&self, t: Tk) -> Option<String> {
+        self.r
+            .xc_track_ext(t, PROJ)
+            .filter(|s| !s.is_empty())
+            .or_else(|| {
+                self.r
+                    .xc_proj_ext(PROJ, &self.fxc.guid)
+                    .filter(|s| !s.is_empty())
+            })
+    }
+
+    /// L'etat de la piste a change sans nous (une annulation, un autre
+    /// projet) : le modele le reprend.
+    pub(crate) fn fxc_reload_if_changed(&mut self) {
+        let Some(t) = self.fxc.tk.filter(|&t| self.r.xc_guid(t).is_some()) else {
+            return;
+        };
+        let Some(s) = self.fxc_stored(t) else { return };
+        if s == self.fxc.last_saved {
+            return;
+        }
+        if let Some(st) = cp_fxc::store::decode(&s) {
+            self.fxc.t = st;
+            self.fxc.last_saved = s;
+            self.fxc.eng_cache.clear();
+            self.fxc_read_preset();
+            self.fxc.links_dirty = true;
+            self.fxc.view.mark();
+            self.fxc_count("reload");
+        }
     }
 
     pub(crate) fn fxc_save_prefs(&mut self) {
@@ -228,6 +296,10 @@ impl App {
         self.fxc.sig.clear();
         self.fxc.eng_cache.clear();
         self.fxc.scan.clear();
+        self.fxc.linked.clear();
+        self.fxc.seen_base.clear();
+        self.fxc.last_saved.clear();
+        self.fxc.capture = Default::default();
         self.fxc.preset = None;
         self.fxc.preset_modified = false;
         self.fxc.view.carry = None;
@@ -240,12 +312,13 @@ impl App {
             return;
         };
         self.fxc_scan_chain();
-        let stored = self
-            .r
-            .xc_proj_ext(PROJ, &self.fxc.guid)
-            .and_then(|s| cp_fxc::store::decode(&s));
+        let raw_state = self.fxc_stored(t);
+        let stored = raw_state.as_deref().and_then(cp_fxc::store::decode);
         match stored {
-            Some(st) => self.fxc.t = st,
+            Some(st) => {
+                self.fxc.t = st;
+                self.fxc.last_saved = raw_state.unwrap_or_default();
+            }
             None => {
                 // Une piste jamais vue : son pad vient du bridge, ses
                 // parametres de ses liens.
@@ -504,6 +577,7 @@ impl App {
             msg: msg.as_deref(),
             kb_note: p.kb_note,
             guids: self.fxc_guids(),
+            capture: self.fxc.capture.armed.len(),
         };
         view.layout(&d, &th, w, h);
         self.fxc.view = view;
@@ -631,7 +705,11 @@ impl App {
         if self.fxc.ticks % 3 == 0 && !down {
             self.fxc_follow();
         }
+        if self.fxc.ticks % 10 == 7 && !down && self.fxc.dirty_at.is_none() {
+            self.fxc_reload_if_changed();
+        }
         self.fxc_sync_tick(down);
+        self.fxc_capture_tick();
         if self.fxc.ticks % 10 == 0 {
             let key: Vec<_> = LOOK.iter().map(|k| self.r.theme_color(k)).collect();
             if let Some(w) = &self.fxc.win {

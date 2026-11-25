@@ -73,6 +73,14 @@ fn pol_of(center: f64, slot: i32, uni: bool) -> Option<Pol> {
     }
 }
 
+/// La source au bout d'un chemin de modulateurs de profondeur.
+fn src_at<'a>(s: &'a mut Src, path: &[usize]) -> Option<&'a mut Src> {
+    match path.split_first() {
+        None => Some(s),
+        Some((j, rest)) => src_at(s.dmods.get_mut(*j)?, rest),
+    }
+}
+
 /// Le modele d'une piste depuis ses liens. `raw(fx, param)` lit une valeur
 /// brute (les profondeurs et neutres du bus). Rend le nombre de parametres
 /// adoptes.
@@ -109,9 +117,23 @@ pub fn adopt(
     }
     let mut anchors: Vec<(usize, f64)> = Vec::new();
     let mut n = 0;
+    // Les entrees des bus : (bus, entree) → (cle du parametre, rang de la
+    // source), pour y rattacher les voies de profondeur.
+    let mut on_input: BTreeMap<(usize, usize), (String, usize)> = BTreeMap::new();
     for l in links {
         let kind = chain.kind(l.fx);
-        if !matches!(kind, FxKind::User | FxKind::SoundGen) {
+        // Les destinations : les effets de l'utilisateur, le Sound Gen, et
+        // les reglages des effets internes (banque, macros du bridge,
+        // sequenceur).
+        let dest = match kind {
+            FxKind::User | FxKind::SoundGen | FxKind::Seq => true,
+            FxKind::Bank => (1..=8).any(|i| {
+                [bank::rate(i), bank::phase(i), bank::curve(i), bank::slew(i)].contains(&l.param)
+            }),
+            FxKind::Bridge => (bridge::MACRO_IN..bridge::MACRO_IN + 8).contains(&l.param),
+            _ => false,
+        };
+        if !dest {
             continue;
         }
         let Some(fxg) = chain.fx.get(l.fx).map(|f| f.guid.clone()) else {
@@ -158,6 +180,7 @@ pub fn adopt(
                     ps.inv = amt < 0.0;
                     first = false;
                 }
+                on_input.insert((b, k), (pkey(&fxg, l.param), ps.srcs.len()));
                 ps.srcs.push(s);
             }
             if ps.srcs.is_empty() && !(ps.x || ps.y) {
@@ -180,6 +203,52 @@ pub fn adopt(
         }
         t.params.insert(pkey(&fxg, l.param), ps);
         n += 1;
+    }
+    // Les voies de profondeur : de la plus haute a la plus basse (ce qui
+    // module une voie a un numero plus bas qu'elle : sa cible est deja
+    // placee).
+    if let Some(m) = mix_fx {
+        // Ou est la source que chaque voie module : (cle, rang, chemin).
+        let mut place: BTreeMap<usize, (String, usize, Vec<usize>)> = BTreeMap::new();
+        for d in (1..=mix::VOICES).rev() {
+            let tgt = raw(m, mix::dm_tgt(d)).round() as i64;
+            if tgt <= 0 {
+                continue;
+            }
+            let Some(l) = links.iter().find(|l| l.fx == m && l.param == mix::dm_in(d)) else {
+                continue;
+            };
+            let Some((slot, None)) = slot_of_source(chain, l.src) else {
+                continue;
+            };
+            let amt = raw(m, mix::dm_amt(d));
+            let ctr = raw(m, mix::dm_ctr(d));
+            let parent = if tgt <= (mix::BUSES * mix::INPUTS) as i64 {
+                let e = (tgt - 1) as usize;
+                on_input
+                    .get(&(e / mix::INPUTS + 1, e % mix::INPUTS + 1))
+                    .map(|(k, r)| (k.clone(), *r, Vec::new()))
+            } else {
+                place
+                    .get(&((tgt as usize) - mix::BUSES * mix::INPUTS))
+                    .cloned()
+            };
+            let Some((key, rank, path)) = parent else {
+                continue;
+            };
+            let Some(ps) = t.params.get_mut(&key) else {
+                continue;
+            };
+            let Some(src) = ps.srcs.get_mut(rank).and_then(|s| src_at(s, &path)) else {
+                continue;
+            };
+            let mut dm = Src::new(slot, amt / g);
+            dm.pol = pol_of(ctr, slot, uni_of(slot));
+            let mut p2 = path.clone();
+            p2.push(src.dmods.len());
+            src.dmods.push(dm);
+            place.insert(d, (key, rank, p2));
+        }
     }
     // L'ancre du pad : celle des liens du pad (X d'abord, puis Y, puis XY).
     for (p, a) in &anchors {

@@ -100,6 +100,7 @@ pub(crate) struct Cur {
     active: bool,
     effect: i32,
     param: i32,
+    msg: i32,
     msg2: i32,
     offset: f64,
     scale: f64,
@@ -592,7 +593,7 @@ impl App {
     }
 
     /// Les liens de la piste, par GUID (avant de changer la chaine).
-    fn fxc_snapshot_links(&self, t: Tk) -> Vec<(String, usize, String)> {
+    pub(crate) fn fxc_snapshot_links(&self, t: Tk) -> Vec<(String, usize, String)> {
         let r = self.r;
         let n = r.xc_fx_count(t);
         let guids: Vec<String> = (0..n)
@@ -617,7 +618,7 @@ impl App {
         out
     }
 
-    fn fxc_repair_links(&self, t: Tk, snap: &[(String, usize, String)]) {
+    pub(crate) fn fxc_repair_links(&self, t: Tk, snap: &[(String, usize, String)]) {
         let r = self.r;
         for (g, p, src) in snap {
             let (Some(i), Some(s)) = (r.xc_fx_index(t, g), r.xc_fx_index(t, src)) else {
@@ -702,24 +703,10 @@ impl App {
     /// Le bridge (le pad et les macros), pose a la fin de la chaine.
     pub(crate) fn fxc_ensure_bridge(&mut self) -> Option<usize> {
         if let Some(i) = self.fxc.chain.find(FxKind::Bridge) {
-            let t = self.fxc_tk()?;
-            if self.r.xc_param_count(t, i) >= bridge::COUNT {
-                return Some(i);
-            }
-            // Un bridge d'avant : refait a la meme place, ses valeurs
-            // gardees.
-            let vals: Vec<f64> = (0..self.r.xc_param_count(t, i))
-                .map(|p| self.r.xc_get_raw(t, i, p).0)
-                .collect();
-            let _ = self.fxc_retire(i);
-            let j = self.fxc_insert(bridge::ADD, Some(i))?;
-            for (p, v) in vals.iter().enumerate() {
-                if !(bridge::X_OUT..=bridge::XY_MIX).contains(&p) && !(14..22).contains(&p) {
-                    self.r.xc_set_raw(t, j, p, *v);
-                }
-            }
-            self.fxc_count("bridge_upgrade");
-            return Some(j);
+            // Un bridge d'avant sert tel qu'il est : le pad des 6 curseurs,
+            // les macros des 22, le moteur des 31, la zone des 35. Le refaire
+            // perdrait ses enveloppes et ses liens.
+            return Some(i);
         }
         let t = self.fxc_tk()?;
         let at = self.r.xc_fx_count(t);
@@ -751,6 +738,7 @@ impl App {
             active,
             effect: parse(r.xc_cfg(t, fx, &k("plink.effect"))).unwrap_or(-1.0) as i32,
             param: parse(r.xc_cfg(t, fx, &k("plink.param"))).unwrap_or(-1.0) as i32,
+            msg: parse(r.xc_cfg(t, fx, &k("plink.midi_msg"))).unwrap_or(-1.0) as i32,
             msg2: parse(r.xc_cfg(t, fx, &k("plink.midi_msg2"))).unwrap_or(-1.0) as i32,
             offset: parse(r.xc_cfg(t, fx, &k("plink.offset"))).unwrap_or(0.0),
             scale: parse(r.xc_cfg(t, fx, &k("plink.scale"))).unwrap_or(1.0),
@@ -761,8 +749,12 @@ impl App {
 
     fn cur_src(c: &Cur) -> LSrc {
         if c.effect == -100 {
+            // Seule la paire 14 bits d'un CC 16..23 vient de la banque
+            // globale ; un autre lien MIDI (un bouton materiel) n'est pas une
+            // de nos sources (255 : rien).
+            let ours = c.msg == 176 && (128 + 16..=128 + 23).contains(&c.msg2);
             LSrc::Midi {
-                cc: (if c.msg2 >= 128 { c.msg2 - 128 } else { c.msg2 }).clamp(0, 127) as u8,
+                cc: if ours { (c.msg2 - 128) as u8 } else { 255 },
             }
         } else {
             LSrc::Fx {
@@ -780,16 +772,21 @@ impl App {
         let mut links = Vec::new();
         for (i, f) in chain.fx.iter().enumerate() {
             let k = f.kind.unwrap_or(FxKind::User);
-            let want = matches!(k, FxKind::User | FxKind::SoundGen)
-                || k == FxKind::Mix
-                || k == FxKind::Bridge;
-            if !want {
-                continue;
-            }
             let range: Vec<usize> = match k {
-                FxKind::Mix => (16..80).collect(),
-                FxKind::Bridge => vec![bridge::X_POS, bridge::Y_POS],
-                _ => (0..f.nparams).collect(),
+                FxKind::User | FxKind::SoundGen | FxKind::Seq => (0..f.nparams).collect(),
+                FxKind::Mix => (16..80)
+                    .chain(mix::dm_in(1)..=mix::dm_in(mix::VOICES))
+                    .collect(),
+                FxKind::Bridge => [bridge::X_POS, bridge::Y_POS]
+                    .into_iter()
+                    .chain(bridge::MACRO_IN..bridge::MACRO_IN + 8)
+                    .filter(|&p| p < f.nparams)
+                    .collect(),
+                FxKind::Bank => (1..=8)
+                    .flat_map(|i| [bank::rate(i), bank::phase(i), bank::curve(i), bank::slew(i)])
+                    .filter(|&p| p < f.nparams)
+                    .collect(),
+                _ => continue,
             };
             for p in range {
                 let c = self.fxc_cur(t, i, p);
@@ -914,7 +911,7 @@ impl App {
             return false;
         }
         if c.effect == -100 {
-            return cp_fxc::links::owned(None, Some(c.msg2));
+            return c.msg == 176 && cp_fxc::links::owned(None, Some(c.msg2));
         }
         cp_fxc::links::owned(
             (c.effect >= 0).then(|| self.fxc.chain.kind(c.effect as usize)),
@@ -950,12 +947,19 @@ impl App {
             }
         }
         let p = plan(&self.fxc.t, &chain, &ctx);
+        let _ = r;
         if p.wants_global {
             self.fxc_ensure_global_send();
         }
         let mut wanted = std::collections::BTreeSet::new();
-        for l in &p.links {
+        let mut p = p;
+        let mut links = std::mem::take(&mut p.links);
+        for l in links.iter_mut() {
             wanted.insert((l.fx, l.param));
+            let gk = chain.fx.get(l.fx).map(|f| pkey(&f.guid, l.param));
+            if let Some(k) = &gk {
+                self.fxc.linked.insert(k.clone());
+            }
             let c = self.fxc_cur(t, l.fx, l.param);
             let same_src = c.active
                 && match l.src {
@@ -964,6 +968,27 @@ impl App {
                         c.effect == -100 && (c.msg2 == 128 + cc as i32 || c.msg2 == cc as i32)
                     }
                 };
+            // La base d'un parametre, changee hors de FX Constellation (sa
+            // fenetre, un autre script) depuis notre derniere ecriture, et
+            // pas par le modele : le lien a raison, le modele la reprend.
+            // Le lien porte-t-il la base du parametre (pas une entree de bus,
+            // une voie, un axe du pad) ?
+            let base_key = gk.as_ref().filter(|k| {
+                self.fxc
+                    .t
+                    .params
+                    .get(*k)
+                    .is_some_and(|ps| (ps.base - l.baseline).abs() < 1e-9)
+            });
+            if let (Some(k), true) = (base_key, same_src && c.mod_active) {
+                if let Some(&seen) = self.fxc.seen_base.get(k) {
+                    if (c.baseline - seen).abs() > 1e-6 && (l.baseline - seen).abs() < 1e-9 {
+                        self.fxc.t.param_mut(k).base = c.baseline.clamp(0.0, 1.0);
+                        l.baseline = c.baseline;
+                        self.fxc.dirty_at = Some(std::time::Instant::now());
+                    }
+                }
+            }
             let same = same_src
                 && c.mod_active
                 && (c.offset - l.offset).abs() < 1e-6
@@ -972,10 +997,35 @@ impl App {
             if !same {
                 self.fxc_write_link(t, l);
                 self.fxc_count("link_write");
+                // REAPER refuse un lien sur certains reglages : relu, et un
+                // refus rend le parametre « non modulable » (plus suivi).
+                if !self.fxc_cur(t, l.fx, l.param).active {
+                    if let Some(k) = gk.as_ref().filter(|k| self.fxc.t.params.contains_key(*k)) {
+                        self.fxc.unlinkable.insert(k.clone());
+                        if let Some(ps) = self.fxc.t.params.get_mut(k) {
+                            ps.sel = false;
+                            ps.srcs.clear();
+                        }
+                        let name = r.xc_param_name(t, l.fx, l.param);
+                        self.fxc_say(format!("{name}: REAPER refuses to modulate it"));
+                        self.fxc.links_dirty = true;
+                        self.fxc.dirty_at = Some(std::time::Instant::now());
+                    }
+                }
+            }
+            // La base telle que le lien la porte maintenant (ecrite ou vue).
+            if let Some(k) = base_key {
+                self.fxc.seen_base.insert(k.clone(), l.baseline);
             }
         }
-        // Ce qui n'est plus voulu.
-        let keys: Vec<String> = self.fxc.t.params.keys().cloned().collect();
+        p.links = links;
+        // Ce qui n'est plus voulu : les parametres du modele, et tout lien
+        // que nous avons ecrit (le modele a pu les oublier : Init, un
+        // preset).
+        let mut keys: Vec<String> = self.fxc.t.params.keys().cloned().collect();
+        keys.extend(self.fxc.linked.iter().cloned());
+        keys.sort();
+        keys.dedup();
         for k in &keys {
             let Some((g, i)) = split_pkey(k) else {
                 continue;
@@ -991,6 +1041,8 @@ impl App {
                 self.fxc_release(t, fx, i, true);
                 self.fxc_count("link_release");
             }
+            self.fxc.linked.remove(k);
+            self.fxc.seen_base.remove(k);
         }
         if let Some(m) = chain.find(FxKind::Mix) {
             for pi in (16..80).chain(mix::dm_in(1)..=mix::dm_in(mix::VOICES)) {
@@ -1033,7 +1085,7 @@ impl App {
     }
 
     /// Ce qui pose ou retire un effet interne : jamais pendant un geste.
-    fn fxc_restructure(&mut self) -> bool {
+    pub(crate) fn fxc_restructure(&mut self) -> bool {
         let p = self.fxc.plan.clone();
         let guid = self.fxc.guid.clone();
         if p.mix_missing && !self.fxc.refused.contains_key(&format!("{guid}|mix")) {
@@ -1050,9 +1102,11 @@ impl App {
             self.fxc_count("mix");
             return true;
         }
-        if p.mix_unused {
+        if p.mix_unused && !self.fxc.refused.contains_key(&format!("{guid}|mix_unused")) {
             if let Some(i) = self.fxc.chain.find(FxKind::Mix) {
-                if self.fxc_retire(i).is_ok() {
+                if let Err(e) = self.fxc_retire(i) {
+                    self.fxc.refused.insert(format!("{guid}|mix_unused"), e);
+                } else {
                     self.fxc_count("mix_retire");
                     return true;
                 }
@@ -1077,14 +1131,24 @@ impl App {
             self.fxc_count("notes");
             return true;
         }
-        if p.notes_unused {
+        if p.notes_unused
+            && !self
+                .fxc
+                .refused
+                .contains_key(&format!("{guid}|notes_unused"))
+        {
             if let (Some(t), Some(i)) = (self.fxc_tk(), self.fxc.chain.find(FxKind::Notes)) {
                 let park: Vec<String> = (4..10)
                     .map(|k| format!("{:.6}", self.r.xc_get_raw(t, i, k).0))
                     .collect();
-                if self.fxc_retire(i).is_ok() {
-                    self.r.xc_set_track_ext(t, notes::PARK, &park.join(","));
-                    return true;
+                match self.fxc_retire(i) {
+                    Ok(()) => {
+                        self.r.xc_set_track_ext(t, notes::PARK, &park.join(","));
+                        return true;
+                    }
+                    Err(e) => {
+                        self.fxc.refused.insert(format!("{guid}|notes_unused"), e);
+                    }
                 }
             }
         }
@@ -1100,7 +1164,8 @@ impl App {
         let Some(bfx) = self.fxc.chain.find(FxKind::Bridge) else {
             return;
         };
-        if self.r.xc_param_count(t, bfx) < bridge::COUNT {
+        let np = self.r.xc_param_count(t, bfx);
+        if np < bridge::ZONE {
             return;
         }
         let p = &self.fxc.t.pad;
@@ -1128,6 +1193,8 @@ impl App {
             z[2],
             z[3],
         ];
+        // Un bridge sans zone (31 curseurs) : le moteur seulement.
+        let want = &want[..if np >= bridge::COUNT { want.len() } else { 9 }];
         if self.fxc.eng_cache.len() != want.len() {
             self.fxc.eng_cache = (0..want.len())
                 .map(|k| self.r.xc_get_raw(t, bfx, bridge::ENG_MODE + k).0)
@@ -1187,6 +1254,14 @@ impl App {
             self.fxc.links_dirty = false;
             self.fxc_apply();
             if !down && self.fxc_restructure() {
+                self.fxc_apply();
+            }
+        } else if !down && self.fxc.ticks % 10 == 5 {
+            // Ce que le plan demande a la chaine et qu'un geste a retarde.
+            let p = &self.fxc.plan;
+            if (p.mix_missing || p.mix_unused || p.notes_missing || p.notes_unused)
+                && self.fxc_restructure()
+            {
                 self.fxc_apply();
             }
         }
