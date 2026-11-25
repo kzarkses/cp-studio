@@ -111,6 +111,16 @@ fn parse(s: Option<String>) -> Option<f64> {
     s.and_then(|v| v.trim().parse::<f64>().ok())
 }
 
+/// Les etendues proposees (portees, bases).
+const SPANS: [(f64, f64); 6] = [
+    (0.0, 1.0),
+    (0.25, 0.75),
+    (0.0, 0.5),
+    (0.5, 1.0),
+    (0.1, 0.4),
+    (0.4, 0.9),
+];
+
 /// Un choix de menu : les identifiants de chaque famille.
 const M_SRC: u32 = 1000;
 const M_REMOVE: u32 = 2000;
@@ -1488,6 +1498,47 @@ impl App {
                 pct(30_000, s.intensity),
             ),
             MenuEntry::check(5, "Exclusive X / Y", s.exclusive_xy),
+            MenuEntry::Sub(
+                format!("Range span {:.2} – {:.2}", s.range_min, s.range_max),
+                SPANS
+                    .iter()
+                    .enumerate()
+                    .map(|(i, (a, b))| {
+                        MenuEntry::check(
+                            50 + i as u32,
+                            format!("{a:.2} – {b:.2}"),
+                            (s.range_min - a).abs() < 1e-6 && (s.range_max - b).abs() < 1e-6,
+                        )
+                    })
+                    .collect(),
+            ),
+            MenuEntry::Sub(
+                format!("Base span {:.2} – {:.2}", s.base_min, s.base_max),
+                SPANS
+                    .iter()
+                    .enumerate()
+                    .map(|(i, (a, b))| {
+                        MenuEntry::check(
+                            60 + i as u32,
+                            format!("{a:.2} – {b:.2}"),
+                            (s.base_min - a).abs() < 1e-6 && (s.base_max - b).abs() < 1e-6,
+                        )
+                    })
+                    .collect(),
+            ),
+            MenuEntry::Sub(
+                format!("Modulators: {} slot(s)", s.lfo_slots),
+                (1..=8)
+                    .map(|n| MenuEntry::check(70 + n, n.to_string(), s.lfo_slots == n as usize))
+                    .chain([
+                        MenuEntry::Sep,
+                        MenuEntry::check(80, "Randomize the shape", s.lfo_shape),
+                        MenuEntry::check(81, "Randomize the rate (free Hz)", s.lfo_rate),
+                        MenuEntry::check(82, "Randomize the tempo sync", s.lfo_sync),
+                        MenuEntry::check(83, "Randomize the phase", s.lfo_phase),
+                    ])
+                    .collect(),
+            ),
             MenuEntry::Sep,
             MenuEntry::off("Pad"),
         ];
@@ -1509,6 +1560,23 @@ impl App {
         let r = &mut self.fxc.roll;
         match id {
             5 => r.exclusive_xy = !r.exclusive_xy,
+            i @ 50..=59 => {
+                if let Some((a, b)) = SPANS.get((i - 50) as usize) {
+                    r.range_min = *a;
+                    r.range_max = *b;
+                }
+            }
+            i @ 60..=69 => {
+                if let Some((a, b)) = SPANS.get((i - 60) as usize) {
+                    r.base_min = *a;
+                    r.base_max = *b;
+                }
+            }
+            i @ 71..=78 => r.lfo_slots = (i - 70) as usize,
+            80 => r.lfo_shape = !r.lfo_shape,
+            81 => r.lfo_rate = !r.lfo_rate,
+            82 => r.lfo_sync = !r.lfo_sync,
+            83 => r.lfo_phase = !r.lfo_phase,
             i @ 100..=9_999 => {
                 let v = i - 100;
                 r.random_min = (v / 100) as usize;
