@@ -478,7 +478,7 @@ impl App {
             let c = s
                 .pol
                 .map_or(cp_fxc::slots::source_center(s.slot, uni), |p| p.center());
-            sum += ps.span_eff(i, g) * (v - c);
+            sum += self.fxc_depth_live(ps.span_eff(i, g), s, g) * (v - c);
         }
         if self.fxc.plan.bus_of.contains_key(key) {
             if !self.fxc.plan.standby.contains(key)
@@ -498,6 +498,26 @@ impl App {
             sum = sum.clamp(-1.0, 1.0);
         }
         (ps.base + sum).clamp(0.0, 1.0)
+    }
+
+    /// La profondeur jouee d'un lien : la sienne, et ce que ses modulateurs
+    /// y ajoutent (en profondeur).
+    fn fxc_depth_live(&self, base: f64, s: &cp_fxc::model::Src, g: f64) -> f64 {
+        if s.off {
+            return 0.0;
+        }
+        let mut d = base;
+        for dm in &s.dmods {
+            let Some(v) = self.fxc.src.get(&dm.slot) else {
+                continue;
+            };
+            let c = dm
+                .pol
+                .map_or(cp_fxc::slots::source_center(dm.slot, false), |p| p.center());
+            let amt = if dm.off { 0.0 } else { dm.depth * g };
+            d += self.fxc_depth_live(amt, dm, g) * (v - c);
+        }
+        d
     }
 
     // -----------------------------------------------------------------------
@@ -973,7 +993,7 @@ impl App {
             }
         }
         if let Some(m) = chain.find(FxKind::Mix) {
-            for pi in 16..80 {
+            for pi in (16..80).chain(mix::dm_in(1)..=mix::dm_in(mix::VOICES)) {
                 if wanted.contains(&(m, pi)) {
                     continue;
                 }

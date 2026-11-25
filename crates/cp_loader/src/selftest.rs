@@ -1799,6 +1799,11 @@ impl SelfTest {
                     ),
                     ("self_refused", "1", "une macro ne se mene pas elle-meme"),
                     (
+                        "dmod",
+                        "1",
+                        "un lien sur un lien : une voie de profondeur du Mod Mix",
+                    ),
+                    (
                         "preset",
                         "1",
                         "un preset enregistre puis rappele rend les memes parametres",

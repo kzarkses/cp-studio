@@ -338,6 +338,10 @@ pub enum Ctl {
     /// Une ligne de l'onglet Links : (parametre, rang de la source).
     LinkDepth(String, usize),
     LinkRemove(String, usize),
+    /// Un lien sur un lien : (parametre, rang de la source, rang du
+    /// modulateur de sa profondeur).
+    DmodDepth(String, usize, usize),
+    DmodRemove(String, usize, usize),
     // La barre d'etat.
     Pill(u8),
     AxisKnob(u8),

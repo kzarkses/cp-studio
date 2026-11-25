@@ -2257,6 +2257,47 @@ fn links_tab(b: &mut B, _v: &View, d: &Data, r: R) -> f32 {
                 "Remove this link",
             );
             y += lh;
+            // Ce qui module la profondeur de ce lien.
+            for (j, dm) in s.dmods.iter().enumerate() {
+                let c = src_color(th, dm.slot);
+                let ds = b.s(7.0);
+                let ix = r.x + b.s(22.0);
+                b.push(
+                    R::new(ix, y + (lh - ds) / 2.0, ds, ds),
+                    Ctl::None,
+                    Look::Dot {
+                        color: c,
+                        hollow: dm.off,
+                    },
+                    "",
+                );
+                b.text(
+                    R::new(ix + b.s(12.0), y, r.w * 0.33 - b.s(16.0), lh),
+                    &format!("↳ {}", long_label(dm.slot)),
+                    F::Small,
+                    th.text_faint,
+                    Align::Left,
+                );
+                b.push(
+                    R::new(fx, y + b.s(6.0), fw, lh - b.s(12.0)),
+                    Ctl::DmodDepth(k.clone(), i, j),
+                    Look::Fader {
+                        v: (dm.depth + 1.0) / 2.0,
+                        label: format!("{:+.0} %", dm.depth * 100.0),
+                        enabled: true,
+                    },
+                    "How much this source moves the depth above (double-click: zero)",
+                );
+                b.button(
+                    R::new(r.right() - lh, y, lh, lh),
+                    Ctl::DmodRemove(k.clone(), i, j),
+                    "",
+                    Some(Icon::X),
+                    false,
+                    "Remove this link on the link",
+                );
+                y += lh;
+            }
         }
         y += b.s(6.0);
         n += 1;

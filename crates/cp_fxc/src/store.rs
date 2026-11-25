@@ -50,15 +50,43 @@ pub fn encode_srcs(s: &[Src]) -> String {
             if s.off {
                 t.push('x');
             }
+            if !s.dmods.is_empty() {
+                t.push('{');
+                t.push_str(&encode_srcs(&s.dmods));
+                t.push('}');
+            }
             t
         })
         .collect::<Vec<_>>()
         .join(",")
 }
 
+/// Les morceaux separes par des virgules hors des accolades.
+fn split_top(t: &str) -> Vec<&str> {
+    let mut out = Vec::new();
+    let (mut depth, mut start) = (0i32, 0usize);
+    for (i, c) in t.char_indices() {
+        match c {
+            '{' => depth += 1,
+            '}' => depth -= 1,
+            ',' if depth == 0 => {
+                out.push(&t[start..i]);
+                start = i + 1;
+            }
+            _ => {}
+        }
+    }
+    out.push(&t[start..]);
+    out
+}
+
 pub fn decode_srcs(t: &str) -> Vec<Src> {
     let mut out = Vec::new();
-    for part in t.split(',').filter(|p| !p.is_empty()) {
+    for part in split_top(t).into_iter().filter(|p| !p.is_empty()) {
+        let (part, inner) = match part.find('{') {
+            Some(i) => (&part[..i], Some(part[i + 1..].trim_end_matches('}'))),
+            None => (part, None),
+        };
         let Some((slot, rest)) = part.split_once('@') else {
             continue;
         };
@@ -83,6 +111,9 @@ pub fn decode_srcs(t: &str) -> Vec<Src> {
             } else if c == 'x' {
                 s.off = true;
             }
+        }
+        if let Some(inner) = inner {
+            s.dmods = decode_srcs(inner);
         }
         out.push(s);
     }

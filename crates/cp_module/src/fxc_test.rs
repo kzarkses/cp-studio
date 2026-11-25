@@ -167,6 +167,26 @@ impl App {
             still as u8
         ));
         ok &= bus_ok && in_ok && still;
+        // 4a. Un lien sur un lien : l'LFO 4 module la profondeur de l'LFO 2
+        //     sur le parametre 1 (une voie de profondeur du Mod Mix).
+        if let Some(s) = self.fxc.t.param_mut(&k1).srcs.get_mut(0) {
+            s.dmods.push(cp_fxc::model::Src::new(4, 0.3));
+        }
+        self.fxc_changed();
+        self.fxc_sync_tick(false);
+        let mx = self.fxc.chain.find(FxKind::Mix);
+        let bk = self.fxc.chain.find(FxKind::Bank);
+        let voice = mx.and_then(|m| self.fxc_test_link(t, m, mix::dm_in(1)));
+        let tgt = mx.map_or(-1.0, |m| r.xc_get_raw(t, m, mix::dm_tgt(1)).0);
+        let amt = mx.map_or(-1.0, |m| r.xc_get_raw(t, m, mix::dm_amt(1)).0);
+        let dmod_ok = voice == bk.map(|b| (b as i64, bank::out(4) as i64))
+            && (1.0..=64.0).contains(&tgt)
+            && (amt - 0.3).abs() < 1e-3;
+        out.push(format!(
+            "dmod={} dm_tgt={tgt} dm_amt={amt:.3}",
+            dmod_ok as u8
+        ));
+        ok &= dmod_ok;
         // 4b. Une source sur une macro (destination interne) ; une macro
         //     ne se mene pas elle-meme.
         self.fxc_act(Act::Drop(3, Ctl::Macro(1)));

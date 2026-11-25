@@ -343,6 +343,76 @@ fn a_setting_of_an_internal_fx_is_a_destination() {
 }
 
 #[test]
+fn a_link_on_a_link_is_a_depth_voice() {
+    // L'LFO 2 mene le parametre ; l'LFO 3 module la profondeur de ce lien ;
+    // la macro 1 module la profondeur de ce lien-la.
+    let k = pkey("{A}", 4);
+    let mut ps = PState {
+        sel: true,
+        base: 0.5,
+        range: 0.4,
+        x: false,
+        y: false,
+        ..PState::default()
+    };
+    ps.add_source(2).unwrap();
+    let mut dm = Src::new(3, 0.25);
+    dm.dmods.push(Src::new(211, -0.5));
+    ps.srcs[0].dmods.push(dm);
+    let t = track_with(&k, ps.clone());
+    // Sans Mod Mix : il manque.
+    assert!(plan(&t, &chain(), &Ctx::default()).mix_missing);
+    let p = plan(&t, &chain_mix(), &Ctx::default());
+    assert_eq!(p.bus_of.get(&k), Some(&1));
+    let raw = |param: usize| {
+        p.raws
+            .iter()
+            .rev()
+            .find(|r| r.fx == 0 && r.param == param)
+            .map(|r| r.value)
+    };
+    // Voie 1 : la macro, qui module la voie 2 ; voie 2 : l'LFO 3, qui
+    // module l'entree 1 du bus 1.
+    assert_eq!(
+        raw(mix::dm_tgt(1)),
+        Some((mix::BUSES * mix::INPUTS + 2) as f64)
+    );
+    assert_eq!(raw(mix::dm_amt(1)), Some(-0.5));
+    assert_eq!(raw(mix::dm_tgt(2)), Some(1.0));
+    assert_eq!(raw(mix::dm_amt(2)), Some(0.25));
+    assert_eq!(raw(mix::dm_tgt(3)), Some(0.0));
+    let l1 = p
+        .links
+        .iter()
+        .find(|l| l.fx == 0 && l.param == mix::dm_in(1))
+        .unwrap();
+    assert_eq!(
+        l1.src,
+        LSrc::Fx {
+            fx: 2,
+            param: bridge::MACRO_OUT
+        }
+    );
+    // Le lien du dessus contourne : ses voies jouent 0.
+    let mut t2 = t.clone();
+    t2.param_mut(&k).srcs[0].off = true;
+    let p2 = plan(&t2, &chain_mix(), &Ctx::default());
+    let raw2 = |param: usize| {
+        p2.raws
+            .iter()
+            .rev()
+            .find(|r| r.param == param)
+            .map(|r| r.value)
+    };
+    assert_eq!(raw2(mix::dm_amt(1)), Some(0.0));
+    assert_eq!(raw2(mix::dm_amt(2)), Some(0.0));
+    // Le texte les garde.
+    let back = store::decode(&store::encode(&t)).unwrap();
+    assert_eq!(back.params[&k].srcs[0].dmods[0].dmods[0].slot, 211);
+    assert_eq!(back.params[&k], t.params[&k]);
+}
+
+#[test]
 fn the_mod_window_crosses_for_a_negative_depth() {
     assert_eq!(mod_window(0.5, 0.4, 0.5), (0.3, 0.7));
     assert_eq!(mod_window(0.5, 0.4, 0.0), (0.5, 0.9));

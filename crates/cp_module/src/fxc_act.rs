@@ -115,6 +115,9 @@ fn parse(s: Option<String>) -> Option<f64> {
 const M_SRC: u32 = 1000;
 const M_REMOVE: u32 = 2000;
 const M_BYPASS: u32 = 3000;
+/// « Modulate a depth » : 5000 + rang·1000 + (source + 500).
+const M_DMOD: u32 = 5000;
+const M_DCLEAR: u32 = 9900;
 
 impl App {
     fn fxc_t(&self) -> Option<Tk> {
@@ -579,6 +582,14 @@ impl App {
                 self.fxc.t.param_mut(&k).remove_source(i);
                 self.fxc_changed();
             }
+            Ctl::DmodRemove(k, i, j) => {
+                if let Some(s) = self.fxc.t.param_mut(&k).srcs.get_mut(i) {
+                    if j < s.dmods.len() {
+                        s.dmods.remove(j);
+                    }
+                }
+                self.fxc_changed();
+            }
             Ctl::Pill(axis) => {
                 if axis == 0 {
                     self.fxc.t.pad.src_x = 0;
@@ -735,6 +746,19 @@ impl App {
             Ctl::LinkDepth(k, i) => {
                 let g = self.fxc.t.pad.gesture_range;
                 self.fxc.t.param_mut(&k).set_span(i, v * 2.0 - 1.0, g);
+                self.fxc_changed();
+            }
+            Ctl::DmodDepth(k, i, j) => {
+                if let Some(d) = self
+                    .fxc
+                    .t
+                    .param_mut(&k)
+                    .srcs
+                    .get_mut(i)
+                    .and_then(|s| s.dmods.get_mut(j))
+                {
+                    d.depth = (v * 2.0 - 1.0).clamp(-1.0, 1.0);
+                }
                 self.fxc_changed();
             }
             Ctl::Js(panel, p) => self.fxc_js_value(panel, p, v),
@@ -979,6 +1003,40 @@ impl App {
             rm.push(MenuEntry::Sep);
             rm.push(MenuEntry::item(M_REMOVE + 99, "All sources"));
             e.push(MenuEntry::Sub("Remove source".into(), rm));
+            // Moduler la profondeur d'un lien par une autre source.
+            let cands: Vec<(i32, String)> = (1..=8)
+                .map(|n| (n, format!("CP LFO {n}")))
+                .chain((101..=108).map(|n| (n, format!("Global LFO {}", n - 100))))
+                .chain((211..=218).map(|n| (n, self.fxc.t.macro_name((n - 210) as usize))))
+                .chain((201..=204).map(|n| (n, long_label(n))))
+                .chain((221..=222).map(|n| (n, long_label(n))))
+                .chain((231..=234).map(|n| (n, long_label(n))))
+                .chain([(-1, "Pad X".to_string()), (-2, "Pad Y".to_string())])
+                .collect();
+            let dm: Vec<MenuEntry> = ps
+                .srcs
+                .iter()
+                .enumerate()
+                .map(|(i, s)| {
+                    MenuEntry::Sub(
+                        format!("Depth of {}", long_label(s.slot)),
+                        cands
+                            .iter()
+                            .map(|(c, l)| {
+                                MenuEntry::check(
+                                    M_DMOD + i as u32 * 1000 + (c + 500) as u32,
+                                    l.clone(),
+                                    s.dmods.iter().any(|d| d.slot == *c),
+                                )
+                            })
+                            .collect(),
+                    )
+                })
+                .collect();
+            e.push(MenuEntry::Sub("Modulate a depth".into(), dm));
+            if ps.srcs.iter().any(|s| !s.dmods.is_empty()) {
+                e.push(MenuEntry::item(M_DCLEAR, "Clear the depth modulations"));
+            }
             e.push(MenuEntry::Sep);
         }
         let pad_only = ps.srcs.is_empty() && ps.sel;
@@ -1054,6 +1112,28 @@ impl App {
             i if i == M_REMOVE + 99 => ps.srcs.clear(),
             i if (M_REMOVE..M_REMOVE + MAX_SOURCES as u32).contains(&i) => {
                 ps.remove_source((i - M_REMOVE) as usize)
+            }
+            M_DCLEAR => {
+                for s in ps.srcs.iter_mut() {
+                    s.dmods.clear();
+                }
+            }
+            i if (M_DMOD..M_DMOD + 4000).contains(&i) => {
+                let r = (i - M_DMOD) / 1000;
+                let slot = ((i - M_DMOD) % 1000) as i32 - 500;
+                if let Some(s) = ps.srcs.get_mut(r as usize) {
+                    match s.dmods.iter().position(|d| d.slot == slot) {
+                        Some(j) => {
+                            s.dmods.remove(j);
+                        }
+                        None if s.dmods.len() < MAX_SOURCES => {
+                            s.dmods.push(cp_fxc::model::Src::new(slot, 0.25));
+                            self.fxc_arm(slot);
+                            self.fxc_count("dmod");
+                        }
+                        None => self.fxc_say("four sources at most on one depth"),
+                    }
+                }
             }
             i if (M_SRC..M_SRC + 1000).contains(&i) => {
                 let slot = i as i32 - M_SRC as i32 - 500;

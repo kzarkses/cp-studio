@@ -267,7 +267,7 @@ pub fn plan(t: &Track, chain: &Chain, ctx: &Ctx) -> Plan {
     let mut riders: Vec<&String> = Vec::new();
     for (_, _, k) in &keys {
         let ps = &t.params[*k];
-        if ps.srcs.len() >= 2 {
+        if ps.srcs.len() >= 2 || ps.srcs.iter().any(|s| !s.dmods.is_empty()) {
             want_bus.push(k);
         } else if pad_rides(ps) {
             riders.push(k);
@@ -315,6 +315,7 @@ pub fn plan(t: &Track, chain: &Chain, ctx: &Ctx) -> Plan {
         p.mix_missing = true;
     }
 
+    let mut nodes: Vec<Node> = Vec::new();
     for &(fx, param, k) in &keys {
         let ps = &t.params[k];
         if ps.srcs.is_empty() {
@@ -381,6 +382,13 @@ pub fn plan(t: &Track, chain: &Chain, ctx: &Ctx) -> Plan {
                 }
                 used = kk;
             }
+            // Les liens sur ces liens : des voies de profondeur.
+            for (i, s) in ps.srcs.iter().enumerate() {
+                let code = (b - 1) * mix::INPUTS + i + 1;
+                for dm in &s.dmods {
+                    depth_node(&mut nodes, dm, Tgt::Input(code), s.off, g);
+                }
+            }
             if pad_rides(ps) {
                 if let Some(bfx) = bridge_fx {
                     if let Some((bp, anchor)) = pad_source(ps.x, ps.y, t.pad.ax, t.pad.ay) {
@@ -431,6 +439,81 @@ pub fn plan(t: &Track, chain: &Chain, ctx: &Ctx) -> Plan {
                 baseline: ps.base,
             });
         }
+    }
+
+    // Les voies de profondeur : ce qui module une voie passe avant elle
+    // (l'ordre inverse de la creation met chaque modulateur avant ce qu'il
+    // module).
+    if let Some(mfx) = mix_ok {
+        let order: Vec<usize> = (0..nodes.len()).rev().collect();
+        let voice_of = |id: usize| order.iter().position(|&o| o == id).map(|v| v + 1);
+        let mut used = 0;
+        for (v, &id) in order.iter().enumerate() {
+            let d = v + 1;
+            if d > mix::VOICES {
+                p.mix_full = true;
+                break;
+            }
+            let n = &nodes[id];
+            let Some(r) = resolve(n.slot, chain, ctx, &mut p) else {
+                p.raws.push(Raw {
+                    fx: mfx,
+                    param: mix::dm_tgt(d),
+                    value: 0.0,
+                });
+                p.raws.push(Raw {
+                    fx: mfx,
+                    param: mix::dm_amt(d),
+                    value: 0.0,
+                });
+                used = d;
+                continue;
+            };
+            let tgt = match n.tgt {
+                Tgt::Input(c) => c as f64,
+                Tgt::Node(t) => {
+                    voice_of(t).map_or(0.0, |vt| (mix::BUSES * mix::INPUTS + vt) as f64)
+                }
+            };
+            p.links.push(Link {
+                fx: mfx,
+                param: mix::dm_in(d),
+                src: r.src,
+                offset: 0.0,
+                scale: 1.0,
+                baseline: 0.0,
+            });
+            p.raws.push(Raw {
+                fx: mfx,
+                param: mix::dm_tgt(d),
+                value: tgt,
+            });
+            p.raws.push(Raw {
+                fx: mfx,
+                param: mix::dm_amt(d),
+                value: if n.dead { 0.0 } else { n.amt.clamp(-1.0, 1.0) },
+            });
+            p.raws.push(Raw {
+                fx: mfx,
+                param: mix::dm_ctr(d),
+                value: link_center(&r, n.pol),
+            });
+            used = d;
+        }
+        for d in used + 1..=mix::VOICES {
+            p.raws.push(Raw {
+                fx: mfx,
+                param: mix::dm_tgt(d),
+                value: 0.0,
+            });
+            p.raws.push(Raw {
+                fx: mfx,
+                param: mix::dm_amt(d),
+                value: 0.0,
+            });
+        }
+    } else if !nodes.is_empty() {
+        p.mix_missing = true;
     }
 
     // Les bus que plus personne ne tient : a zero.
@@ -498,6 +581,42 @@ pub fn plan(t: &Track, chain: &Chain, ctx: &Ctx) -> Plan {
     }
     let _ = notes::COUNT;
     p
+}
+
+/// Ce qu'une voie de profondeur module.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Tgt {
+    /// Une entree de bus (1..64).
+    Input(usize),
+    /// Une autre voie (par son numero de creation).
+    Node(usize),
+}
+
+/// Une voie de profondeur a cabler.
+struct Node {
+    slot: i32,
+    amt: f64,
+    pol: Option<crate::slots::Pol>,
+    tgt: Tgt,
+    /// Elle ou un lien au-dessus d'elle est contourne : elle joue 0 (une
+    /// voie AJOUTE a sa cible, meme quand la cible joue 0).
+    dead: bool,
+}
+
+/// Une voie pour `dm`, puis celles qui la modulent (en profondeur).
+fn depth_node(nodes: &mut Vec<Node>, dm: &crate::model::Src, tgt: Tgt, dead: bool, g: f64) {
+    let id = nodes.len();
+    let dead = dead || dm.off;
+    nodes.push(Node {
+        slot: dm.slot,
+        amt: dm.depth * g,
+        pol: dm.pol,
+        tgt,
+        dead,
+    });
+    for c in &dm.dmods {
+        depth_node(nodes, c, Tgt::Node(id), dead, g);
+    }
 }
 
 /// La valeur qu'un lien donne a une source `v` (ce que REAPER calcule).

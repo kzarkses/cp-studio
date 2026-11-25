@@ -34,6 +34,10 @@ pub struct Src {
     pub pol: Option<Pol>,
     /// Contournee : la profondeur reste, le lien joue 0.
     pub off: bool,
+    /// Les sources qui modulent la profondeur de ce lien (des liens sur des
+    /// liens ; elles peuvent en avoir a leur tour). Leur profondeur est dans
+    /// l'unite de celle qu'elles modulent.
+    pub dmods: Vec<Src>,
 }
 
 impl Src {
@@ -43,7 +47,13 @@ impl Src {
             depth: depth.clamp(-1.0, 1.0),
             pol: None,
             off: false,
+            dmods: Vec::new(),
         }
+    }
+
+    /// Le nombre de liens sur ce lien, a toute profondeur.
+    pub fn dmod_count(&self) -> usize {
+        self.dmods.iter().map(|d| 1 + d.dmod_count()).sum()
     }
 }
 
