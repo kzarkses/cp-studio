@@ -1703,6 +1703,11 @@ impl Module for App {
                     }
                 }
             }
+            // L'auto-test part d'un espace vide : il ouvre lui-meme ce qu'il
+            // verifie (sinon il dependait de ce que Cedric avait laisse
+            // ouvert : FX Constellation a la place de l'arrangement faisait
+            // echouer le clavier du navigateur, 2026-11-25).
+            None if crate::gtab::selftest() => {}
             None => {
                 // Premier chargement de la session : rouvrir ce qui l'etait,
                 // une fois REAPER construit (au battement).
