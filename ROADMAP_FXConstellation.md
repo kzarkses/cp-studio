@@ -140,6 +140,39 @@ des fichiers de Claude, et les JSFX installés dans REAPER.
   « Constellation » du sélecteur de vues de CP Transport, les réglages de
   ROLL au complet.
 
+### Le 2026-11-25 : la nouvelle vue, d'après les retours de Cedric
+
+Ses retours du matin : le pad lent (« sensation 30 fps »), un effet à 2086
+paramètres MIDI, pas de barre de défilement, « la grille qui bouge » avec
+le point, Walk lent, une interface à repenser (icônes, marges, bordures),
+et « ajouter une banque » avant de pouvoir utiliser un LFO. Une maquette
+validée (artifact « FX Constellation v2 »), puis :
+
+- ✅ **L'image.** Dessiner coûtait 26,5 ms par image complète (le
+  rastériseur tramait toute la surface de chaque carte arrondie, les arcs
+  des boutons étaient des traits de 64 segments) : 7 ms. Et une image ne
+  repeint que ce qui a changé (la vue d'avant comparée élément par
+  élément) : 0,8 ms quand seul le pad bouge, mesuré dans REAPER chez
+  Cedric.
+- ✅ **Le pad à l'écran.** Walk, Figures et un axe mené sont lus sur le
+  bridge à chaque image de l'écran (le moteur reste dans le fil audio : la
+  modulation est juste, fenêtre fermée comprise) ; le pad lissé avance au
+  pas de l'image ; les boutons qu'il mène suivent au même geste ; un
+  sillage montre la marche.
+- ✅ **Les mots cachés** de l'ancienne version (lus dans sa configuration :
+  `MIDI, CC, midi, Program…`) : un paramètre dont le nom en contient un
+  n'est pas montré, jamais s'il est suivi. Le bouton entonnoir les montre ou
+  modifie la liste. Une recherche par nom.
+- ✅ Une barre de défilement sur chaque zone qui déborde.
+- ✅ La grille du pad est fixe (la « grille qui bougeait » était la croix
+  qui suivait le point) ; des repères sur les bords.
+- ✅ Les huit LFO toujours là : le premier clic ou glisser pose la banque.
+  L'éditeur d'un LFO : la forme en grand, ses formes en icônes, ce qu'il
+  mène et de combien.
+- ✅ L'aspect : des cartes (marge, bordure fine, ombre), des icônes à la
+  place des boutons à texte, des choix segmentés ; tout aux couleurs du
+  thème de REAPER.
+
 **Vérifié dans le vrai REAPER** (`cargo xtask reaper-test`, phase Fxc,
 2026-11-25) :
 - suivre un paramètre pose le bridge et le lien du pad ; le pad écrit sa
@@ -159,11 +192,13 @@ des fichiers de Claude, et les JSFX installés dans REAPER.
 - une annulation de ROLL ramène le modèle d'avant ;
 - une base changée hors de FX Constellation est reprise, pas écrasée ;
 - Init relâche chaque lien à nous, celui d'une macro aussi ;
-- la capture : lecture, le pad bouge, les points d'enveloppe écrits.
+- la capture : lecture, le pad bouge, les points d'enveloppe écrits ;
+- la fenêtre photographiée (`browserfxc.png` dans `cp_selftest`), et le
+  temps d'une image : 0,81 ms quand seul le pad bouge, 7 ms en entier.
 
-**Pas vérifié dans le vrai REAPER** : les gestes à la souris (l'auto-test
-appelle les actions de la vue), l'image de la fenêtre (les planches PNG
-seulement), le son.
+**Pas vérifié dans le vrai REAPER** : les gestes à la vraie souris
+(l'auto-test appelle les actions de la vue), Walk à l'œil, la recherche au
+clavier, le son.
 
 **Reste**
 - ☐ Les réglages de la banque globale (sur CP MOD) menés par une source.
