@@ -746,8 +746,13 @@ fn ask_module_key(h: Hwnd, ev: &KeyEvent) -> i32 {
     let Some(hot) = HOT.get() else { return 0 };
     let mut out: isize = 0;
     let lp = ev as *const KeyEvent as isize;
+    let sane = hot.fault().is_none();
     match hot.call(|api| (api.wnd_proc)(h.0, views::ACCEL_MSG, ev.message as usize, lp, &mut out)) {
         Some(1) => out as i32,
+        Some(FAULT) => {
+            check_fault(sane, "touche");
+            0
+        }
         _ => 0,
     }
 }
@@ -765,9 +770,17 @@ fn toggle_state(cmd: i32) -> i32 {
     if owner != Some(Owner::Module) {
         return -1;
     }
-    HOT.get()
-        .and_then(|h| h.call(|api| (api.toggle_state)(cmd)))
-        .unwrap_or(-1)
+    let hot = HOT.get();
+    let sane = hot.is_some_and(|h| h.fault().is_none());
+    // REAPER n'entend que 1, 0 ou -1 (pas de coche).
+    match hot.and_then(|h| h.call(|api| (api.toggle_state)(cmd))) {
+        Some(v @ (0 | 1)) => v,
+        Some(FAULT) => {
+            check_fault(sane, "coche d'une action");
+            -1
+        }
+        _ => -1,
+    }
 }
 
 fn param_from(n: u32) -> Option<cp_engine::Param> {

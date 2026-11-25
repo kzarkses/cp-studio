@@ -25,6 +25,11 @@ pub const OK: i32 = 0;
 pub const FAULT: i32 = -1;
 /// Le module etait deja occupe (appel reentrant) : l'appel n'a pas eu lieu.
 pub const BUSY: i32 = -2;
+/// `toggle_state` : l'action n'a pas de coche. Jamais -1 : le chargeur lit
+/// tout -1 comme une panique (le 2026-11-25, la liste d'actions de REAPER a
+/// mis le module de cote ainsi). REAPER lit une valeur negative comme « pas
+/// de coche » ; le chargeur rend -1 a REAPER pour tout ce qui n'est pas 0/1.
+pub const NO_TOGGLE: i32 = -2;
 
 /// Niveaux de journal.
 pub const LOG_INFO: u32 = 0;

@@ -610,14 +610,36 @@ extern "C" fn t_wnd_proc(hwnd: isize, msg: u32, wp: usize, lp: isize, out: *mut 
 }
 
 extern "C" fn t_toggle_state(cmd: i32) -> i32 {
-    match with_instance(|m| match m.toggle_state(cmd) {
+    toggle_reply(with_instance(|m| match m.toggle_state(cmd) {
         Some(true) => 1,
         Some(false) => 0,
-        None => 2,
-    }) {
-        0 => 0,
-        1 => 1,
-        _ => -1,
+        None => cp_abi::NO_TOGGLE,
+    }))
+}
+
+/// La reponse d'une coche au chargeur : 1, 0, FAULT (une vraie panique), et
+/// tout le reste (pas de coche, module occupe) NO_TOGGLE -- jamais -1, que le
+/// chargeur prend pour une panique.
+fn toggle_reply(r: i32) -> i32 {
+    match r {
+        0 | 1 | FAULT => r,
+        _ => cp_abi::NO_TOGGLE,
+    }
+}
+
+#[cfg(test)]
+mod toggle_tests {
+    use super::*;
+
+    #[test]
+    fn an_action_without_a_check_is_never_a_fault() {
+        assert_ne!(cp_abi::NO_TOGGLE, FAULT);
+        assert_eq!(toggle_reply(cp_abi::NO_TOGGLE), cp_abi::NO_TOGGLE);
+        assert_eq!(toggle_reply(BUSY), cp_abi::NO_TOGGLE);
+        assert_eq!(toggle_reply(2), cp_abi::NO_TOGGLE);
+        assert_eq!(toggle_reply(1), 1);
+        assert_eq!(toggle_reply(0), 0);
+        assert_eq!(toggle_reply(FAULT), FAULT);
     }
 }
 
