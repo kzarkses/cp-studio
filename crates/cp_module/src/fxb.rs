@@ -307,7 +307,7 @@ impl App {
         self.fxb.view.mark();
     }
 
-    fn fxb_save_soon(&mut self) {
+    pub(crate) fn fxb_save_soon(&mut self) {
         self.fxb.dirty_at = Some(Instant::now());
     }
 

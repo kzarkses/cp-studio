@@ -996,9 +996,17 @@ impl Pop {
             Kind::Menu(levels) => {
                 for (li, lv) in levels.iter().enumerate() {
                     body(cv, th, &p, lv.r);
+                    // Une colonne d'icones : chaque texte s'aligne dessus.
+                    let col = lv.entries.iter().any(|e| {
+                        matches!(
+                            e,
+                            Entry::Item(Item { icon: Some(_), .. })
+                                | Entry::Sub { icon: Some(_), .. }
+                        )
+                    });
                     for (k, (e, r)) in lv.entries.iter().zip(&lv.rows).enumerate() {
                         let hot = lv.hot == Some(k) || self.hover == Hit::Item(li, k);
-                        draw_entry(cv, th, text, icons, &p, e, *r, hot);
+                        draw_entry(cv, th, text, icons, &p, e, *r, hot, col);
                     }
                 }
             }
@@ -1859,6 +1867,7 @@ fn draw_entry(
     e: &Entry,
     r: R,
     hot: bool,
+    col: bool,
 ) {
     match e {
         Entry::Sep => cv.fill_rect(
@@ -1920,6 +1929,8 @@ fn draw_entry(
                     },
                     th.s(15.0),
                 );
+            }
+            if col {
                 x += th.s(25.0);
             }
             let right = r.right() - th.s(10.0);
@@ -1979,6 +1990,8 @@ fn draw_entry(
                     if hot { p.text } else { p.dim },
                     th.s(15.0),
                 );
+            }
+            if col {
                 x += th.s(25.0);
             }
             let right = r.right() - th.s(8.0);

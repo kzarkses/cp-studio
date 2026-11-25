@@ -56,7 +56,9 @@ use cp_fxc::links::Plan;
 use cp_fxc::model::Track;
 use cp_fxc::roll::Settings;
 use cp_gfx::Color;
+use cp_gfx::text::TextCache;
 use cp_ui::handle::{DockTabs, HANDLE_DRAG_PX, Press};
+use cp_ui::pop::{Out, Pop};
 use cp_ui::{Button, Ev, Icon, Mods, Theme, vk};
 
 pub use build::{Item, Look, Ring, note_name, slot_type_name};
@@ -422,9 +424,15 @@ pub enum PadF {
     FigSize,
 }
 
+/// Ce qui distingue une image du popover d'une autre : sa marque et ses
+/// rectangles.
+type PopKey = (u32, Vec<(f32, f32, f32, f32)>);
+
 /// Ce que la vue demande au module.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Act {
+    /// Ce qu'un popover rend : (son contexte, le resultat).
+    Pop(u32, Out),
     /// Un clic sur un controle (bouton, pastille, puce).
     Click(Ctl, Mods),
     /// Un menu a ouvrir pour ce controle, a ce point de l'ecran (vue).
@@ -601,6 +609,13 @@ pub struct View {
     /// des effets du navigateur) : son point dans la fenetre. La colonne et
     /// la place du lacher s'allument.
     pub ext_drop: Option<(f32, f32)>,
+    /// Un popover ouvert (menu, saisie d'un nom, confirmation, reglages) :
+    /// il prend la souris et le clavier, il se dessine par-dessus.
+    pub pop: Option<Pop>,
+    /// (marque, rectangles) du popover a la derniere image, et s'il a
+    /// change depuis (toute l'image se repeint).
+    pop_drawn: Option<PopKey>,
+    pop_changed: bool,
     /// La hauteur de contenu de chaque zone qui defile (pour borner).
     content_h: [f32; 5],
     /// Les actions en plus de celle que rend un evenement (les pas sautes
@@ -655,6 +670,9 @@ impl View {
             carry: None,
             zone_preview: None,
             ext_drop: None,
+            pop: None,
+            pop_drawn: None,
+            pop_changed: false,
             content_h: [0.0; 5],
             pending: Vec::new(),
             prev: Vec::new(),
@@ -726,8 +744,56 @@ impl View {
         matches!(self.drag, Some(Drag::Scroll { z: k, .. }) if k == z)
     }
 
+    /// La geometrie du popover (les vraies largeurs de texte), apres
+    /// [`View::layout`] et avant le dessin.
+    pub fn layout_pop(&mut self, th: &Theme, text: &mut TextCache) {
+        let (w, h) = self.size;
+        let key = self.pop.as_mut().map(|p| {
+            p.layout(th, text, w, h);
+            let rs = p.rects().iter().map(|r| (r.x, r.y, r.w, r.h)).collect();
+            (p.stamp(), rs)
+        });
+        self.pop_changed = key != self.pop_drawn;
+        self.pop_drawn = key;
+    }
+
+    /// Ouvre un popover (il remplace celui qui l'etait) ; le geste en cours
+    /// s'arrete.
+    pub fn open_pop(&mut self, p: Pop) {
+        self.drag = None;
+        self.carry = None;
+        self.zone_preview = None;
+        self.pop = Some(p);
+        self.mark();
+    }
+
+    /// Un evenement pour le popover ouvert : ce qu'il rend devient une
+    /// [`Act::Pop`] ; ferme, il se retire.
+    fn pop_event(&mut self, ev: &Ev) -> Option<Act> {
+        let p = self.pop.as_mut()?;
+        let before = p.stamp();
+        let out = p.event(ev);
+        let ctx = p.ctx;
+        if p.stamp() != before {
+            self.mark();
+        }
+        let o = out?;
+        if o.closes() {
+            self.pop = None;
+        }
+        self.mark();
+        Some(Act::Pop(ctx, o))
+    }
+
     /// Colle un texte dans la recherche (une ligne).
     pub fn paste(&mut self, s: &str) {
+        if let Some(p) = self.pop.as_mut() {
+            if p.wants_text() {
+                p.paste(s);
+                self.mark();
+            }
+            return;
+        }
         let one = s.lines().next().unwrap_or("");
         if self.search.insert(one) == cp_ui::textfield::Edit::Changed {
             self.scroll[0] = 0.0;
@@ -875,6 +941,44 @@ impl View {
     }
 
     pub fn key_use(&self, vk_code: u32, m: Mods) -> KeyUse {
+        if let Some(p) = &self.pop {
+            // Un popover ouvert prend les touches de navigation et la
+            // saisie ; les raccourcis restent a REAPER, comme sous un menu.
+            return match vk_code {
+                vk::ESCAPE | vk::RETURN | vk::TAB | vk::UP | vk::DOWN | vk::LEFT | vk::RIGHT => {
+                    KeyUse::Eat
+                }
+                _ if !p.wants_text() => {
+                    if vk_code == vk::SPACE {
+                        KeyUse::Eat
+                    } else {
+                        KeyUse::NotMine
+                    }
+                }
+                _ if m.ctrl && m.alt && !m.win => KeyUse::Text,
+                _ if m.ctrl
+                    && !m.alt
+                    && !m.win
+                    && matches!(
+                        vk_code,
+                        vk::HOME
+                            | vk::END
+                            | vk::BACK
+                            | vk::DELETE
+                            | 0x41
+                            | 0x43
+                            | 0x56
+                            | 0x58
+                            | 0x5A
+                    ) =>
+                {
+                    KeyUse::Eat
+                }
+                _ if m.ctrl || m.alt || m.win => KeyUse::NotMine,
+                vk::HOME | vk::END | vk::BACK | vk::DELETE => KeyUse::Eat,
+                _ => KeyUse::Text,
+            };
+        }
         if self.search_focus {
             return match vk_code {
                 vk::ESCAPE | vk::RETURN | vk::TAB => KeyUse::Eat,
@@ -916,6 +1020,9 @@ impl View {
 
     /// Un caractere tape : la recherche, si elle a le clavier.
     pub fn char(&mut self, c: char) -> Option<Act> {
+        if self.pop.is_some() {
+            return self.pop_event(&Ev::Char(c));
+        }
         if !self.search_focus || c.is_control() {
             return None;
         }
@@ -928,6 +1035,23 @@ impl View {
 
     /// Echap : la recherche, la pastille tiree, puis le mode Map.
     pub fn key(&mut self, vk_code: u32, m: Mods) -> Option<Act> {
+        if let Some(p) = &self.pop {
+            if p.wants_text() && m.ctrl && !m.alt {
+                match vk_code {
+                    0x43 => {
+                        let s = p.selected_text();
+                        return (!s.is_empty()).then_some(Act::Clip(s));
+                    }
+                    0x56 => return Some(Act::Paste),
+                    _ => {}
+                }
+            }
+            return self.pop_event(&Ev::Key {
+                vk: vk_code,
+                mods: m,
+                text: None,
+            });
+        }
         if self.search_focus {
             match vk_code {
                 vk::ESCAPE => {
@@ -986,6 +1110,12 @@ impl View {
 
     /// Un evenement de la souris ou du clavier.
     pub fn event(&mut self, ev: &Ev) -> Option<Act> {
+        if self.pop.is_some() {
+            if let Ev::Move { x, y, .. } = *ev {
+                self.mouse = (x, y);
+            }
+            return self.pop_event(ev);
+        }
         let (w, h) = self.size;
         match *ev {
             Ev::Move { x, y, mods } => {

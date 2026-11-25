@@ -35,6 +35,7 @@ impl Bench {
     fn shot(&mut self, v: &mut View, d: &Data, name: &str) {
         let (w, h) = (self.s.w as f32, self.s.h as f32);
         v.layout(d, &self.th, w, h);
+        v.layout_pop(&self.th, &mut self.t);
         let mut cv = Canvas::new(&mut self.s, &mut self.k);
         v.draw(&mut cv, &mut self.t, &mut self.icons, &self.th);
         let p = std::env::temp_dir().join(format!("cp_fxc_{name}.png"));
@@ -673,4 +674,114 @@ fn a_drop_from_another_view_finds_its_place() {
         v.damage().is_none_or(|d| !d.is_empty()),
         "la place se repeint"
     );
+}
+
+#[test]
+fn a_popover_draws_over_the_view() {
+    use cp_ui::pop::{Entry, Panel, Pop, Row, Section};
+    let w = world();
+    let p = plan(&w.t, &chain(), &Ctx::default());
+    let d = data(&w, &p);
+    let mut b = Bench::new(1500, 820);
+    let mut v = View::new();
+    b.shot(&mut v, &d, "pop_none");
+    let panel = Panel {
+        title: "Settings".into(),
+        icon: Icon::Settings,
+        sections: vec![
+            Section {
+                label: "Pad".into(),
+                icon: Icon::Crosshair,
+                rows: vec![],
+            },
+            Section {
+                label: "ROLL".into(),
+                icon: Icon::Dices,
+                rows: vec![],
+            },
+            Section {
+                label: "Parameters".into(),
+                icon: Icon::ListX,
+                rows: vec![
+                    Row::Head("Hidden parameters".into()),
+                    Row::Checks {
+                        id: 1,
+                        items: vec![
+                            ("MIDI".into(), true, "2086".into()),
+                            ("CC".into(), true, "128".into()),
+                            ("Program".into(), true, "1".into()),
+                            ("mix".into(), false, "4".into()),
+                            ("LFO".into(), true, "12".into()),
+                        ],
+                        add: "Add a word".into(),
+                        removable: true,
+                    },
+                    Row::Toggle {
+                        id: 2,
+                        label: "Show hidden parameters".into(),
+                        on: false,
+                    },
+                    Row::Toggle {
+                        id: 3,
+                        label: "Show values".into(),
+                        on: true,
+                    },
+                ],
+            },
+            Section {
+                label: "After insert".into(),
+                icon: Icon::Download,
+                rows: vec![],
+            },
+            Section {
+                label: "Window".into(),
+                icon: Icon::Maximize,
+                rows: vec![],
+            },
+        ],
+    };
+    let mut pop = Pop::panel(2, panel, 1440.0, 52.0);
+    pop.set_section(2);
+    v.open_pop(pop);
+    b.shot(&mut v, &d, "pop_settings");
+    let items = v.items().len();
+    assert!(v.pop.is_some() && items > 0);
+    // Un menu avec un sous-menu ouvert.
+    let menu = vec![
+        Entry::item(1, "Open")
+            .icon(Icon::Maximize)
+            .hint("Double-click"),
+        Entry::check(2, "Detached", true),
+        Entry::sub(
+            "After insert",
+            vec![
+                Entry::check(10, "None", false),
+                Entry::check(11, "All", true),
+            ],
+        ),
+        Entry::Sep,
+        Entry::item(4, "Delete").icon(Icon::Trash).danger(),
+    ];
+    v.open_pop(Pop::menu(1, menu, 400.0, 200.0));
+    b.shot(&mut v, &d, "pop_menu");
+    // Le survol du sous-menu l'ouvre (un evenement de la vue va au popover).
+    let r = v.pop.as_ref().unwrap().rects()[0];
+    let a = v.event(&Ev::Move {
+        x: r.x + 20.0,
+        y: r.y + 5.0 + 28.0 * 2.0 + 14.0,
+        mods: Mods::default(),
+    });
+    assert_eq!(a, None);
+    b.shot(&mut v, &d, "pop_submenu");
+    assert_eq!(v.pop.as_ref().unwrap().rects().len(), 2);
+    // Un clic dehors ferme, et la vue le sait.
+    let a = v.event(&Ev::Down {
+        x: 5.0,
+        y: 800.0,
+        b: Button::Left,
+        dbl: false,
+        mods: Mods::default(),
+    });
+    assert!(matches!(a, Some(Act::Pop(1, cp_ui::pop::Out::Closed))));
+    assert!(v.pop.is_none());
 }

@@ -63,6 +63,7 @@ impl App {
                 self.fxc_render(true);
                 let full = t0.elapsed().as_secs_f64() * 1000.0;
                 let mut part = 0.0f64;
+                let full0 = self.fxc.stats.get("frame_full").copied().unwrap_or(0);
                 for i in 0..5 {
                     self.fxc_pad_to(0.3 + 0.1 * i as f64, 0.6);
                     self.fxc.view.mark();
@@ -71,8 +72,12 @@ impl App {
                     part = part.max(t0.elapsed().as_secs_f64() * 1000.0);
                 }
                 let h = self.fxc.win.as_ref().map_or(0, |w| w.hwnd.0);
+                let fulls = self.fxc.stats.get("frame_full").copied().unwrap_or(0) - full0;
+                let pop = self.fxc.view.pop.is_some() as u8;
                 let carry = self.fxc_selftest_carry();
-                format!("snap hwnd={h} full_ms={full:.2} pad_ms={part:.2} carry={carry}")
+                format!(
+                    "snap hwnd={h} full_ms={full:.2} pad_ms={part:.2} pad_fulls={fulls} pop={pop} carry={carry}"
+                )
             }
             s => format!("unknown step {s}"),
         };

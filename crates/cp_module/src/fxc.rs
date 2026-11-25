@@ -119,6 +119,18 @@ pub(crate) struct CPart {
     /// Les mots qui cachent un parametre (« MIDI »…) : un parametre dont le
     /// nom en contient un n'est pas montre, sauf s'il est suivi.
     pub(crate) hide_words: Vec<String>,
+    /// La liste des reglages : chaque mot et s'il est coche (un mot
+    /// decoche reste dans la liste sans rien cacher).
+    pub(crate) hide_list: Vec<(String, bool)>,
+    /// Les questions (menus, noms, confirmations en popover) : le geste a
+    /// rejouer quand la reponse arrive.
+    pub(crate) ask: crate::ask::Asker<cp_fxcview::Act>,
+    /// FX Constellation suit la maitre quand elle seule est choisie
+    /// (reglage, eteint par defaut : un clic sur sa tranche y posait tout
+    /// sans qu'on le voie, le 2026-11-25).
+    pub(crate) follow_master: bool,
+    /// La section des reglages ouverte en dernier.
+    pub(crate) settings_section: usize,
     /// Montrer aussi les parametres caches.
     pub(crate) show_hidden: bool,
     /// L'image d'avant (le pas du pad lisse se mesure).
@@ -130,16 +142,42 @@ pub(crate) struct CPart {
 /// Les mots caches par defaut : ceux de l'ancienne version.
 pub(crate) const HIDE_DEFAULT: &str = "MIDI,CC,midi,Program,Bank,Channel,Dry,delta,bypass,mix,LFO,SLOT,Mute,Input,Output,InOut,wet,param";
 
-/// Les mots d'une liste separee par des virgules.
+/// Les mots qui cachent, d'une liste separee par des virgules (un mot
+/// precede de « ! » est decoche : il ne cache rien).
 pub(crate) fn hide_words(s: &str) -> Vec<String> {
-    s.split(',')
-        .map(|w| w.trim().to_string())
-        .filter(|w| !w.is_empty())
+    hide_list(s)
+        .into_iter()
+        .filter(|w| w.1)
+        .map(|w| w.0)
         .collect()
+}
+
+/// Chaque mot de la liste, et s'il est coche.
+pub(crate) fn hide_list(s: &str) -> Vec<(String, bool)> {
+    s.split(',')
+        .map(|w| w.trim())
+        .filter(|w| !w.is_empty() && *w != "!")
+        .map(|w| match w.strip_prefix('!') {
+            Some(off) => (off.trim().to_string(), false),
+            None => (w.to_string(), true),
+        })
+        .collect()
+}
+
+/// La liste ecrite (`hide_list` la relit).
+pub(crate) fn hide_text(l: &[(String, bool)]) -> String {
+    l.iter()
+        .map(|(w, on)| if *on { w.clone() } else { format!("!{w}") })
+        .collect::<Vec<_>>()
+        .join(",")
 }
 
 impl CPart {
     pub fn new(r: &cp_sys::reaper::Reaper) -> CPart {
+        let hide_src = r
+            .ext_get(SECTION, "fxc_hide")
+            .or_else(|| r.ext_get("CP_FXConstellation", "filter_keywords"))
+            .unwrap_or_else(|| HIDE_DEFAULT.to_string());
         let place = Place::from_key(&r.ext_get(SECTION, "fxc_place").unwrap_or_default())
             .unwrap_or(Place::Float);
         let mut view = View::new();
@@ -198,11 +236,11 @@ impl CPart {
             unlinkable: Default::default(),
             unsaved: Default::default(),
             releasing: false,
-            hide_words: hide_words(
-                &r.ext_get(SECTION, "fxc_hide")
-                    .or_else(|| r.ext_get("CP_FXConstellation", "filter_keywords"))
-                    .unwrap_or_else(|| HIDE_DEFAULT.to_string()),
-            ),
+            hide_words: hide_words(&hide_src),
+            hide_list: hide_list(&hide_src),
+            ask: Default::default(),
+            follow_master: r.ext_get(SECTION, "fxc_follow_master").as_deref() == Some("1"),
+            settings_section: crate::fxc_settings::SECTION_ROLL,
             show_hidden: r.ext_get(SECTION, "fxc_show_hidden").as_deref() == Some("1"),
             last_frame: None,
             anim_until: None,
@@ -353,6 +391,11 @@ impl App {
         }
         let want = self.r.xc_selected();
         let want_guid = want.and_then(|t| self.r.xc_guid(t)).unwrap_or_default();
+        // La maitre seule choisie : on reste ou l'on est, sauf si le reglage
+        // demande de la suivre.
+        if want_guid == "MASTER" && !self.fxc.follow_master {
+            return;
+        }
         if want_guid == self.fxc.guid && cur.is_some() {
             return;
         }
@@ -554,29 +597,47 @@ impl App {
         self.fxc_open();
     }
 
-    pub(crate) fn fxc_place_menu_at(&mut self, owner: Hwnd, sx: i32, sy: i32) {
+    /// Les choix de place de la fenetre.
+    pub(crate) fn fxc_place_entries(&self) -> Vec<cp_sys::ui::MenuEntry> {
+        use cp_sys::ui::MenuEntry;
         let p = self.fxc.place;
-        let open = self.fxc.win.is_some();
-        let item = |id, text, checked, enabled| ui::MenuItem {
-            id,
-            text,
-            checked,
-            enabled,
-        };
-        let items = [
-            Some(item(1, "Show in arrange view", p == Place::Arrange, true)),
-            Some(item(2, "Dock in docker", p == Place::Dock, true)),
-            Some(item(3, "Floating window", p == Place::Float, true)),
-            None,
-            Some(item(4, "Close FX Constellation", false, open)),
-        ];
-        match ui::popup_menu(owner, sx, sy, &items) {
+        vec![
+            MenuEntry::check(1, "Show in arrange view", p == Place::Arrange),
+            MenuEntry::check(2, "Dock in docker", p == Place::Dock),
+            MenuEntry::check(3, "Floating window", p == Place::Float),
+            MenuEntry::Sep,
+            MenuEntry::Item {
+                id: 4,
+                text: "Close FX Constellation".into(),
+                checked: false,
+                enabled: self.fxc.win.is_some(),
+            },
+        ]
+    }
+
+    pub(crate) fn fxc_place_pick(&mut self, id: u32) {
+        match id {
             1 => self.queue(WinOp::FxcPlace(Place::Arrange)),
             2 => self.queue(WinOp::FxcPlace(Place::Dock)),
             3 => self.queue(WinOp::FxcPlace(Place::Float)),
             4 => self.queue(WinOp::FxcClose),
             _ => {}
         }
+    }
+
+    /// La place de la fenetre, en popover (le choix rejoue le geste).
+    pub(crate) fn fxc_place_menu(&mut self, x: f32, y: f32) {
+        let e = self.fxc_place_entries();
+        let id = self.fxc_popup(x, y, &e);
+        self.fxc_place_pick(id);
+    }
+
+    /// Depuis le transport (son icone) : le popover vient avec la vue du
+    /// transport ; d'ici la, le menu du systeme.
+    pub(crate) fn fxc_place_menu_at(&mut self, owner: Hwnd, sx: i32, sy: i32) {
+        let e = self.fxc_place_entries();
+        let id = ui::popup_tree(owner, sx, sy, &e);
+        self.fxc_place_pick(id);
     }
 
     pub(crate) fn fxc_theme(&self) -> Theme {
@@ -694,6 +755,8 @@ impl App {
             return;
         }
         self.fxc_layout(cw as f32, ch as f32);
+        let th = self.fxc_theme();
+        self.fxc.view.layout_pop(&th, &mut self.text);
         // Seuls les elements qui ont change se repeignent (le pad qui bouge
         // ne coute que le pad).
         let damage: Vec<IRect> = match self.fxc.view.damage() {
@@ -1079,10 +1142,7 @@ impl App {
         match a {
             Act::DockGrab => self.dock_grab(h),
             Act::DockSwitch(i) => self.dock_switch(h, *i),
-            Act::ViewMenu(x, y) => {
-                let (sx, sy) = ui::client_to_screen(h, *x as i32, *y as i32);
-                self.fxc_place_menu_at(h, sx, sy);
-            }
+            Act::ViewMenu(x, y) => self.fxc_place_menu(*x, *y),
             _ => return false,
         }
         true

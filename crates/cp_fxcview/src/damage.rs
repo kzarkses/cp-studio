@@ -26,6 +26,11 @@ impl View {
         if self.prev_overlay || self.overlay() || self.prev_dock_hot != self.dock.hot {
             return None;
         }
+        // Un popover qui s'ouvre, se ferme ou change : toute l'image. Ouvert
+        // et immobile, il se redessine par-dessus chaque zone repeinte.
+        if self.pop_changed {
+            return None;
+        }
         let clips: Vec<(u8, R)> = self
             .items
             .iter()

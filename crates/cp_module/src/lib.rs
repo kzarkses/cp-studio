@@ -35,6 +35,7 @@ use cp_sys::ui::{self, Cursor, MenuItem};
 use cp_sys::win::{self, Hwnd, WinMsg};
 use cp_ui::{Button, Ev, IconCache, Mods, Theme};
 
+mod ask;
 mod carry;
 mod clocksync;
 mod docking;
@@ -44,6 +45,7 @@ mod fxb;
 mod fxc;
 mod fxc_act;
 mod fxc_capture;
+mod fxc_settings;
 mod fxc_sync;
 mod fxc_test;
 mod grip;

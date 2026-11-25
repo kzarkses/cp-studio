@@ -115,13 +115,8 @@ impl App {
             checked: false,
             enabled: !armed.is_empty(),
         });
-        let id = match self.fxc.win.as_ref().map(|w| w.hwnd) {
-            Some(h) => {
-                let (sx, sy) = cp_sys::ui::client_to_screen(h, x as i32, y as i32);
-                cp_sys::ui::popup_tree(h, sx, sy, &e)
-            }
-            None => 0,
-        };
+        // En popover (le choix rejoue le geste : `crate::ask`).
+        let id = self.fxc_popup(x, y, &e);
         let toggle = |v: &mut Vec<Cap>, c: Cap| {
             if let Some(i) = v.iter().position(|x| *x == c) {
                 v.remove(i);

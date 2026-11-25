@@ -740,6 +740,23 @@ pub fn popup_menu(owner: Hwnd, x: i32, y: i32, items: &[Option<MenuItem<'_>>]) -
     r.max(0) as u32
 }
 
+/// Un menu plat ([`popup_menu`]) en lignes de menu en arbre (pour un
+/// popover maison).
+pub fn flat_to_tree(items: &[Option<MenuItem<'_>>]) -> Vec<MenuEntry> {
+    items
+        .iter()
+        .map(|i| match i {
+            None => MenuEntry::Sep,
+            Some(i) => MenuEntry::Item {
+                id: i.id,
+                text: i.text.to_string(),
+                checked: i.checked,
+                enabled: i.enabled,
+            },
+        })
+        .collect()
+}
+
 /// Une ligne d'un menu en arbre.
 #[derive(Clone, Debug, PartialEq)]
 pub enum MenuEntry {
@@ -755,6 +772,31 @@ pub enum MenuEntry {
 }
 
 impl MenuEntry {
+    /// Le meme menu pour un popover maison ([`cp_ui::pop`]) : jamais un menu
+    /// de Windows (regle de Cedric, 2026-11-25).
+    pub fn to_pop(&self) -> cp_ui::pop::Entry {
+        use cp_ui::pop::Entry;
+        match self {
+            MenuEntry::Item {
+                id,
+                text,
+                checked,
+                enabled,
+            } => Entry::check(*id, text.clone(), *checked).enabled(*enabled),
+            MenuEntry::Sep => Entry::Sep,
+            MenuEntry::Sub(t, v) => Entry::sub(t.clone(), v.iter().map(|e| e.to_pop()).collect()),
+        }
+    }
+
+    /// Le texte du choix `id` (dans les sous-menus aussi).
+    pub fn text_of(entries: &[MenuEntry], id: u32) -> Option<String> {
+        entries.iter().find_map(|e| match e {
+            MenuEntry::Item { id: i, text, .. } if *i == id => Some(text.clone()),
+            MenuEntry::Sub(_, v) => MenuEntry::text_of(v, id),
+            _ => None,
+        })
+    }
+
     pub fn item(id: u32, text: impl Into<String>) -> MenuEntry {
         MenuEntry::Item {
             id,

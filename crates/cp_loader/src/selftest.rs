@@ -1888,8 +1888,10 @@ impl SelfTest {
                 self.say(
                     pad_ms < 4.0,
                     format!(
-                        "FX Constellation : une image ou seul le pad bouge {pad_ms:.2} ms (une image entiere {} ms)",
-                        field(&st, "full_ms")
+                        "FX Constellation : une image ou seul le pad bouge {pad_ms:.2} ms (une image entiere {} ms ; images entieres pendant la mesure {}, popover {})",
+                        field(&st, "full_ms"),
+                        field(&st, "pad_fulls"),
+                        field(&st, "pop")
                     ),
                 );
                 self.say(

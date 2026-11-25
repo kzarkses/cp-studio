@@ -14,6 +14,10 @@ use cp_fxcview::panels::{
 use cp_fxcview::{Act, Ctl, PadF, View};
 use cp_sys::fxc::Tk;
 use cp_sys::ui::{self, MenuEntry};
+use cp_ui::pop::{Out, Pop};
+
+use crate::ask::Ask;
+use crate::fxc_settings::{POP_ASK, POP_HELP, POP_SETTINGS, SECTION_PARAMS};
 use cp_ui::Mods;
 
 use crate::App;
@@ -111,16 +115,6 @@ fn parse(s: Option<String>) -> Option<f64> {
     s.and_then(|v| v.trim().parse::<f64>().ok())
 }
 
-/// Les etendues proposees (portees, bases).
-const SPANS: [(f64, f64); 6] = [
-    (0.0, 1.0),
-    (0.25, 0.75),
-    (0.0, 0.5),
-    (0.5, 1.0),
-    (0.1, 0.4),
-    (0.4, 0.9),
-];
-
 /// Les cles de piste qu'un preset emporte (l'etat `CPS_FXC` a part).
 const PRESET_KEYS: [&str; 5] = [
     keys::ROUTES,
@@ -150,11 +144,68 @@ impl App {
             .map_or(cp_sys::win::Hwnd(0), |w| w.hwnd)
     }
 
-    /// Un menu a la souris.
-    fn fxc_popup(&self, x: f32, y: f32, entries: &[MenuEntry]) -> u32 {
-        let h = self.fxc_hwnd();
-        let (sx, sy) = ui::client_to_screen(h, x as i32, y as i32);
-        ui::popup_tree(h, sx, sy, entries)
+    /// Un menu a la souris, en popover : 0 tant que le choix n'est pas
+    /// fait (le geste s'arrete) ; le choix rejoue le geste et rend ici son
+    /// numero (`crate::ask`).
+    pub(crate) fn fxc_popup(&mut self, x: f32, y: f32, entries: &[MenuEntry]) -> u32 {
+        match self.fxc.ask.pick(entries) {
+            Ask::Ready(id) => id,
+            Ask::Open => {
+                let e = entries.iter().map(MenuEntry::to_pop).collect();
+                self.fxc.view.open_pop(Pop::menu(POP_ASK, e, x, y));
+                self.fxc_kick();
+                0
+            }
+            Ask::Skip => 0,
+        }
+    }
+
+    /// Un nom, en popover (meme rejeu que [`App::fxc_popup`]).
+    fn fxc_ask(&mut self, title: &str, _caption: &str, cur: &str) -> Option<String> {
+        match self.fxc.ask.text() {
+            Ask::Ready(t) => Some(t.trim().to_string()).filter(|s| !s.is_empty()),
+            Ask::Open => {
+                let (x, y) = self.fxc.view.mouse;
+                self.fxc
+                    .view
+                    .open_pop(Pop::ask(POP_ASK, title, cur, "OK", x, y));
+                self.fxc_kick();
+                None
+            }
+            Ask::Skip => None,
+        }
+    }
+
+    /// Une confirmation, en popover (meme rejeu) : vrai une fois confirmee.
+    fn fxc_confirm(&mut self, question: &str, ok: &str, danger: bool) -> bool {
+        match self.fxc.ask.yes() {
+            Ask::Ready(()) => true,
+            Ask::Open => {
+                let (x, y) = self.fxc.view.mouse;
+                self.fxc
+                    .view
+                    .open_pop(Pop::confirm(POP_ASK, question, ok, danger, x, y));
+                self.fxc_kick();
+                false
+            }
+            Ask::Skip => false,
+        }
+    }
+
+    /// Ce qu'un popover rend : un reglage du panneau, ou la reponse a une
+    /// question (le geste qui l'a posee se rejoue).
+    fn fxc_pop_out(&mut self, ctx: u32, out: Out) {
+        if ctx == POP_SETTINGS {
+            self.fxc_settings_out(out);
+            return;
+        }
+        if out == Out::Closed {
+            self.fxc.ask.cancel();
+            return;
+        }
+        if let Some(a) = self.fxc.ask.answer(&out) {
+            self.fxc_act(a);
+        }
     }
 
     /// (piste, effet, parametre) d'une cle du modele.
@@ -221,10 +272,23 @@ impl App {
     // -----------------------------------------------------------------------
 
     pub(crate) fn fxc_act(&mut self, a: Act) {
+        if let Act::Pop(ctx, out) = a {
+            self.fxc_pop_out(ctx, out);
+            return;
+        }
+        // Le geste que rejouera une question (menu, nom, confirmation).
+        let top = self.fxc.ask.begin(&a);
+        self.fxc_act_one(a);
+        self.fxc.ask.end(top);
+    }
+
+    fn fxc_act_one(&mut self, a: Act) {
         if self.fxc_act_dock(&a) {
             return;
         }
         match a {
+            // Rendu par `fxc_act` avant d'arriver ici.
+            Act::Pop(..) => {}
             Act::Changed => self.fxc.prefs_dirty = true,
             Act::Click(c, m) => self.fxc_click(c, m),
             Act::Menu(c, x, y) => self.fxc_menu(c, x, y),
@@ -429,20 +493,34 @@ impl App {
                 }
                 self.fxc_changed();
             }
-            Ctl::Settings => self.fxc_settings_menu(),
+            Ctl::Settings => {
+                let sec = self.fxc.settings_section;
+                self.fxc_settings_open(sec, &Ctl::Settings);
+            }
             Ctl::Help => {
-                self.r.xc_message(
-                    "FX Constellation",
-                    "Track params (the square at the left of a row), then move the pad: each tracked \
-                     param moves from its base by its range, on the X and/or Y axis of its chips.\n\n\
-                     Knob: drag = base, Alt+drag = depth, Shift = fine, double-click = back to the \
-                     value it had, Alt+click = release its sources, Shift+click = bypass them.\n\n\
-                     Sources (right): drag a dot onto a knob to modulate it. Up to four sources per \
-                     param, summed by the Mod Mix bus.\n\nROLL rolls every armed axis \
-                     (P B R XY N BY OR MO); right-click an axis to roll it alone.\n\n\
-                     Right-drag on the pad draws a zone.",
-                    0,
-                );
+                // Les gestes, en popover (plus de boite de Windows).
+                let g = |t: &str, h: &str| MenuEntry::item(0, format!("{t}\t{h}"));
+                let e = vec![
+                    MenuEntry::off("Pad"),
+                    g("Track a parameter", "Square of its row"),
+                    g("Draw a zone", "Right-drag on the pad"),
+                    MenuEntry::Sep,
+                    MenuEntry::off("Knob"),
+                    g("Base", "Drag"),
+                    g("Depth", "Alt+drag"),
+                    g("Fine", "Shift+drag"),
+                    g("Back to its value", "Double-click"),
+                    g("Release its sources", "Alt+click"),
+                    g("Bypass its sources", "Shift+click"),
+                    MenuEntry::Sep,
+                    MenuEntry::off("Sources"),
+                    g("Modulate", "Drag a dot onto a knob"),
+                    g("Roll one axis", "Right-click the axis"),
+                ];
+                let (x, y) = self.fxc.view.mouse;
+                let pop_e = e.iter().map(help_line).collect();
+                self.fxc.view.open_pop(Pop::menu(POP_HELP, pop_e, x, y));
+                self.fxc_kick();
             }
             Ctl::ZoneClear => {
                 self.fxc.t.pad.zone = [0.0, 1.0, 0.0, 1.0];
@@ -711,10 +789,7 @@ impl App {
             Ctl::ShapePick(k) => {
                 self.fxc_slot_write(SlotW::Raw(SlotField::Shape, k.min(7) as f64));
             }
-            Ctl::HideMenu => {
-                let (x, y) = self.fxc.view.mouse;
-                self.fxc_hide_menu(x, y);
-            }
+            Ctl::HideMenu => self.fxc_settings_open(SECTION_PARAMS, &Ctl::HideMenu),
             // Les choix a plusieurs valeurs s'ouvrent en menu au clic.
             c @ (Ctl::WalkSync
             | Ctl::GrainGrid
@@ -1654,151 +1729,6 @@ impl App {
         }
     }
 
-    fn fxc_settings_menu(&mut self) {
-        let s = self.fxc.roll.clone();
-        let pct = |id0: u32, cur: f64| -> Vec<MenuEntry> {
-            [0, 10, 20, 30, 50, 75, 100]
-                .iter()
-                .map(|p| {
-                    MenuEntry::check(
-                        id0 + *p as u32,
-                        format!("{p} %"),
-                        (cur * 100.0).round() as i32 == *p,
-                    )
-                })
-                .collect()
-        };
-        let mut e = vec![
-            MenuEntry::off("ROLL"),
-            MenuEntry::Sub(
-                format!("Params tracked: {} to {}", s.random_min, s.random_max),
-                [(1, 3), (2, 6), (3, 8), (4, 12), (6, 20), (10, 40)]
-                    .iter()
-                    .map(|(a, b)| {
-                        MenuEntry::check(
-                            100 + (*a * 100 + *b) as u32,
-                            format!("{a} to {b}"),
-                            s.random_min == *a && s.random_max == *b,
-                        )
-                    })
-                    .collect(),
-            ),
-            MenuEntry::Sub(
-                format!("Bypass {:.0} %", s.bypass_pct * 100.0),
-                pct(10_000, s.bypass_pct),
-            ),
-            MenuEntry::Sub(
-                format!("Modulated {:.0} %", s.mod_prob * 100.0),
-                pct(20_000, s.mod_prob),
-            ),
-            MenuEntry::Sub(
-                format!("Base intensity {:.0} %", s.intensity * 100.0),
-                pct(30_000, s.intensity),
-            ),
-            MenuEntry::check(5, "Exclusive X / Y", s.exclusive_xy),
-            MenuEntry::Sub(
-                format!("Range span {:.2} – {:.2}", s.range_min, s.range_max),
-                SPANS
-                    .iter()
-                    .enumerate()
-                    .map(|(i, (a, b))| {
-                        MenuEntry::check(
-                            50 + i as u32,
-                            format!("{a:.2} – {b:.2}"),
-                            (s.range_min - a).abs() < 1e-6 && (s.range_max - b).abs() < 1e-6,
-                        )
-                    })
-                    .collect(),
-            ),
-            MenuEntry::Sub(
-                format!("Base span {:.2} – {:.2}", s.base_min, s.base_max),
-                SPANS
-                    .iter()
-                    .enumerate()
-                    .map(|(i, (a, b))| {
-                        MenuEntry::check(
-                            60 + i as u32,
-                            format!("{a:.2} – {b:.2}"),
-                            (s.base_min - a).abs() < 1e-6 && (s.base_max - b).abs() < 1e-6,
-                        )
-                    })
-                    .collect(),
-            ),
-            MenuEntry::Sub(
-                format!("Modulators: {} slot(s)", s.lfo_slots),
-                (1..=8)
-                    .map(|n| MenuEntry::check(70 + n, n.to_string(), s.lfo_slots == n as usize))
-                    .chain([
-                        MenuEntry::Sep,
-                        MenuEntry::check(80, "Randomize the shape", s.lfo_shape),
-                        MenuEntry::check(81, "Randomize the rate (free Hz)", s.lfo_rate),
-                        MenuEntry::check(82, "Randomize the tempo sync", s.lfo_sync),
-                        MenuEntry::check(83, "Randomize the phase", s.lfo_phase),
-                    ])
-                    .collect(),
-            ),
-            MenuEntry::Sep,
-            MenuEntry::off("Pad"),
-        ];
-        let slew = self.fxc.t.pad.link_slew;
-        e.push(MenuEntry::Sub(
-            format!("Slew {:.0} ms", slew * 1000.0),
-            [0, 20, 50, 100, 250, 500, 1000]
-                .iter()
-                .map(|ms| {
-                    MenuEntry::check(
-                        40_000 + *ms as u32,
-                        format!("{ms} ms"),
-                        (slew * 1000.0).round() as i32 == *ms,
-                    )
-                })
-                .collect(),
-        ));
-        let id = self.fxc_popup(self.fxc.view.mouse.0, self.fxc.view.mouse.1, &e);
-        let r = &mut self.fxc.roll;
-        match id {
-            5 => r.exclusive_xy = !r.exclusive_xy,
-            i @ 50..=59 => {
-                if let Some((a, b)) = SPANS.get((i - 50) as usize) {
-                    r.range_min = *a;
-                    r.range_max = *b;
-                }
-            }
-            i @ 60..=69 => {
-                if let Some((a, b)) = SPANS.get((i - 60) as usize) {
-                    r.base_min = *a;
-                    r.base_max = *b;
-                }
-            }
-            i @ 71..=78 => r.lfo_slots = (i - 70) as usize,
-            80 => r.lfo_shape = !r.lfo_shape,
-            81 => r.lfo_rate = !r.lfo_rate,
-            82 => r.lfo_sync = !r.lfo_sync,
-            83 => r.lfo_phase = !r.lfo_phase,
-            i @ 100..=9_999 => {
-                let v = i - 100;
-                r.random_min = (v / 100) as usize;
-                r.random_max = (v % 100) as usize;
-            }
-            i @ 10_000..=10_100 => r.bypass_pct = (i - 10_000) as f64 / 100.0,
-            i @ 20_000..=20_100 => r.mod_prob = (i - 20_000) as f64 / 100.0,
-            i @ 30_000..=30_100 => r.intensity = (i - 30_000) as f64 / 100.0,
-            i @ 40_000..=41_000 => {
-                self.fxc.t.pad.link_slew = (i - 40_000) as f64 / 1000.0;
-                self.fxc_changed();
-            }
-            _ => return,
-        }
-        self.fxc.prefs_dirty = true;
-    }
-
-    fn fxc_ask(&self, title: &str, caption: &str, cur: &str) -> Option<String> {
-        self.r
-            .user_inputs(title, 1, caption, cur)
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty())
-    }
-
     // -----------------------------------------------------------------------
     // ROLL
     // -----------------------------------------------------------------------
@@ -2021,52 +1951,6 @@ impl App {
         if let Some(ph) = rr.phase {
             self.fxc_slot_write_at(slot, SlotW::Raw(SlotField::Phase, ph));
         }
-    }
-
-    /// Les mots qui cachent des parametres : montrer les caches, modifier
-    /// la liste.
-    fn fxc_hide_menu(&mut self, x: f32, y: f32) {
-        let hidden: usize = self.fxc.rows.iter().map(|f| f.hidden).sum();
-        let e = vec![
-            MenuEntry::off(format!(
-                "Hidden by name: {}",
-                self.fxc.hide_words.join(", ")
-            )),
-            MenuEntry::Sep,
-            MenuEntry::check(1, "Show the hidden params", self.fxc.show_hidden),
-            MenuEntry::item(2, "Edit the hidden words…"),
-            MenuEntry::item(3, "Back to the default words"),
-        ];
-        let _ = hidden;
-        match self.fxc_popup(x, y, &e) {
-            1 => {
-                self.fxc.show_hidden = !self.fxc.show_hidden;
-                self.fxc.view.show_hidden = self.fxc.show_hidden;
-                self.fxc_keep(
-                    "fxc_show_hidden",
-                    if self.fxc.show_hidden { "1" } else { "0" },
-                );
-            }
-            2 => {
-                let cur = self.fxc.hide_words.join(",");
-                let Some(s) = self.r.user_inputs(
-                    "FX Constellation",
-                    1,
-                    "Hidden words (comma separated),separator=|,extrawidth=320",
-                    &cur,
-                ) else {
-                    return;
-                };
-                self.fxc.hide_words = crate::fxc::hide_words(&s);
-                self.fxc_keep("fxc_hide", &self.fxc.hide_words.join(","));
-            }
-            3 => {
-                self.fxc.hide_words = crate::fxc::hide_words(crate::fxc::HIDE_DEFAULT);
-                self.fxc_keep("fxc_hide", crate::fxc::HIDE_DEFAULT);
-            }
-            _ => return,
-        }
-        self.fxc_scan_chain();
     }
 
     fn fxc_slot_menu(&mut self, c: Ctl, x: f32, y: f32) {
@@ -2555,14 +2439,11 @@ impl App {
         let n = mask.count_ones();
         if n > 1
             && !crate::gtab::selftest()
-            && self.r.xc_message(
-                "FX Constellation",
-                &format!(
-                    "Only the current pattern stays with the track: the other {} are lost when the sequencer is removed (Undo brings them back). Remove it?",
-                    n - 1
-                ),
-                1,
-            ) != 1
+            && !self.fxc_confirm(
+                &format!("Remove the sequencer and {} other patterns?", n - 1),
+                "Remove",
+                true,
+            )
         {
             return;
         }
@@ -3364,12 +3245,7 @@ impl App {
                 }
             }
             5 => {
-                if self.r.xc_message(
-                    "FX Constellation",
-                    &format!("Delete the preset '{cur}'?"),
-                    4,
-                ) == 6
-                {
+                if self.fxc_confirm(&format!("Delete the preset '{cur}'?"), "Delete", true) {
                     if let Some(a) = self.fxc_preset_path(&cur) {
                         let _ = std::fs::remove_file(a);
                     }
@@ -3531,11 +3407,7 @@ impl App {
     /// sources a leur naissance. Les effets DETACHED restent.
     pub(crate) fn fxc_init(&mut self) {
         if !crate::gtab::selftest()
-            && self.r.xc_message(
-                "FX Constellation",
-                "Init clears this track's ROLL chain, releases every FX Constellation link, untracks all params and resets the modulators, the macros and the pad. DETACHED FX stay where they are. Undo restores everything.",
-                1,
-            ) != 1
+            && !self.fxc_confirm("Init this constellation? (Undo restores it)", "Init", true)
         {
             return;
         }
@@ -3679,3 +3551,20 @@ pub(crate) enum SlotW {
 
 #[allow(dead_code)]
 fn _unused(_: Track) {}
+
+/// Une ligne de l'aide : « ce qu'on fait\tle geste » (le geste a droite,
+/// discret) ; rien ne se choisit.
+fn help_line(e: &MenuEntry) -> cp_ui::pop::Entry {
+    match e {
+        MenuEntry::Item {
+            text,
+            enabled: true,
+            ..
+        } => {
+            let (t, h) = text.split_once('\t').unwrap_or((text.as_str(), ""));
+            cp_ui::pop::Entry::item(0, t).hint(h)
+        }
+        MenuEntry::Item { text, .. } => cp_ui::pop::Entry::head(text.clone()),
+        other => other.to_pop(),
+    }
+}

@@ -249,6 +249,10 @@ impl View {
         }
         let (w, h) = (cv.width() as f32, cv.height() as f32);
         self.dock.draw(cv, text, th, w, h, false);
+        // Un popover ouvert (menu, saisie, reglages) : par-dessus tout.
+        if let Some(pop) = &self.pop {
+            pop.draw(cv, th, text, icons);
+        }
     }
 
     /// Le cout de chaque sorte d'element (pour mesurer).
